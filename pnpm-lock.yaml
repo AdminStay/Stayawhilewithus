@@ -29,6 +29,9 @@ importers:
       '@clerk/nextjs':
         specifier: ^6.9.6
         version: 6.39.6(next@15.5.22(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      '@stayw/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@stayw/ai-automation':
         specifier: workspace:*
         version: link:../../packages/ai-automation
@@ -93,6 +96,37 @@ importers:
       vite-tsconfig-paths:
         specifier: ^5.1.4
         version: 5.1.4(typescript@5.9.3)(vite@5.4.21(@types/node@22.20.1))
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+
+  packages/ai:
+    dependencies:
+      '@stayw/database':
+        specifier: workspace:*
+        version: link:../database
+      server-only:
+        specifier: ^0.0.1
+        version: 0.0.1
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@stayw/eslint-config':
+        specifier: workspace:*
+        version: link:../config/eslint-config
+      '@stayw/typescript-config':
+        specifier: workspace:*
+        version: link:../config/typescript-config
+      '@stayw/vitest-config':
+        specifier: workspace:*
+        version: link:../config/vitest-config
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.20.1)
@@ -240,6 +274,12 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.10.0
         version: 1.30.0(zod@3.25.76)
+      '@stayw/ai':
+        specifier: workspace:*
+        version: link:../ai
+      zod-to-json-schema:
+        specifier: ^3.24.1
+        version: 3.25.2(zod@3.25.76)
     devDependencies:
       '@stayw/eslint-config':
         specifier: workspace:*
@@ -247,12 +287,21 @@ importers:
       '@stayw/typescript-config':
         specifier: workspace:*
         version: link:../config/typescript-config
+      '@stayw/vitest-config':
+        specifier: workspace:*
+        version: link:../config/vitest-config
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
 
   packages/ui:
     dependencies:

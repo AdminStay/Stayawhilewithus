@@ -33,6 +33,8 @@ export {
   AiConversationContext,
   AiConversationStatus,
   AiMessageRole,
+  AiActionStatus,
+  AiActionRiskLevel,
   ActorType,
   WorkflowTriggerType,
   WorkflowExecutionStatus,

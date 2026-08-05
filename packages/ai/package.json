@@ -1,11 +1,10 @@
 {
-  "name": "@stayw/mcp-servers",
+  "name": "@stayw/ai",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
-    "./shared": "./src/shared/bootstrap.ts",
-    "./shared/register-tools": "./src/shared/register-tools.ts"
+    ".": "./src/index.ts"
   },
   "scripts": {
     "lint": "eslint .",
@@ -13,9 +12,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.10.0",
-    "@stayw/ai": "workspace:*",
-    "zod-to-json-schema": "^3.24.1"
+    "@stayw/database": "workspace:*",
+    "server-only": "^0.0.1",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@stayw/eslint-config": "workspace:*",
@@ -23,7 +22,6 @@
     "@stayw/vitest-config": "workspace:*",
     "@types/node": "^22.10.2",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8",
-    "zod": "^3.24.1"
+    "vitest": "^2.1.8"
   }
 }

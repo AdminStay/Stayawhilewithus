@@ -17,6 +17,7 @@ const RESOURCES = [
   "smart_devices",
   "integrations",
   "ai_conversations",
+  "ai_actions",
   "audit_logs",
   "users",
   "roles",
@@ -51,6 +52,8 @@ const SYSTEM_ROLES: Array<{
       "maintenance_requests:manage",
       "messages:manage",
       "notifications:read",
+      "ai_actions:read",
+      "ai_actions:update",
     ],
   },
   {

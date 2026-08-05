@@ -15,6 +15,7 @@ export const RESOURCES = [
   "smart_devices",
   "integrations",
   "ai_conversations",
+  "ai_actions",
   "audit_logs",
   "users",
   "roles",

@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@clerk/nextjs": "^6.9.6",
+    "@stayw/ai": "workspace:*",
     "@stayw/auth": "workspace:*",
     "@stayw/ai-automation": "workspace:*",
     "@stayw/database": "workspace:*",
