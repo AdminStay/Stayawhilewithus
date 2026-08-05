@@ -12,7 +12,8 @@ The platform needs to house a dashboard UI, an API/webhook surface, a growing se
 
 - **Monorepo** using Turborepo + pnpm workspaces. Two workspace roots: `apps/*` (deployable applications) and `packages/*` (shared, non-deployable code), plus `packages/config/*` for shared tooling config.
 - **`apps/website`** (Next.js, App Router) is the _only_ deployable app for this phase. It serves the dashboard UI and the entire API/webhook surface via Route Handlers and Server Actions — there is no separate `apps/backend`.
-- Shared code is split by concern into packages: `@stayw/database` (Prisma), `@stayw/auth` (RBAC), `@stayw/ui` (components), `@stayw/ai-automation` (n8n triggering), `@stayw/integrations` (provider clients), `@stayw/mcp-servers` (MCP servers), and `@stayw/{eslint,typescript,tailwind,vitest}-config` (shared tooling).
+- Shared code is split by concern into packages: `@stayw/database` (Prisma), `@stayw/auth` (RBAC), `@stayw/ui` (components), `@stayw/ai-automation` (n8n triggering), `@stayw/ai` (the AI platform layer — Context Engine, Prompt Library, Tool Registry, Orchestrator, Conversation Context, Action Approval Framework; see ADR-0007), `@stayw/integrations` (provider clients; see ADR-0008), `@stayw/mcp-servers` (MCP servers), and `@stayw/{eslint,typescript,tailwind,vitest}-config` (shared tooling).
+- `apps/website`'s internal structure (domains vs. platform) is its own decision — see ADR-0006.
 - The original empty `Backend/` placeholder folder is retired.
 
 ## Consequences

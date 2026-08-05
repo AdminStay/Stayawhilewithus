@@ -16,9 +16,9 @@
 
 ## Current Phase
 
-Phase 1 (Architecture & Foundation) is functionally complete, followed by a same-phase **architectural refinement** (Domain-Driven Design reorganization + AI platform layer + Integration SDK) that is **partially complete — paused mid-refinement**, followed by a **technology/integration audit that was started and then explicitly abandoned by the user** in favor of jumping to implementation, followed by **n8n MCP connection setup**, which succeeded but could not be used in that session.
+Phase 1 (Architecture & Foundation) is functionally complete. The same-phase **architectural refinement** (Domain-Driven Design reorganization + AI platform layer + Integration SDK) is now **✅ fully complete** as of the 2026-08-06 session — see "AI Platform Layer & Refinement Completion" below. The **technology/integration audit** remains explicitly deprioritized (not cancelled) per the user's earlier instruction. **n8n MCP connection** is connected, verified working, and the instance has been inspected (empty, safe to build on).
 
-**Status:** Paused between work streams. Nothing is broken, but nothing has been committed to git yet — see "Risks" below.
+**Status:** The paused refinement work is done and verified (`lint typecheck test build` all green). Git is caught up through this session's tooling/app-code/docs commits made at the start of the 2026-08-06 session — **but this session's own new work (packages/ai, mcp-servers wiring, ADRs 0006-0008, updated docs) is not yet committed** — see "Risks" below. Ready to move to the next priority: credential setup, n8n workflow building, or OwnerRez integration, per user direction.
 
 ---
 
@@ -49,10 +49,16 @@ User requested three refinements on top of the approved Phase 1 architecture. St
    - Every method still throws `NotImplementedError` — this is SDK _shape_ only, no real provider logic yet. **OwnerRez's client is still a stub** — building the real v2 API integration is unstarted implementation work, not a refinement-phase task.
    - Package README documents the capability matrix and the `IntegrationSyncLog` convention. Unit tests added (`core/capabilities.test.ts`) covering type-guard narrowing and that every method still throws.
 
-3. **AI platform layer — ⚠️ paused, partially done.**
-   - **Done:** `packages/database/prisma/schema.prisma` has a new `AiAction` model (Action Approval Framework — pending/approved/rejected/executed AI-proposed actions) plus `AiActionStatus`/`AiActionRiskLevel` enums, `ActorType.AI`, `NotificationType.AI_ACTION_PENDING`, and the `AiConversation`/`User` reverse relations. **`prisma validate` passes** — the schema file is internally consistent.
-   - **Not done:** the migration has **not been run** against the database (`prisma migrate dev --name add_ai_action_approval_framework` is the pending command — additive-only, safe, but not yet executed). `packages/auth/src/permissions.ts` and `prisma/seed.ts` have **not** been updated with the new `ai_actions` resource/permissions yet. The new `packages/ai` (`@stayw/ai`) package itself — Context Engine, Knowledge Retrieval stub, Prompt Library, MCP Tool Registry, Orchestrator, Conversation Context, Action Approval Framework functions — **has not been scaffolded at all**. `packages/mcp-servers`' tool-registry wiring is also not started.
-   - **ADRs 0006 (DDD), 0007 (AI platform), 0008 (Integration SDK) have not been written yet**, nor have `system-architecture.md`/`erd.md` been updated to reflect any of this session's refinement work. This is real documentation debt — the approved plan (`/Users/kristinejoyreyes/.claude/plans/memoized-baking-otter.md`) has the exact content to write.
+3. **AI platform layer — ✅ done and verified (completed 2026-08-06).**
+   - `packages/database/prisma/schema.prisma`'s `AiAction` model + `AiActionStatus`/`AiActionRiskLevel` enums, `ActorType.AI`, `NotificationType.AI_ACTION_PENDING` are migrated (`20260805172538_add_ai_action_approval_framework` — confirmed additive-only from the generated SQL: 2 new enums, 2 new enum values, 1 new table, 2 indexes, 2 FKs, nothing dropped/altered).
+   - `packages/auth/src/permissions.ts` and `prisma/seed.ts` both have the new `ai_actions` resource (15 resources × 5 actions = 75 permissions total); `ops_manager` granted `ai_actions:read`/`ai_actions:update` (12 permissions, up from 10). Re-seeded successfully.
+   - **`packages/ai` (`@stayw/ai`) is scaffolded and implemented**: Context Engine (real), Knowledge Retrieval (stub, `NotImplementedError`), Prompt Library (real), Tool Registry (real, enforces the approval gate), Orchestrator (real plumbing, stub Claude call via `NotImplementedClaudeClient`), Conversation Context (real, against `AiConversation`/`AiMessage`), Action Approval Framework (real, against `AiAction`, with a genuine `PENDING → APPROVED|REJECTED → EXECUTED|EXECUTION_FAILED` state machine guarded by `InvalidActionStateError`). 28 unit tests, all passing.
+   - `packages/mcp-servers/src/shared/register-tools.ts` wires `@stayw/ai`'s Tool Registry onto the MCP SDK's `ListTools`/`CallTool` handlers (via `zod-to-json-schema`); every `CallTool` routes through `executeTool()`, so the approval gate applies over MCP too. 4 unit tests against a mocked `Server`.
+   - **Proof-of-concept**: `apps/website/src/domains/properties/ai-tools.ts` registers a `properties.list` tool (read-only, `requiresApproval: false`) wrapping the already-tested `listProperties` service. 2 unit tests (mocking `@stayw/ai` itself, not its internals — see the note on the `server-only` package below).
+   - **ADRs 0006 (DDD), 0007 (AI platform), 0008 (Integration SDK) written**; ADR-0001 updated to list `@stayw/ai` and cross-reference ADR-0006. `system-architecture.md` and `erd.md` updated (mermaid diagrams, folder structure, AI layer section, module-boundary line, data-flow file references, `AiAction`'s state machine explained).
+   - **Full monorepo verification pass, all green**: `pnpm lint` (0 errors, only pre-existing `import/order` warnings from the repo's established `vi.mock`-between-imports test pattern), `pnpm typecheck`, `pnpm test` (46 tests across 8 packages), `pnpm build` (production build succeeds, `/properties` still in the route manifest).
+   - **One real tooling bug found and fixed along the way**: root `package.json`'s `lint-staged` ran bare `eslint --fix` from the repo root, which can never resolve any package's flat `eslint.config.*` (ESLint v9 flat config only looks at the invocation `cwd`, unlike the old cascading `.eslintrc`). Real linting already runs correctly per-package via `turbo run lint` (used in CI) — pre-commit now only runs `prettier --write`.
+   - **A `server-only` cross-package testing note for future sessions**: any workspace package with `import "server-only"` (currently `@stayw/database`, `@stayw/ai-automation`, `@stayw/ai`) can be tested **within its own package** by mocking `server-only` via a `vitest.setup.ts` (see `packages/ai/vitest.setup.ts`, mirroring `apps/website/vitest.setup.mts`'s existing pattern) — this works because first-party/inlined source goes through Vitest's transform pipeline where `vi.mock` applies. It does **not** reliably work when a _different_ package (e.g. `apps/website`) imports that package for real and expects the mock to propagate across the package boundary — Vitest externalizes workspace `node_modules` packages by default, and their internal `import "server-only"` then resolves via real Node resolution (hitting the real throwing module) instead of Vitest's mock registry. `apps/website/src/domains/properties/ai-tools.test.ts` works around this by mocking `@stayw/ai` itself at that boundary (matching how `properties.service.test.ts` already mocks every other cross-package dependency) rather than exercising `@stayw/ai`'s real internals from outside its own package.
 
 ## Technology & Integration Audit — ⚠️ explicitly abandoned mid-way
 
@@ -100,21 +106,17 @@ Full findings in `N8N_DISCOVERY.md`. Summary: the instance is **effectively empt
 
 # Remaining Implementation Tasks, In Priority Order
 
-1. **New session bootstrap**: verify n8n MCP tools are actually loaded (see "What Is Blocked," item 1). If not working, debug before anything else.
-2. **Finish the paused architectural refinement** (recommended before AI/integration feature work, since later work depends on it):
-   - Run `prisma migrate dev --name add_ai_action_approval_framework` (additive-only, safe).
-   - Add `ai_actions` resource + `ops_manager` grants to `packages/auth/src/permissions.ts` and `prisma/seed.ts`; re-seed.
-   - Scaffold `packages/ai` (`@stayw/ai`): Context Engine, Prompt Library, Tool Registry, Orchestrator (stub Claude call), Conversation Context, Action Approval Framework — with tests. Knowledge Retrieval stays a stub.
-   - Wire `packages/mcp-servers/src/shared/register-tools.ts` to the new Tool Registry.
-   - Write ADR-0006, ADR-0007, ADR-0008; update `system-architecture.md` and `erd.md` to reflect the DDD/AI/SDK changes. (Full content already scoped in `/Users/kristinejoyreyes/.claude/plans/memoized-baking-otter.md`.)
-   - Full monorepo verification pass (`lint typecheck test build`).
-3. **Credential setup**: get the OwnerRez PAT into `.env.local`/`.env` (never into git, never pasted into chat). Confirm OwnerRez sandbox-vs-production before any sync testing.
-4. **n8n discovery (resumed, via MCP this time, not the abandoned manual interview)**: inspect existing workflows, credentials, webhooks, connected services directly through the n8n MCP tools before building anything new. Update `N8N_DISCOVERY.md` with what's actually found.
-5. **OwnerRez v2 API integration**: implement `packages/integrations/src/ownerrez/client.ts` for real (currently a structural stub). Build and test reservation synchronization — read-only first, given the unresolved sandbox/production question.
-6. **Webhook listeners** where OwnerRez/other providers support them (`WebhookReceivable` capability already modeled in the SDK).
-7. **Connect the dashboard backend** to real synced data (extends the `domains/reservations/`, `domains/properties/` pattern already established).
-8. **AI automations using Claude** — depends on step 2's `packages/ai` work being done first.
-9. Continue the platform-by-platform audit interview for the remaining platforms (Airbnb, Slack, Asana, Notion, Gmail, Google Voice, GitHub, Supabase, Vercel, Claude API, MCP Servers, Yale, August, Nest, Ecobee, Honeywell, Cielo) **if/when the user wants it resumed** — it was explicitly deprioritized, not cancelled.
+1. ✅ ~~New session bootstrap: verify n8n MCP tools~~ — done 2026-08-06.
+2. ✅ ~~Finish the paused architectural refinement~~ — done and fully verified 2026-08-06, see "AI platform layer" above. `/Users/kristinejoyreyes/.claude/plans/memoized-baking-otter.md` is now fully executed; no need to re-read it for design content (only for historical context).
+3. **Commit this session's new work** (packages/ai, mcp-servers wiring, ADRs 0006-0008, updated docs) — see "Risks" below, not yet done as of end of session.
+4. **Credential setup**: get the OwnerRez PAT into `.env.local`/`.env` (never into git, never pasted into chat). OwnerRez is now **confirmed production data** (2026-08-06) — read-only until explicitly authorized otherwise.
+5. ✅ ~~n8n discovery~~ — done 2026-08-06, instance confirmed empty, see `N8N_DISCOVERY.md`. Safe to build real workflows without collision risk.
+6. **OwnerRez v2 API integration**: implement `packages/integrations/src/ownerrez/client.ts` for real (currently a structural stub, now shaped per ADR-0008's capability interfaces). Build and test reservation synchronization — read-only first, given the confirmed-production data.
+7. **Webhook listeners** where OwnerRez/other providers support them (`WebhookReceivable` capability already modeled in the SDK).
+8. **Connect the dashboard backend** to real synced data (extends the `domains/reservations/`, `domains/properties/` pattern already established).
+9. **Real Claude wiring in the Orchestrator**: `packages/ai/src/orchestrator/claude-client.ts`'s `NotImplementedClaudeClient` is the one piece of `@stayw/ai` still stubbed — everything around it (context, prompts, persistence) is real and tested. Also still a stub: Knowledge Retrieval.
+10. **Build real n8n workflows**: reservation notifications, guest communications, etc. — the instance is empty and ready.
+11. Continue the platform-by-platform audit interview for the remaining platforms (Airbnb, Slack, Asana, Notion, Gmail, Google Voice, GitHub, Supabase, Vercel, Claude API, MCP Servers, Yale, August, Nest, Ecobee, Honeywell, Cielo) **if/when the user wants it resumed** — it was explicitly deprioritized, not cancelled.
 
 ---
 
@@ -130,7 +132,8 @@ Full findings in `N8N_DISCOVERY.md`. Summary: the instance is **effectively empt
 
 # Risks & Warnings
 
-- ✅ **RESOLVED (2026-08-06)**: all prior uncommitted work (original Phase 1, the full DDD/SDK refinement, all documentation) is now committed to git in three commits (tooling/config, application code, documentation) on `main`. Not yet pushed to `origin` — only a local commit was requested/authorized.
+- ✅ **RESOLVED (2026-08-06, start of session)**: all prior uncommitted work (original Phase 1, the full DDD/SDK refinement scaffolding, all documentation) is committed to git in three commits (tooling/config, application code, documentation) on `main`. Not yet pushed to `origin` — only a local commit was requested/authorized.
+- ⚠️ **NEW as of end of this same session**: the actual architectural-refinement _completion_ work done in this session (packages/ai, mcp-servers wiring, properties.list AI tool, ADRs 0006-0008, updated system-architecture.md/erd.md, permissions/seed changes, the new Prisma migration) is **not yet committed** — `git status` will show it as modified/untracked. Low risk (everything is verified working), but the next session should confirm with the user and commit before building further on top, for the same reason as the original risk below.
 - ✅ **RESOLVED (2026-08-06)**: n8n's existing state is now known — see "n8n Instance Discovery" above and `N8N_DISCOVERY.md`. It's empty; safe to build on.
 - **The OwnerRez sandbox-vs-production question is a real operational risk** if ignored: testing "reservation sync" against unconfirmed production data could read or (eventually) write real guest/reservation records.
 - `schema.prisma` currently has changes (the `AiAction` model, new enums) that are validated but **not migrated** — if another session or tool runs a fresh `prisma migrate dev` without realizing this, double check no conflicting concurrent schema edits have occurred.
@@ -142,11 +145,9 @@ Full findings in `N8N_DISCOVERY.md`. Summary: the instance is **effectively empt
 # Exact Next Steps For The New Session
 
 1. Start the new session in this same project directory.
-2. Immediately verify n8n MCP tool availability (`ToolSearch` or equivalent) — do not assume.
-3. Ask the user (still unanswered): OwnerRez sandbox or production?
-4. Propose resuming the paused architectural refinement (item 2 in "Remaining Implementation Tasks") before diving into n8n workflow building, since the AI-automation work depends on it — but this is the user's call to sequence, not a hard requirement.
-5. Once n8n MCP tools are confirmed working, inspect existing n8n workflows/credentials/webhooks before creating anything new.
-6. Recommend committing the current working tree to git early in the new session, given the risk noted above.
+2. Confirm n8n MCP tool availability still holds (was verified working 2026-08-06; re-verify if this is a materially later session).
+3. Recommend committing this session's new work (packages/ai, mcp-servers, ADRs, docs) early, given the risk noted above.
+4. Ask the user to pick the next priority from "Remaining Implementation Tasks" items 4/6/9/10 (credential setup, OwnerRez real integration, real Claude wiring, or building actual n8n workflows) — all four are now unblocked and it's the user's call to sequence.
 
 ---
 

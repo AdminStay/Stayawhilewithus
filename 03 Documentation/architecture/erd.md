@@ -44,6 +44,8 @@ erDiagram
     Guest ||--o{ AiConversation : "involves"
     Property ||--o{ AiConversation : "concerns"
     AiConversation ||--o{ AiMessage : "contains"
+    AiConversation ||--o{ AiAction : "may propose"
+    User ||--o{ AiAction : "reviews"
 
     User ||--o{ AuditLog : "acts in"
     WorkflowExecution ||--o{ AuditLog : "links"
@@ -64,3 +66,5 @@ Enum-heavy fields (status, type, priority, etc.) and pure attribute columns are 
 **`SmartDeviceEvent` is not `AuditLog`.** Device telemetry (lock/unlock, temperature readings) is high-volume and not a user-driven action, so it's kept in its own table rather than polluting the audit trail. Retention/partitioning for this table is a known future scalability item, not solved in Phase 1.
 
 **No Postgres RLS.** All relationships above are enforced at the application layer (Prisma + `@stayw/auth`), not via Postgres Row Level Security — see ADR-0003 for why.
+
+**`AiAction` and its state machine.** An `AiAction` row is created by `@stayw/ai`'s Tool Registry when a tool registered with `requiresApproval: true` is invoked — it captures the proposed call (`toolName`, `proposedInput`, `reasoning`, `riskLevel`) before anything runs. `conversationId` is nullable because a proposal isn't required to originate from a conversational turn (e.g. a future scheduled/automated proposal). `status` moves `PENDING → APPROVED|REJECTED → (if APPROVED) EXECUTED|EXECUTION_FAILED`; `reviewedByUserId`/`reviewedAt` capture the human sign-off, `executedAt`/`executionResult`/`executionError` capture the outcome once a handler actually runs. This is deliberately separate from `AuditLog`: `AuditLog` records what _did_ happen; `AiAction` records what the AI _proposed_, which may never be approved. See ADR-0007.
