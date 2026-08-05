@@ -18,7 +18,7 @@
 
 Phase 1 (Architecture & Foundation) is functionally complete. The same-phase **architectural refinement** (Domain-Driven Design reorganization + AI platform layer + Integration SDK) is now **✅ fully complete** as of the 2026-08-06 session — see "AI Platform Layer & Refinement Completion" below. The **technology/integration audit** remains explicitly deprioritized (not cancelled) per the user's earlier instruction. **n8n MCP connection** is connected, verified working, and the instance has been inspected (empty, safe to build on).
 
-**Status:** The paused refinement work is done and verified (`lint typecheck test build` all green). Git is caught up through this session's tooling/app-code/docs commits made at the start of the 2026-08-06 session — **but this session's own new work (packages/ai, mcp-servers wiring, ADRs 0006-0008, updated docs) is not yet committed** — see "Risks" below. Ready to move to the next priority: credential setup, n8n workflow building, or OwnerRez integration, per user direction.
+**Status:** The paused refinement work is done, verified (`lint typecheck test build` all green), and fully committed to git (local `main`, not pushed) — five commits total from the 2026-08-06 session covering tooling/config, original app code, original docs, the refinement completion code, and the refinement completion docs. Nothing is uncommitted as of end of session. Ready to move to the next priority: credential setup, n8n workflow building, or OwnerRez integration, per user direction.
 
 ---
 
@@ -132,11 +132,10 @@ Full findings in `N8N_DISCOVERY.md`. Summary: the instance is **effectively empt
 
 # Risks & Warnings
 
-- ✅ **RESOLVED (2026-08-06, start of session)**: all prior uncommitted work (original Phase 1, the full DDD/SDK refinement scaffolding, all documentation) is committed to git in three commits (tooling/config, application code, documentation) on `main`. Not yet pushed to `origin` — only a local commit was requested/authorized.
-- ⚠️ **NEW as of end of this same session**: the actual architectural-refinement _completion_ work done in this session (packages/ai, mcp-servers wiring, properties.list AI tool, ADRs 0006-0008, updated system-architecture.md/erd.md, permissions/seed changes, the new Prisma migration) is **not yet committed** — `git status` will show it as modified/untracked. Low risk (everything is verified working), but the next session should confirm with the user and commit before building further on top, for the same reason as the original risk below.
+- ✅ **RESOLVED (2026-08-06)**: all work from this session — original Phase 1, the DDD/SDK refinement scaffolding, all original documentation, and the refinement-completion work (packages/ai, mcp-servers wiring, ADRs 0006-0008, updated docs) — is committed to git across five commits on `main`. Working tree is clean as of end of session. Not yet pushed to `origin` — only local commits were requested/authorized.
 - ✅ **RESOLVED (2026-08-06)**: n8n's existing state is now known — see "n8n Instance Discovery" above and `N8N_DISCOVERY.md`. It's empty; safe to build on.
-- **The OwnerRez sandbox-vs-production question is a real operational risk** if ignored: testing "reservation sync" against unconfirmed production data could read or (eventually) write real guest/reservation records.
-- `schema.prisma` currently has changes (the `AiAction` model, new enums) that are validated but **not migrated** — if another session or tool runs a fresh `prisma migrate dev` without realizing this, double check no conflicting concurrent schema edits have occurred.
+- ✅ **RESOLVED (2026-08-06)**: OwnerRez is confirmed production data (see "What Is Blocked," item 2) — no longer an open question. Any reservation-sync work must treat this as real guest/reservation data, read-only until explicitly authorized otherwise.
+- ✅ **RESOLVED (2026-08-06)**: `AiAction` and its enums are migrated (`20260805172538_add_ai_action_approval_framework`, confirmed additive-only). `schema.prisma` and the database are in sync.
 - The three audit documents (`INTEGRATION_INVENTORY.md`, `SECURE_CONFIGURATION_CHECKLIST.md`, `N8N_DISCOVERY.md`) are mostly `TBD`/skeleton — don't mistake their existence for completeness.
 - Clerk is still running on placeholder (non-functional) API keys; full sign-in has never been tested end-to-end with real credentials.
 
