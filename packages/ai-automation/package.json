@@ -1,0 +1,26 @@
+{
+  "name": "@stayw/ai-automation",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@stayw/database": "workspace:*",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@stayw/eslint-config": "workspace:*",
+    "@stayw/typescript-config": "workspace:*",
+    "@stayw/vitest-config": "workspace:*",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

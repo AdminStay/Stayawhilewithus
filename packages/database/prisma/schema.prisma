@@ -1,0 +1,875 @@
+// StayWhile Operations Platform — Prisma schema
+// See 03 Documentation/architecture/erd.md for the diagram + narrative,
+// and 03 Documentation/adr/0003-database-and-orm-strategy.md for rationale.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Identity & RBAC
+// ─────────────────────────────────────────────────────────────────────────
+
+model User {
+  id          String     @id @default(uuid()) @db.Uuid
+  clerkUserId String     @unique @map("clerk_user_id")
+  email       String     @unique
+  firstName   String?    @map("first_name")
+  lastName    String?    @map("last_name")
+  phone       String?
+  avatarUrl   String?    @map("avatar_url")
+  status      UserStatus @default(ACTIVE)
+  lastLoginAt DateTime?  @map("last_login_at")
+  deletedAt   DateTime?  @map("deleted_at")
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+
+  userRoles             UserRole[]              @relation("UserRoles")
+  roleAssignmentsMade   UserRole[]              @relation("UserRoleAssignedBy")
+  assignedTasks         Task[]                  @relation("TaskAssignee")
+  createdTasks          Task[]                  @relation("TaskCreator")
+  reportedMaintenance   MaintenanceRequest[]
+  auditLogs             AuditLog[]
+  sentMessages          Message[]
+  aiConversations       AiConversation[]
+  notifications         Notification[]
+  connectedIntegrations IntegrationConnection[]
+  aiActionsReviewed     AiAction[]              @relation("AiActionReviewer")
+
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  description String?
+  isSystem    Boolean  @default(false) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  rolePermissions RolePermission[]
+  userRoles       UserRole[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String           @id @default(uuid()) @db.Uuid
+  key         String           @unique // "resource:action", e.g. "reservations:read"
+  resource    String
+  action      PermissionAction
+  description String?
+  createdAt   DateTime         @default(now()) @map("created_at")
+
+  rolePermissions RolePermission[]
+
+  @@index([resource])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String   @id @default(uuid()) @db.Uuid
+  roleId       String   @map("role_id") @db.Uuid
+  permissionId String   @map("permission_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+/// Models both global roles (propertyId = null) and property-scoped roles
+/// (propertyId set) in a single table, since StayWhile ops staff (cleaners,
+/// maintenance techs, front desk) are typically assigned to a subset of
+/// properties while managers/admins need global reach. See ADR-0004.
+model UserRole {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  roleId       String    @map("role_id") @db.Uuid
+  propertyId   String?   @map("property_id") @db.Uuid
+  scope        RoleScope @default(GLOBAL)
+  assignedById String?   @map("assigned_by_id") @db.Uuid
+  assignedAt   DateTime  @default(now()) @map("assigned_at")
+  expiresAt    DateTime? @map("expires_at")
+
+  user       User      @relation("UserRoles", fields: [userId], references: [id], onDelete: Cascade)
+  role       Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  property   Property? @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  assignedBy User?     @relation("UserRoleAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  @@unique([userId, roleId, propertyId])
+  @@index([userId])
+  @@index([propertyId])
+  @@map("user_roles")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Properties
+// ─────────────────────────────────────────────────────────────────────────
+
+model Property {
+  id                 String         @id @default(uuid()) @db.Uuid
+  name               String
+  internalCode       String         @unique @map("internal_code")
+  addressLine1       String         @map("address_line1")
+  addressLine2       String?        @map("address_line2")
+  city               String
+  state              String
+  postalCode         String         @map("postal_code")
+  country            String
+  latitude           Decimal?       @db.Decimal(9, 6)
+  longitude          Decimal?       @db.Decimal(9, 6)
+  status             PropertyStatus @default(ACTIVE)
+  propertyType       PropertyType   @map("property_type")
+  bedroomCount       Int            @map("bedroom_count")
+  bathroomCount      Decimal        @map("bathroom_count") @db.Decimal(3, 1)
+  maxOccupancy       Int            @map("max_occupancy")
+  timezone           String // IANA timezone, e.g. "America/Denver"
+  ownerRezPropertyId String?        @unique @map("owner_rez_property_id")
+  airbnbListingId    String?        @unique @map("airbnb_listing_id")
+  notionPageId       String?        @map("notion_page_id")
+  deletedAt          DateTime?      @map("deleted_at")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  userRoles           UserRole[]
+  reservations        Reservation[]
+  tasks               Task[]
+  cleaningSchedules   CleaningSchedule[]
+  maintenanceRequests MaintenanceRequest[]
+  messageThreads      MessageThread[]
+  smartDevices        SmartDevice[]
+  aiConversations     AiConversation[]
+
+  @@map("properties")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Guests & Reservations
+// ─────────────────────────────────────────────────────────────────────────
+
+model Guest {
+  id              String    @id @default(uuid()) @db.Uuid
+  firstName       String    @map("first_name")
+  lastName        String    @map("last_name")
+  email           String?
+  phone           String?
+  ownerRezGuestId String?   @unique @map("owner_rez_guest_id")
+  airbnbGuestId   String?   @unique @map("airbnb_guest_id")
+  notes           String?
+  deletedAt       DateTime? @map("deleted_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  primaryReservations Reservation[]        @relation("ReservationPrimaryGuest")
+  reservationGuests   ReservationGuest[]
+  messageThreads      MessageThread[]
+  messages            Message[]            @relation("MessageSenderGuest")
+  aiConversations     AiConversation[]
+  maintenanceReports  MaintenanceRequest[]
+
+  @@map("guests")
+}
+
+model Reservation {
+  id                    String            @id @default(uuid()) @db.Uuid
+  propertyId            String            @map("property_id") @db.Uuid
+  primaryGuestId        String            @map("primary_guest_id") @db.Uuid
+  source                ReservationSource
+  externalReservationId String            @map("external_reservation_id")
+  status                ReservationStatus @default(PENDING)
+  checkInDate           DateTime          @map("check_in_date") @db.Date
+  checkOutDate          DateTime          @map("check_out_date") @db.Date
+  checkInTime           String?           @map("check_in_time") // "HH:mm"
+  checkOutTime          String?           @map("check_out_time")
+  adults                Int               @default(1)
+  children              Int               @default(0)
+  pets                  Int               @default(0)
+  totalAmount           Decimal           @map("total_amount") @db.Decimal(10, 2)
+  currency              String            @default("USD")
+  balanceDue            Decimal           @default(0) @map("balance_due") @db.Decimal(10, 2)
+  specialRequests       String?           @map("special_requests")
+  cancelledAt           DateTime?         @map("cancelled_at")
+  createdAt             DateTime          @default(now()) @map("created_at")
+  updatedAt             DateTime          @updatedAt @map("updated_at")
+
+  property          Property           @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  primaryGuest      Guest              @relation("ReservationPrimaryGuest", fields: [primaryGuestId], references: [id], onDelete: Restrict)
+  reservationGuests ReservationGuest[]
+  tasks             Task[]
+  cleaningSchedules CleaningSchedule[]
+  messageThreads    MessageThread[]
+
+  @@unique([source, externalReservationId])
+  @@index([propertyId, checkInDate])
+  @@index([status])
+  @@map("reservations")
+}
+
+/// Many-to-many join enabling multi-guest bookings while keeping a single
+/// designated primary guest on Reservation for simple queries/notifications.
+model ReservationGuest {
+  id            String  @id @default(uuid()) @db.Uuid
+  reservationId String  @map("reservation_id") @db.Uuid
+  guestId       String  @map("guest_id") @db.Uuid
+  isPrimary     Boolean @default(false) @map("is_primary")
+
+  reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  guest       Guest       @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@unique([reservationId, guestId])
+  @@map("reservation_guests")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Tasks, Cleaning, Maintenance
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Canonical assignment/status/Asana-sync record shared by cleaning,
+/// maintenance, and ad hoc ops work. CleaningSchedule and MaintenanceRequest
+/// each optionally own exactly one Task via a unique FK, so workflow-state
+/// logic (status, assignment, due dates, Asana sync) lives in one place
+/// instead of being duplicated across three tables. See ERD notes.
+model Task {
+  id               String       @id @default(uuid()) @db.Uuid
+  title            String
+  description      String?
+  type             TaskType
+  status           TaskStatus   @default(TODO)
+  priority         TaskPriority @default(NORMAL)
+  propertyId       String?      @map("property_id") @db.Uuid
+  reservationId    String?      @map("reservation_id") @db.Uuid
+  assignedToUserId String?      @map("assigned_to_user_id") @db.Uuid
+  createdByUserId  String       @map("created_by_user_id") @db.Uuid
+  dueAt            DateTime?    @map("due_at")
+  startedAt        DateTime?    @map("started_at")
+  completedAt      DateTime?    @map("completed_at")
+  asanaTaskId      String?      @unique @map("asana_task_id")
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+
+  property           Property?           @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  reservation        Reservation?        @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  assignedTo         User?               @relation("TaskAssignee", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  createdBy          User                @relation("TaskCreator", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  cleaningSchedule   CleaningSchedule?
+  maintenanceRequest MaintenanceRequest?
+
+  @@index([status])
+  @@index([assignedToUserId])
+  @@index([propertyId])
+  @@map("tasks")
+}
+
+model CleaningSchedule {
+  id                 String         @id @default(uuid()) @db.Uuid
+  propertyId         String         @map("property_id") @db.Uuid
+  reservationId      String?        @map("reservation_id") @db.Uuid
+  taskId             String         @unique @map("task_id") @db.Uuid
+  scheduledDate      DateTime       @map("scheduled_date") @db.Date
+  scheduledStartTime String?        @map("scheduled_start_time")
+  scheduledEndTime   String?        @map("scheduled_end_time")
+  cleaningType       CleaningType   @map("cleaning_type")
+  status             CleaningStatus @default(SCHEDULED)
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+
+  property    Property     @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  task        Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([propertyId, scheduledDate])
+  @@map("cleaning_schedules")
+}
+
+model MaintenanceRequest {
+  id                String              @id @default(uuid()) @db.Uuid
+  propertyId        String              @map("property_id") @db.Uuid
+  taskId            String?             @unique @map("task_id") @db.Uuid
+  reportedByUserId  String?             @map("reported_by_user_id") @db.Uuid
+  reportedByGuestId String?             @map("reported_by_guest_id") @db.Uuid
+  category          MaintenanceCategory
+  severity          MaintenanceSeverity @default(MEDIUM)
+  status            MaintenanceStatus   @default(OPEN)
+  description       String
+  resolutionNotes   String?             @map("resolution_notes")
+  reportedAt        DateTime            @default(now()) @map("reported_at")
+  resolvedAt        DateTime?           @map("resolved_at")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  property        Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  task            Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  reportedByUser  User?    @relation(fields: [reportedByUserId], references: [id], onDelete: SetNull)
+  reportedByGuest Guest?   @relation(fields: [reportedByGuestId], references: [id], onDelete: SetNull)
+
+  @@index([propertyId, status])
+  @@map("maintenance_requests")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Messages
+// ─────────────────────────────────────────────────────────────────────────
+
+model MessageThread {
+  id               String         @id @default(uuid()) @db.Uuid
+  subject          String?
+  channel          MessageChannel
+  propertyId       String?        @map("property_id") @db.Uuid
+  reservationId    String?        @map("reservation_id") @db.Uuid
+  guestId          String?        @map("guest_id") @db.Uuid
+  externalThreadId String?        @map("external_thread_id")
+  status           ThreadStatus   @default(OPEN)
+  createdAt        DateTime       @default(now()) @map("created_at")
+  updatedAt        DateTime       @updatedAt @map("updated_at")
+
+  property    Property?    @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  guest       Guest?       @relation(fields: [guestId], references: [id], onDelete: SetNull)
+  messages    Message[]
+
+  @@index([channel, status])
+  @@map("message_threads")
+}
+
+model Message {
+  id                String           @id @default(uuid()) @db.Uuid
+  threadId          String           @map("thread_id") @db.Uuid
+  direction         MessageDirection
+  senderUserId      String?          @map("sender_user_id") @db.Uuid
+  senderGuestId     String?          @map("sender_guest_id") @db.Uuid
+  senderExternalRef String?          @map("sender_external_ref") // phone/email/slack-id when unmapped
+  body              String
+  externalMessageId String?          @unique @map("external_message_id")
+  sentAt            DateTime         @map("sent_at")
+  createdAt         DateTime         @default(now()) @map("created_at")
+
+  thread      MessageThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  senderUser  User?         @relation(fields: [senderUserId], references: [id], onDelete: SetNull)
+  senderGuest Guest?        @relation("MessageSenderGuest", fields: [senderGuestId], references: [id], onDelete: SetNull)
+
+  @@index([threadId, sentAt])
+  @@map("messages")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Notifications
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Delivery flows through the same trigger-workflow pattern as everything
+/// else: creating a row with status=PENDING fires a workflow event; n8n
+/// performs the actual Slack/Email/SMS send and calls back to update status.
+model Notification {
+  id                String              @id @default(uuid()) @db.Uuid
+  userId            String              @map("user_id") @db.Uuid
+  type              NotificationType
+  title             String
+  body              String
+  link              String?
+  channel           NotificationChannel
+  status            NotificationStatus  @default(PENDING)
+  relatedEntityType String?             @map("related_entity_type")
+  relatedEntityId   String?             @map("related_entity_id") @db.Uuid
+  readAt            DateTime?           @map("read_at")
+  sentAt            DateTime?           @map("sent_at")
+  createdAt         DateTime            @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Smart Devices
+// ─────────────────────────────────────────────────────────────────────────
+
+model SmartDevice {
+  id               String              @id @default(uuid()) @db.Uuid
+  propertyId       String              @map("property_id") @db.Uuid
+  provider         SmartDeviceProvider
+  deviceType       SmartDeviceType     @map("device_type")
+  externalDeviceId String              @map("external_device_id")
+  name             String
+  status           SmartDeviceStatus   @default(ONLINE)
+  lastSeenAt       DateTime?           @map("last_seen_at")
+  metadata         Json                @default("{}")
+  createdAt        DateTime            @default(now()) @map("created_at")
+  updatedAt        DateTime            @updatedAt @map("updated_at")
+
+  property Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  events   SmartDeviceEvent[]
+
+  @@unique([provider, externalDeviceId])
+  @@index([propertyId])
+  @@map("smart_devices")
+}
+
+/// Kept separate from AuditLog: this is high-volume device telemetry, not a
+/// user-driven action. Retention/partitioning is a future scalability item.
+model SmartDeviceEvent {
+  id            String   @id @default(uuid()) @db.Uuid
+  smartDeviceId String   @map("smart_device_id") @db.Uuid
+  eventType     String   @map("event_type")
+  payload       Json     @default("{}")
+  occurredAt    DateTime @map("occurred_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  smartDevice SmartDevice @relation(fields: [smartDeviceId], references: [id], onDelete: Cascade)
+
+  @@index([smartDeviceId, occurredAt])
+  @@map("smart_device_events")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Integrations
+// ─────────────────────────────────────────────────────────────────────────
+
+model IntegrationConnection {
+  id                String              @id @default(uuid()) @db.Uuid
+  provider          IntegrationProvider @unique
+  displayName       String              @map("display_name")
+  status            IntegrationStatus   @default(DISCONNECTED)
+  authType          IntegrationAuthType @map("auth_type")
+  credentialsRef    String?             @map("credentials_ref") // reference/key into secrets store — never plaintext tokens here
+  scopes            Json                @default("[]")
+  connectedByUserId String?             @map("connected_by_user_id") @db.Uuid
+  lastSyncedAt      DateTime?           @map("last_synced_at")
+  metadata          Json                @default("{}")
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  connectedByUser User?                @relation(fields: [connectedByUserId], references: [id], onDelete: SetNull)
+  syncLogs        IntegrationSyncLog[]
+
+  @@map("integration_connections")
+}
+
+model IntegrationSyncLog {
+  id                      String        @id @default(uuid()) @db.Uuid
+  integrationConnectionId String        @map("integration_connection_id") @db.Uuid
+  direction               SyncDirection
+  entityType              String        @map("entity_type")
+  entityId                String?       @map("entity_id")
+  status                  SyncStatus    @default(RUNNING)
+  errorMessage            String?       @map("error_message")
+  startedAt               DateTime      @default(now()) @map("started_at")
+  finishedAt              DateTime?     @map("finished_at")
+  recordsProcessed        Int           @default(0) @map("records_processed")
+  createdAt               DateTime      @default(now()) @map("created_at")
+
+  integrationConnection IntegrationConnection @relation(fields: [integrationConnectionId], references: [id], onDelete: Cascade)
+
+  @@index([integrationConnectionId, startedAt])
+  @@map("integration_sync_logs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// AI Conversations
+// ─────────────────────────────────────────────────────────────────────────
+
+model AiConversation {
+  id                String                @id @default(uuid()) @db.Uuid
+  subject           String?
+  context           AiConversationContext
+  initiatedByUserId String?               @map("initiated_by_user_id") @db.Uuid
+  guestId           String?               @map("guest_id") @db.Uuid
+  propertyId        String?               @map("property_id") @db.Uuid
+  status            AiConversationStatus  @default(ACTIVE)
+  model             String
+  createdAt         DateTime              @default(now()) @map("created_at")
+  updatedAt         DateTime              @updatedAt @map("updated_at")
+
+  initiatedByUser User?       @relation(fields: [initiatedByUserId], references: [id], onDelete: SetNull)
+  guest           Guest?      @relation(fields: [guestId], references: [id], onDelete: SetNull)
+  property        Property?   @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  messages        AiMessage[]
+  aiActions       AiAction[]
+
+  @@map("ai_conversations")
+}
+
+model AiMessage {
+  id             String        @id @default(uuid()) @db.Uuid
+  conversationId String        @map("conversation_id") @db.Uuid
+  role           AiMessageRole
+  content        String
+  toolCalls      Json?         @map("tool_calls")
+  tokenCount     Int?          @map("token_count")
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  conversation AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("ai_messages")
+}
+
+/// Action Approval Framework: an AI-proposed action pending human sign-off
+/// before it executes (e.g. sending a guest message, modifying a
+/// reservation). Proposed by @stayw/ai's Tool Registry when a tool is
+/// registered with requiresApproval: true. See ADR-0007.
+model AiAction {
+  id                String            @id @default(uuid()) @db.Uuid
+  conversationId    String?           @map("conversation_id") @db.Uuid
+  toolName          String            @map("tool_name")
+  proposedInput     Json              @map("proposed_input")
+  reasoning         String?
+  status            AiActionStatus    @default(PENDING)
+  riskLevel         AiActionRiskLevel @default(STANDARD) @map("risk_level")
+  relatedEntityType String?           @map("related_entity_type")
+  relatedEntityId   String?           @map("related_entity_id")
+  reviewedByUserId  String?           @map("reviewed_by_user_id") @db.Uuid
+  reviewedAt        DateTime?         @map("reviewed_at")
+  rejectionReason   String?           @map("rejection_reason")
+  executedAt        DateTime?         @map("executed_at")
+  executionResult   Json?             @map("execution_result")
+  executionError    String?           @map("execution_error")
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  conversation   AiConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  reviewedByUser User?           @relation("AiActionReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([conversationId])
+  @@map("ai_actions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cross-cutting: Audit Logs & Workflow Executions
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Written by recordAudit() from every mutating service function.
+/// actorUserId is null for system/workflow-initiated actions (see actorType).
+model AuditLog {
+  id                  String    @id @default(uuid()) @db.Uuid
+  actorUserId         String?   @map("actor_user_id") @db.Uuid
+  actorType           ActorType @map("actor_type")
+  action              String // "entity.verb" convention, e.g. "reservation.created"
+  entityType          String    @map("entity_type")
+  entityId            String    @map("entity_id")
+  beforeState         Json?     @map("before_state")
+  afterState          Json?     @map("after_state")
+  workflowExecutionId String?   @map("workflow_execution_id") @db.Uuid
+  metadata            Json?
+  occurredAt          DateTime  @map("occurred_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+
+  actorUser         User?              @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  workflowExecution WorkflowExecution? @relation(fields: [workflowExecutionId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([actorUserId])
+  @@index([occurredAt])
+  @@map("audit_logs")
+}
+
+/// n8n traceability. correlationId is generated at trigger time and threaded
+/// through AuditLog.metadata, IntegrationSyncLog, and the n8n callback
+/// payload — enabling a single query to reconstruct the full trace for
+/// "what happened for this reservation creation."
+model WorkflowExecution {
+  id                String                  @id @default(uuid()) @db.Uuid
+  workflowName      String                  @map("workflow_name")
+  n8nExecutionId    String?                 @unique @map("n8n_execution_id")
+  triggerType       WorkflowTriggerType     @map("trigger_type")
+  triggerSource     String                  @map("trigger_source")
+  status            WorkflowExecutionStatus @default(PENDING)
+  relatedEntityType String?                 @map("related_entity_type")
+  relatedEntityId   String?                 @map("related_entity_id")
+  requestPayload    Json                    @map("request_payload")
+  responsePayload   Json?                   @map("response_payload")
+  errorMessage      String?                 @map("error_message")
+  correlationId     String                  @unique @default(uuid()) @map("correlation_id") @db.Uuid
+  startedAt         DateTime                @default(now()) @map("started_at")
+  completedAt       DateTime?               @map("completed_at")
+  createdAt         DateTime                @default(now()) @map("created_at")
+  updatedAt         DateTime                @updatedAt @map("updated_at")
+
+  auditLogs AuditLog[]
+
+  @@index([status])
+  @@index([relatedEntityType, relatedEntityId])
+  @@map("workflow_executions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────────────────
+
+enum UserStatus {
+  ACTIVE
+  DEACTIVATED
+  INVITED
+}
+
+enum PermissionAction {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  MANAGE
+}
+
+enum RoleScope {
+  GLOBAL
+  PROPERTY
+}
+
+enum PropertyStatus {
+  ACTIVE
+  INACTIVE
+  ONBOARDING
+  OFFBOARDED
+}
+
+enum PropertyType {
+  HOUSE
+  APARTMENT
+  CONDO
+  CABIN
+  OTHER
+}
+
+enum ReservationSource {
+  OWNERREZ
+  AIRBNB
+  DIRECT
+  OTHER
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  CHECKED_IN
+  CHECKED_OUT
+  CANCELLED
+}
+
+enum TaskType {
+  CLEANING
+  MAINTENANCE
+  INSPECTION
+  GENERAL
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  DONE
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum CleaningType {
+  TURNOVER
+  DEEP_CLEAN
+  INSPECTION_CLEAN
+  MAINTENANCE_CLEAN
+}
+
+enum CleaningStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  MISSED
+  CANCELLED
+}
+
+enum MaintenanceCategory {
+  PLUMBING
+  ELECTRICAL
+  HVAC
+  APPLIANCE
+  STRUCTURAL
+  PEST_CONTROL
+  OTHER
+}
+
+enum MaintenanceSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  EMERGENCY
+}
+
+enum MaintenanceStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CANCELLED
+}
+
+enum MessageChannel {
+  SLACK
+  GOOGLE_VOICE
+  GMAIL
+  IN_APP
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum ThreadStatus {
+  OPEN
+  CLOSED
+  ARCHIVED
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  RESERVATION_UPDATE
+  MAINTENANCE_ALERT
+  MESSAGE_RECEIVED
+  WORKFLOW_FAILURE
+  AI_ACTION_PENDING
+  SYSTEM
+}
+
+enum NotificationChannel {
+  IN_APP
+  SLACK
+  EMAIL
+  SMS
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  READ
+}
+
+enum SmartDeviceProvider {
+  YALE
+  AUGUST
+  NEST
+  ECOBEE
+  HONEYWELL
+  CIELO
+}
+
+enum SmartDeviceType {
+  LOCK
+  THERMOSTAT
+  CAMERA
+  SENSOR
+  OTHER
+}
+
+enum SmartDeviceStatus {
+  ONLINE
+  OFFLINE
+  ERROR
+}
+
+enum IntegrationProvider {
+  OWNERREZ
+  AIRBNB
+  SLACK
+  ASANA
+  NOTION
+  GMAIL
+  GOOGLE_VOICE
+  YALE
+  AUGUST
+  NEST
+  ECOBEE
+  CIELO
+}
+
+enum IntegrationStatus {
+  CONNECTED
+  DISCONNECTED
+  ERROR
+  PENDING
+}
+
+enum IntegrationAuthType {
+  OAUTH2
+  API_KEY
+  WEBHOOK_SECRET
+}
+
+enum SyncDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum SyncStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  PARTIAL
+}
+
+enum AiConversationContext {
+  GUEST_SUPPORT
+  OPS_ASSISTANT
+  INTERNAL_AUTOMATION
+}
+
+enum AiConversationStatus {
+  ACTIVE
+  RESOLVED
+  ESCALATED
+}
+
+enum AiMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+  TOOL
+}
+
+enum AiActionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXECUTED
+  EXECUTION_FAILED
+  EXPIRED
+}
+
+enum AiActionRiskLevel {
+  LOW
+  STANDARD
+  HIGH
+}
+
+enum ActorType {
+  USER
+  SYSTEM
+  WORKFLOW
+  AI
+}
+
+enum WorkflowTriggerType {
+  EVENT
+  SCHEDULED
+  MANUAL
+}
+
+enum WorkflowExecutionStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}

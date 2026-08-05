@@ -1,0 +1,37 @@
+{
+  "name": "@stayw/integrations",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./core": "./src/core/index.ts",
+    "./ownerrez": "./src/ownerrez/client.ts",
+    "./airbnb": "./src/airbnb/client.ts",
+    "./slack": "./src/slack/client.ts",
+    "./asana": "./src/asana/client.ts",
+    "./notion": "./src/notion/client.ts",
+    "./gmail": "./src/gmail/client.ts",
+    "./google-voice": "./src/google-voice/client.ts",
+    "./yale": "./src/yale/client.ts",
+    "./august": "./src/august/client.ts",
+    "./nest": "./src/nest/client.ts",
+    "./ecobee": "./src/ecobee/client.ts",
+    "./cielo": "./src/cielo/client.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@stayw/database": "workspace:*"
+  },
+  "devDependencies": {
+    "@stayw/vitest-config": "workspace:*",
+    "vitest": "^2.1.8",
+    "@stayw/eslint-config": "workspace:*",
+    "@stayw/typescript-config": "workspace:*",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

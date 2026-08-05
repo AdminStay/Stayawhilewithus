@@ -1,0 +1,9 @@
+{
+  "name": "@stayw/tailwind-config",
+  "version": "0.0.0",
+  "private": true,
+  "main": "preset.ts",
+  "peerDependencies": {
+    "tailwindcss": "^3.4.17"
+  }
+}

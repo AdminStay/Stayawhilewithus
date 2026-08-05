@@ -1,0 +1,7 @@
+{
+  "extends": "@stayw/typescript-config/node-library.json",
+  "compilerOptions": {
+    "outDir": "dist"
+  },
+  "include": ["src", "prisma/seed.ts"]
+}

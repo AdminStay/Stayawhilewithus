@@ -1,0 +1,4 @@
+{
+  "extends": "@stayw/typescript-config/nextjs.json",
+  "include": ["src"]
+}
