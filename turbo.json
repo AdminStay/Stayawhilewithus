@@ -4,7 +4,16 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build", "db:generate"],
-      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+      "outputs": [".next/", "!.next/cache/", "dist/**"],
+      "env": [
+        "DATABASE_URL",
+        "DIRECT_URL",
+        "CLERK_SECRET_KEY",
+        "CLERK_WEBHOOK_SIGNING_SECRET",
+        "N8N_BASE_URL",
+        "N8N_WEBHOOK_SHARED_SECRET",
+        "N8N_INBOUND_WEBHOOK_SHARED_SECRET"
+      ]
     },
     "dev": {
       "dependsOn": ["^db:generate"],
