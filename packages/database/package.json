@@ -13,6 +13,7 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:reset": "prisma migrate reset",
     "db:seed": "tsx prisma/seed.ts",
+    "db:grant-role": "tsx scripts/grant-role.ts",
     "db:studio": "prisma studio",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit"

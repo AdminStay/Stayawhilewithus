@@ -27,15 +27,46 @@ export async function syncClerkUserFromWebhookEvent(
       )?.email_address;
       if (!primaryEmail) return;
 
-      await prisma.user.upsert({
+      const byClerkId = await prisma.user.findUnique({
         where: { clerkUserId: id },
-        update: {
-          email: primaryEmail,
-          firstName: first_name,
-          lastName: last_name,
-          avatarUrl: image_url,
-        },
-        create: {
+      });
+      if (byClerkId) {
+        await prisma.user.update({
+          where: { id: byClerkId.id },
+          data: {
+            email: primaryEmail,
+            firstName: first_name,
+            lastName: last_name,
+            avatarUrl: image_url,
+          },
+        });
+        return;
+      }
+
+      // No row for this Clerk id yet — a seed script (or an earlier JIT
+      // provision, see apps/website/src/platform/auth/get-current-user.ts,
+      // which has the identical reasoning) may have already created a row
+      // for this email with a different clerkUserId. User.email is
+      // @unique, so blindly creating here would throw instead of ever
+      // reaching that row — claim it by relinking its clerkUserId instead.
+      const byEmail = await prisma.user.findUnique({
+        where: { email: primaryEmail },
+      });
+      if (byEmail) {
+        await prisma.user.update({
+          where: { id: byEmail.id },
+          data: {
+            clerkUserId: id,
+            firstName: first_name,
+            lastName: last_name,
+            avatarUrl: image_url,
+          },
+        });
+        return;
+      }
+
+      await prisma.user.create({
+        data: {
           clerkUserId: id,
           email: primaryEmail,
           firstName: first_name,

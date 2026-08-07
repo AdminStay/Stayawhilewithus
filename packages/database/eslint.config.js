@@ -3,8 +3,8 @@ import { nodeLibraryConfig } from "@stayw/eslint-config/node-library";
 export default [
   ...nodeLibraryConfig,
   {
-    // CLI seed script — informational console output is the point.
-    files: ["prisma/seed.ts"],
+    // CLI scripts — informational console output is the point.
+    files: ["prisma/seed.ts", "scripts/**/*.ts"],
     rules: {
       "no-console": "off",
     },

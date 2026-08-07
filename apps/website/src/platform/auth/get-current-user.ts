@@ -34,10 +34,33 @@ export async function getCurrentUser(): Promise<AuthContext> {
     );
   }
 
-  const created = await prisma.user.upsert({
-    where: { clerkUserId },
-    update: {},
-    create: {
+  // A row for this email may already exist without being linked to this
+  // Clerk id yet — most notably the bootstrap admin the seed script
+  // creates (packages/database/prisma/seed.ts) with a placeholder
+  // clerkUserId, before anyone has actually signed in as them. User.email
+  // is unique, so blindly creating a new row here would throw a unique
+  // constraint error instead of ever reaching that seeded row. Claim it by
+  // relinking its clerkUserId instead — its existing UserRole assignments
+  // (e.g. the seeded global "admin" role) carry over automatically since
+  // it's the same row, not a new one.
+  const byEmail = await prisma.user.findUnique({
+    where: { email: primaryEmail },
+  });
+  if (byEmail) {
+    const claimed = await prisma.user.update({
+      where: { id: byEmail.id },
+      data: {
+        clerkUserId,
+        firstName: clerkUser.firstName ?? byEmail.firstName,
+        lastName: clerkUser.lastName ?? byEmail.lastName,
+        avatarUrl: clerkUser.imageUrl ?? byEmail.avatarUrl,
+      },
+    });
+    return { userId: claimed.id };
+  }
+
+  const created = await prisma.user.create({
+    data: {
       clerkUserId,
       email: primaryEmail,
       firstName: clerkUser.firstName,
