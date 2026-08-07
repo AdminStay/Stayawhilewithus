@@ -1,4 +1,4 @@
-import { PrismaClient, PermissionAction } from "@prisma/client";
+import { PrismaClient, PermissionAction, Prisma } from "@prisma/client";
 
 const prisma = new PrismaClient();
 
@@ -180,6 +180,537 @@ async function main() {
     });
   }
   console.log(`  Admin user "${adminEmail}" seeded with global "admin" role.`);
+
+  await seedDemoData(admin.id);
+}
+
+/**
+ * Clearly-fictional sample data so a client walkthrough isn't every list
+ * page staring at empty tables — properties, guests, reservations, tasks,
+ * cleaning schedules, a maintenance request, notifications, a message
+ * thread, and an AI conversation. Idempotent on stable business keys
+ * (internalCode/email/externalReservationId/etc.), same as the rest of
+ * this script, so re-running `pnpm db:seed` is always safe — and dates are
+ * recomputed relative to *today* on every run (not just on first creation)
+ * so the demo still shows an arrival today / departure today / task due
+ * today no matter which day someone actually runs the seed. Nothing here
+ * is real StayWhile data — every name/address is a placeholder.
+ */
+async function seedDemoData(adminUserId: string): Promise<void> {
+  console.log("Seeding demo business data...");
+
+  const ridge = await prisma.property.upsert({
+    where: { internalCode: "DEMO-001" },
+    update: {},
+    create: {
+      name: "Cabin on the Ridge",
+      internalCode: "DEMO-001",
+      addressLine1: "142 Ridge Trail",
+      city: "Estes Park",
+      state: "CO",
+      postalCode: "80517",
+      country: "US",
+      propertyType: "CABIN",
+      bedroomCount: 3,
+      bathroomCount: 2,
+      maxOccupancy: 6,
+      timezone: "America/Denver",
+    },
+  });
+
+  const loft = await prisma.property.upsert({
+    where: { internalCode: "DEMO-002" },
+    update: {},
+    create: {
+      name: "Downtown Loft",
+      internalCode: "DEMO-002",
+      addressLine1: "88 Main St, Unit 4B",
+      city: "Denver",
+      state: "CO",
+      postalCode: "80202",
+      country: "US",
+      propertyType: "APARTMENT",
+      bedroomCount: 1,
+      bathroomCount: 1,
+      maxOccupancy: 2,
+      timezone: "America/Denver",
+    },
+  });
+
+  const jordan = await upsertDemoGuest({
+    email: "jordan.rivera@example.com",
+    firstName: "Jordan",
+    lastName: "Rivera",
+    phone: "+1-303-555-0142",
+  });
+
+  const casey = await upsertDemoGuest({
+    email: "casey.nguyen@example.com",
+    firstName: "Casey",
+    lastName: "Nguyen",
+    phone: "+1-303-555-0198",
+  });
+
+  // Built from UTC Y/M/D rather than `new Date(); .setHours(0,0,0,0)` —
+  // Prisma serializes `@db.Date` columns via the Date object's UTC
+  // representation, so local midnight on a machine ahead of UTC (e.g.
+  // UTC+8) would otherwise get stored as *yesterday*. This keeps "today"
+  // meaning the same calendar day both here and in the dashboard's own
+  // "arrivals/departures/due today" comparisons (dashboard.service.ts),
+  // which use the same construction.
+  const now = new Date();
+  const today = new Date(
+    Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()),
+  );
+  const daysFromNow = (n: number) => {
+    const d = new Date(today);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d;
+  };
+
+  // Ridge: arriving today, staying 4 nights — shows up under "arrivals
+  // today" and counts toward today's occupancy.
+  await upsertDemoReservation({
+    externalReservationId: "DEMO-RES-001",
+    propertyId: ridge.id,
+    guestId: jordan.id,
+    status: "CONFIRMED",
+    checkInDate: daysFromNow(0),
+    checkOutDate: daysFromNow(4),
+    totalAmount: 640,
+  });
+
+  // Loft: already checked in, departing today — shows up under
+  // "departures today" and also counts toward today's occupancy.
+  await upsertDemoReservation({
+    externalReservationId: "DEMO-RES-002",
+    propertyId: loft.id,
+    guestId: casey.id,
+    status: "CHECKED_IN",
+    checkInDate: daysFromNow(-3),
+    checkOutDate: daysFromNow(0),
+    totalAmount: 390,
+  });
+
+  // The Loft's next stay, a few days out — keeps the property list from
+  // looking like Ridge is the only property with any real activity.
+  await upsertDemoReservation({
+    externalReservationId: "DEMO-RES-003",
+    propertyId: loft.id,
+    guestId: casey.id,
+    status: "PENDING",
+    checkInDate: daysFromNow(9),
+    checkOutDate: daysFromNow(12),
+    totalAmount: 450,
+  });
+
+  // Loft's turnover clean, same-day as today's departure.
+  await upsertDemoCleaningSchedule({
+    slug: "DEMO-CLEAN-TODAY",
+    property: loft,
+    scheduledDate: daysFromNow(0),
+    cleaningType: "TURNOVER",
+    createdByUserId: adminUserId,
+  });
+
+  // Ridge's turnover clean ahead of its next guest.
+  await upsertDemoCleaningSchedule({
+    slug: "DEMO-CLEAN-UPCOMING",
+    property: ridge,
+    scheduledDate: daysFromNow(4),
+    cleaningType: "TURNOVER",
+    createdByUserId: adminUserId,
+  });
+
+  const existingMaintenanceRequest = await prisma.maintenanceRequest.findFirst({
+    where: {
+      propertyId: ridge.id,
+      description: "Kitchen faucet drips steadily",
+    },
+  });
+  if (!existingMaintenanceRequest) {
+    await prisma.maintenanceRequest.create({
+      data: {
+        propertyId: ridge.id,
+        reportedByUserId: adminUserId,
+        category: "PLUMBING",
+        severity: "LOW",
+        status: "OPEN",
+        description: "Kitchen faucet drips steadily",
+      },
+    });
+  }
+
+  // A standalone task (not tied to cleaning/maintenance) due today, so
+  // "tasks due today" has something real to show.
+  const dueTodayTitle = "Restock welcome basket — Cabin on the Ridge";
+  const existingDueTodayTask = await prisma.task.findFirst({
+    where: { title: dueTodayTitle },
+  });
+  if (existingDueTodayTask) {
+    await prisma.task.update({
+      where: { id: existingDueTodayTask.id },
+      data: { dueAt: daysFromNow(0), status: "TODO" },
+    });
+  } else {
+    await prisma.task.create({
+      data: {
+        title: dueTodayTitle,
+        type: "GENERAL",
+        priority: "NORMAL",
+        propertyId: ridge.id,
+        assignedToUserId: adminUserId,
+        createdByUserId: adminUserId,
+        dueAt: daysFromNow(0),
+      },
+    });
+  }
+
+  await seedDemoNotifications(adminUserId);
+  await seedDemoCommunications({ property: ridge, guest: jordan });
+  await seedDemoAiConversation();
+  await seedDemoAuditTrail(adminUserId);
+
+  console.log(
+    "  2 properties, 2 guests, 3 reservations, 2 cleaning schedules, 1 maintenance request, 1 task due today, notifications, a message thread, an AI conversation, and an audit trail ensured.",
+  );
+}
+
+/**
+ * `recordAudit()` (apps/website/src/platform/audit/record-audit.ts) is the
+ * only path real domain services use to write AuditLog rows — this seed
+ * script deliberately doesn't call into apps/website's service layer (that
+ * would be a backwards package dependency, packages/database -> apps/
+ * website), so demo data created directly via Prisma above never produced
+ * any audit trail. Without this, the /audit page would be the one screen
+ * left empty even though everything else has demo data. Backfills entries
+ * in the same "entity.verb" shape recordAudit() itself would have written,
+ * looked up by the same stable business keys used above so this stays
+ * idempotent.
+ */
+async function seedDemoAuditTrail(adminUserId: string): Promise<void> {
+  const ridge = await prisma.property.findUniqueOrThrow({
+    where: { internalCode: "DEMO-001" },
+  });
+  const loft = await prisma.property.findUniqueOrThrow({
+    where: { internalCode: "DEMO-002" },
+  });
+  const reservation1 = await prisma.reservation.findFirstOrThrow({
+    where: { source: "DIRECT", externalReservationId: "DEMO-RES-001" },
+  });
+  const maintenanceRequest = await prisma.maintenanceRequest.findFirstOrThrow({
+    where: {
+      propertyId: ridge.id,
+      description: "Kitchen faucet drips steadily",
+    },
+  });
+  const dueTodayTask = await prisma.task.findFirstOrThrow({
+    where: { title: "Restock welcome basket — Cabin on the Ridge" },
+  });
+
+  const entries: Array<{
+    action: string;
+    entityType: string;
+    entityId: string;
+    afterState: Record<string, unknown>;
+  }> = [
+    {
+      action: "property.created",
+      entityType: "Property",
+      entityId: ridge.id,
+      afterState: { name: ridge.name, status: ridge.status },
+    },
+    {
+      action: "property.created",
+      entityType: "Property",
+      entityId: loft.id,
+      afterState: { name: loft.name, status: loft.status },
+    },
+    {
+      action: "reservation.created",
+      entityType: "Reservation",
+      entityId: reservation1.id,
+      afterState: { status: reservation1.status },
+    },
+    {
+      action: "maintenance_request.reported",
+      entityType: "MaintenanceRequest",
+      entityId: maintenanceRequest.id,
+      afterState: {
+        status: maintenanceRequest.status,
+        category: maintenanceRequest.category,
+      },
+    },
+    {
+      action: "task.created",
+      entityType: "Task",
+      entityId: dueTodayTask.id,
+      afterState: { title: dueTodayTask.title, status: dueTodayTask.status },
+    },
+  ];
+
+  for (const entry of entries) {
+    const existing = await prisma.auditLog.findFirst({
+      where: { action: entry.action, entityId: entry.entityId },
+    });
+    if (existing) continue;
+
+    await prisma.auditLog.create({
+      data: {
+        actorUserId: adminUserId,
+        actorType: "USER",
+        action: entry.action,
+        entityType: entry.entityType,
+        entityId: entry.entityId,
+        afterState: entry.afterState as Prisma.InputJsonValue,
+        occurredAt: new Date(),
+      },
+    });
+  }
+}
+
+async function seedDemoNotifications(adminUserId: string): Promise<void> {
+  const demoNotifications: Array<{
+    type:
+      | "TASK_ASSIGNED"
+      | "RESERVATION_UPDATE"
+      | "MAINTENANCE_ALERT"
+      | "MESSAGE_RECEIVED";
+    title: string;
+    body: string;
+    read: boolean;
+  }> = [
+    {
+      type: "RESERVATION_UPDATE",
+      title: "Guest arriving today",
+      body: "Jordan Rivera checks in today at Cabin on the Ridge.",
+      read: false,
+    },
+    {
+      type: "MAINTENANCE_ALERT",
+      title: "New maintenance request",
+      body: "Kitchen faucet drips steadily — Cabin on the Ridge.",
+      read: false,
+    },
+    {
+      type: "TASK_ASSIGNED",
+      title: "Task due today",
+      body: "Restock welcome basket — Cabin on the Ridge.",
+      read: true,
+    },
+  ];
+
+  for (const n of demoNotifications) {
+    const existing = await prisma.notification.findFirst({
+      where: { userId: adminUserId, title: n.title },
+    });
+    if (existing) continue;
+
+    await prisma.notification.create({
+      data: {
+        userId: adminUserId,
+        type: n.type,
+        title: n.title,
+        body: n.body,
+        channel: "IN_APP",
+        status: "SENT",
+        sentAt: new Date(),
+        readAt: n.read ? new Date() : null,
+      },
+    });
+  }
+}
+
+async function seedDemoCommunications(input: {
+  property: { id: string };
+  guest: { id: string };
+}): Promise<void> {
+  const subject = "Check-in details — Cabin on the Ridge";
+  const existing = await prisma.messageThread.findFirst({ where: { subject } });
+  if (existing) return;
+
+  await prisma.$transaction(async (tx) => {
+    const thread = await tx.messageThread.create({
+      data: {
+        subject,
+        channel: "IN_APP",
+        propertyId: input.property.id,
+        guestId: input.guest.id,
+        status: "OPEN",
+      },
+    });
+    await tx.message.create({
+      data: {
+        threadId: thread.id,
+        direction: "INBOUND",
+        senderGuestId: input.guest.id,
+        body: "Hi! What time can we check in today, and is there parking?",
+        sentAt: new Date(),
+      },
+    });
+  });
+}
+
+/**
+ * A demo AI conversation showing what the ops-assistant thread looks like
+ * — a real user question, followed by the exact SYSTEM notice sendAiMessage
+ * actually produces when ANTHROPIC_API_KEY isn't set (packages/ai's
+ * NotImplementedError path). Not a fabricated AI reply — this is precisely
+ * what the app would generate on its own today, just precomputed for the
+ * demo instead of waiting for a real click.
+ */
+async function seedDemoAiConversation(): Promise<void> {
+  const subject = "Today's arrivals and departures";
+  const existing = await prisma.aiConversation.findFirst({
+    where: { subject },
+  });
+  if (existing) return;
+
+  await prisma.$transaction(async (tx) => {
+    const conversation = await tx.aiConversation.create({
+      data: {
+        subject,
+        context: "OPS_ASSISTANT",
+        model: "claude-sonnet-5",
+        status: "ACTIVE",
+      },
+    });
+    await tx.aiMessage.create({
+      data: {
+        conversationId: conversation.id,
+        role: "USER",
+        content: "What's arriving and departing today?",
+      },
+    });
+    await tx.aiMessage.create({
+      data: {
+        conversationId: conversation.id,
+        role: "SYSTEM",
+        content:
+          "The AI assistant isn't configured yet — an administrator needs to set ANTHROPIC_API_KEY.",
+      },
+    });
+  });
+}
+
+/** Guest.email isn't unique in the schema (real guests can share an email, e.g. a couple booking together), so it can't be an upsert `where` — findFirst-then-create is the idempotent equivalent used throughout this seed's demo data. */
+async function upsertDemoGuest(input: {
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+}) {
+  const existing = await prisma.guest.findFirst({
+    where: { email: input.email },
+  });
+  if (existing) return existing;
+
+  return prisma.guest.create({ data: input });
+}
+
+/**
+ * Dates are relative to "today," so on every re-run this updates the
+ * existing demo reservation's dates/status/amount in place (keyed by the
+ * stable `externalReservationId`) rather than only creating it once —
+ * otherwise the demo would drift out of "arriving/departing today" the
+ * day after it was first seeded.
+ */
+async function upsertDemoReservation(input: {
+  externalReservationId: string;
+  propertyId: string;
+  guestId: string;
+  status: "PENDING" | "CONFIRMED" | "CHECKED_IN" | "CHECKED_OUT" | "CANCELLED";
+  checkInDate: Date;
+  checkOutDate: Date;
+  totalAmount: number;
+}): Promise<void> {
+  const existing = await prisma.reservation.findFirst({
+    where: {
+      source: "DIRECT",
+      externalReservationId: input.externalReservationId,
+    },
+  });
+
+  if (existing) {
+    await prisma.reservation.update({
+      where: { id: existing.id },
+      data: {
+        status: input.status,
+        checkInDate: input.checkInDate,
+        checkOutDate: input.checkOutDate,
+        totalAmount: input.totalAmount,
+      },
+    });
+    return;
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const reservation = await tx.reservation.create({
+      data: {
+        propertyId: input.propertyId,
+        primaryGuestId: input.guestId,
+        source: "DIRECT",
+        externalReservationId: input.externalReservationId,
+        status: input.status,
+        checkInDate: input.checkInDate,
+        checkOutDate: input.checkOutDate,
+        totalAmount: input.totalAmount,
+      },
+    });
+    await tx.reservationGuest.create({
+      data: {
+        reservationId: reservation.id,
+        guestId: input.guestId,
+        isPrimary: true,
+      },
+    });
+  });
+}
+
+/** Same "refresh on every run" reasoning as upsertDemoReservation — keyed by a stable `slug` (stored as the backing Task's title suffix) rather than the scheduledDate itself, since that date is exactly what needs to move forward on re-runs. */
+async function upsertDemoCleaningSchedule(input: {
+  slug: string;
+  property: { id: string; name: string };
+  scheduledDate: Date;
+  cleaningType:
+    "TURNOVER" | "DEEP_CLEAN" | "INSPECTION_CLEAN" | "MAINTENANCE_CLEAN";
+  createdByUserId: string;
+}): Promise<void> {
+  const title = `Turnover clean — ${input.property.name} [${input.slug}]`;
+  const existingTask = await prisma.task.findFirst({
+    where: { title },
+    include: { cleaningSchedule: true },
+  });
+
+  if (existingTask?.cleaningSchedule) {
+    await prisma.cleaningSchedule.update({
+      where: { id: existingTask.cleaningSchedule.id },
+      data: {
+        scheduledDate: input.scheduledDate,
+        cleaningType: input.cleaningType,
+      },
+    });
+    return;
+  }
+
+  await prisma.$transaction(async (tx) => {
+    const task = await tx.task.create({
+      data: {
+        title,
+        type: "CLEANING",
+        propertyId: input.property.id,
+        createdByUserId: input.createdByUserId,
+      },
+    });
+    await tx.cleaningSchedule.create({
+      data: {
+        propertyId: input.property.id,
+        taskId: task.id,
+        scheduledDate: input.scheduledDate,
+        cleaningType: input.cleaningType,
+      },
+    });
+  });
 }
 
 main()
