@@ -119,6 +119,196 @@ Full monorepo verification forced fresh — 25/25 tasks, 0 errors, **293 tests**
 - **Flagged, not built**: there is still no UI or admin flow for granting a role to a new real sign-in — every future first-time real user will hit `ForbiddenError` on every module (now shown gracefully instead of crashing) until someone manually runs the same SQL this session did. This is the same gap Increment 17 already flagged as "no Settings module exists"; this session is direct proof it's a live-blocking gap, not just a hypothetical one.
 - **Verification**: full monorepo `lint typecheck test build` forced fresh — 25/25 tasks, 0 errors, production build includes all 12 dashboard routes in the manifest. Confirmed all 11 module `page.tsx` files use the exact same `getCurrentUser()` → service-call pattern (uniform code path, so this one fix applies identically everywhere) — full list checked directly, not sampled. **Could not perform a literal browser click-through** (no browser tool this session); recommend the user do one manual pass to visually confirm, though the evidence (uniform code path + DB permission parity + green build) is as strong as this session's tooling allows.
 
+**Increment 19 — 2026-08-12: client dashboard requirements delivered, real August + Cielo integrations built and Cielo proven live**: user ran a client meeting and returned with an exact, specific dashboard spec, then separately asked for August and Cielo to become real (not stub) integrations. Both are now substantially done. Full detail below; short version: **the dashboard now matches every requirement from the meeting, Cielo is proven live end-to-end except for one external blocker (no real Property records to map devices to), and August is code-complete but pending a human 2FA step only the client can do.**
+
+### The exact client dashboard requirements (from the meeting)
+
+The client's four homepage requirements, verbatim in spirit:
+
+1. **August locks** — separate summary (not folded into a generic "device health" number), online/offline count, low-battery indication, and an "offline + low battery" combined state must be visually distinguishable from "offline" alone or "low battery" alone. Demo/seed data must never be presented as live.
+2. **Thermostats** — separate summary from locks, offline status clearly shown, same demo-vs-live honesty rule.
+3. **Check-ins / check-outs** — today's arrivals/departures, **plus what's happening on upcoming days** (not just today). Dates must never shift by a day due to timezone handling.
+4. **Rescheduled cleanings** — must show that a cleaning was rescheduled, with original date → new date, easy for an ops person to notice without digging into the Cleaning page.
+
+Plus: Notion and OwnerRez should show real data if credentials exist, and an honest "not connected" message otherwise — never fabricated data. **ADR and Revenue must NOT be on the main dashboard** — they stay reachable via the Reservations page/sidebar only. No unrelated redesign; make the requested information obvious, accurate, and demo-ready, not prettier.
+
+### Dashboard: what's built, and what's live vs. demo right now
+
+- `apps/website/src/domains/dashboard/components/DashboardSummary.tsx` and `.../services/dashboard.service.ts` (both currently **untracked** — new this engagement, never committed) now implement all four requirements:
+  - Locks and Thermostats are two separate `Metric` tiles in the KPI strip (not merged).
+  - Every offline/low-battery device is itemized in "Needs Attention" with wording that distinguishes **Offline** / **Low battery** / **Offline + low battery** (fixed a real bug along the way: a low-battery-but-online device was showing the maintenance-request badge text "Open" — now shows "Low battery"; also fixed a second bug where a device that was both offline and low-battery only ever reported "Offline," silently hiding the battery fact).
+  - "Coming Up" section shows upcoming (not-today) check-ins/check-outs within a 6-day window, alongside the existing "Today's Arrivals & Departures."
+  - **Timezone bug fixed**: dates on `@db.Date` columns (check-in/out, cleaning dates) were briefly rendered through a local-timezone `toLocaleString()` that could show the wrong calendar day depending on server timezone. Fixed with a dedicated `formatUtcDate()` helper used everywhere a `@db.Date` field renders (rescheduled-cleaning dates, upcoming check-in/out dates).
+  - "Rescheduled Cleanings" section shows property + original date → new date + status, positioned in the primary (left) column.
+  - Notion/OwnerRez sections show real data when configured, an honest "Not connected — set X to enable" message otherwise. **Neither is configured in this local dev environment as of today** — no `NOTION_API_KEY`/`OWNERREZ_USERNAME`/`OWNERREZ_API_TOKEN` in `.env.local`.
+  - ADR/Revenue confirmed absent from the main dashboard; live on `apps/website/app/(dashboard)/reservations/page.tsx`, reachable via the persistent "Reservations" sidebar item.
+  - **Demo-vs-live labeling is per-device-row, not per-provider**: `isDemoSmartDevice()` (`smart-devices.service.ts`) checks whether a `SmartDevice` row's `externalDeviceId` starts with `"demo-"` — the only thing `seedDemoSmartDevices()` ever prefixes that way, so a real August lock ID or Cielo MAC address can never collide with it. This was a deliberate redesign away from an earlier per-_provider_ flag (`PROVIDER_CLIENT_STATUS`), because flipping a provider to "real" the moment its client code exists — independent of whether any given environment's rows actually came from a real sync — would have mislabeled lingering demo rows as live. Verified via dedicated tests.
+  - Rescheduled-cleaning backend: `CleaningSchedule.originalScheduledDate` (nullable `@db.Date`, migration `20260811153801_add_cleaning_reschedule_tracking`), `rescheduleCleaningSchedule()` service (sets `originalScheduledDate` only on the _first_ reschedule, no-ops with no DB write if the new date equals the current one — a real bug found and fixed), inline reschedule form on `/cleaning`.
+
+**Right now, in this exact database**: August locks = 4 demo rows (all `demo-`-prefixed, correctly labeled "Demo data" on the dashboard) — no live August data yet. Cielo thermostats = **0 rows** — the 2 demo Cielo rows were auto-pruned once real `CIELO_USERNAME`/`CIELO_PASSWORD` were detected in the environment during a seed run (this is the honesty safeguard working correctly, not a bug: `seedDemoSmartDevices()` only seeds a provider's demo rows while its real credentials are absent, and deletes any leftover demo rows the moment real credentials appear). So the dashboard's Cielo tile currently and correctly shows "0/0 — None connected" — no demo data, no live data yet either.
+
+### August: real integration built, proven only up to the credential boundary
+
+`packages/integrations/src/august/` (client.ts, types.ts, README.md, `scripts/login.ts`, `scripts/check.ts`) — all real, verified against `snjoetw/py-august`'s actual source (not guessed), read-only (no lock/unlock implemented, intentionally). `apps/website/src/domains/smart-devices/services/smart-devices.service.ts`'s `syncAugustDevices()` calls it and upserts into `SmartDevice`, gated on `AUGUST_PROPERTY_MAP` (a required env var mapping August `houseId` → StayWhile `Property.id` — there is no verified automatic way to look this up, so it's explicit config, not guessed). A "Sync now" button is wired into `/integrations` for AUGUST.
+
+**Blocked, and correctly not bypassed**: August's login needs a one-time interactive step — password, then a 6-digit verification code sent to the account's email/phone. This literally cannot be completed by an AI assistant: it requires live keyboard input into a running local process, which chat tooling has no channel for. **Kenny needs to provide the verification code**, and the user (not the assistant) runs the login script in their own terminal. This is understood and was not attempted to be bypassed or faked.
+
+**Exact command to resume, once Kenny's code is available:**
+
+```
+pnpm --filter @stayw/integrations exec tsx src/august/scripts/login.ts
+```
+
+Then, to verify it worked (real, read-only — validates credentials, lists real locks, prints name/houseId/online-offline/battery, never the token):
+
+```
+pnpm --filter @stayw/integrations exec tsx src/august/scripts/check.ts
+```
+
+### Cielo: proven live end-to-end, blocked on one external fact (not credentials)
+
+`packages/integrations/src/cielo/` — same shape as August. **Corrected a real research error from earlier in this engagement**: an initial pass concluded Cielo had two separate incompatible products/APIs ("Breez Edge" vs. "MRCOOL SmartHVAC"). Re-reading the _current_ source of the reference integration (`bodyscape/cielo_home`, actively maintained, 2025-dated) showed this was wrong — it's one unified backend (`api.smartcielo.com` / `home.cielowigle.com`) serving both brand names. **This is now empirically confirmed, not just theorized**: the real account's login succeeded against exactly this backend.
+
+**Live verification actually performed today** (read-only `validateCredentials()` + `listDevices()`, real credentials, no control actions):
+
+- Login: **succeeded**.
+- 6 real devices retrieved:
+
+  | Device                  | MAC          | Status  |
+  | ----------------------- | ------------ | ------- |
+  | Island Tides - Man cave | D8BFC0FE8756 | ONLINE  |
+  | Bahamas - Living Room   | D0EF7624CCD4 | OFFLINE |
+  | Ocean Pearl - SPA Room  | B48A0AF68C2A | OFFLINE |
+  | 7206 - Office           | C45BBEC42260 | ONLINE  |
+  | Miramar Blis - MIL      | 781C3CBADB1C | OFFLINE |
+  | Sandy Nudes - Garage    | 781C3CB9ED6C | ONLINE  |
+
+- The real `syncCieloDevices()` function (not a mock — the exact code the "Sync now" button calls) was then actually run against the real database: **result `{ synced: 0, skippedExternalIds: [all 6 MACs] }`**. Zero writes happened.
+
+**The actual blocker**: this database's only two `Property` rows are `internal_code` `DEMO-001`/`DEMO-002` ("Cabin on the Ridge," Estes Park CO; "Downtown Loft," Denver CO) — explicitly fictional demo data. None of the 6 real device names/locations above have any defensible match against them (checked name, `internal_code`, city, state — zero overlap, different region entirely). Per explicit instruction, no mapping was guessed. `CIELO_PROPERTY_MAP` is still `"{}"`.
+
+**Exact next step for Cielo**: either (a) the client's real properties for these 6 locations get created in StayWhile (via the app's normal Property-creation flow) and their IDs given to fill in `CIELO_PROPERTY_MAP`, or (b) the client confirms an explicit correspondence if one of these actually should map to an existing property under a different name. The moment `CIELO_PROPERTY_MAP` has real entries, re-running the sync (same command pattern as the check script, or clicking "Sync now" on `/integrations`) will write real `SmartDevice` rows and they'll appear on the dashboard automatically — `isDemoSmartDevice()` will correctly never flag them as demo, since real MAC addresses can't match the `"demo-"` prefix.
+
+### Environment variables configured (names only — no values here, ever)
+
+In `apps/website/.env.local` (gitignored, confirmed not tracked by git):
+
+- `CIELO_USERNAME`, `CIELO_PASSWORD` — **set**, real, verified working via live login today.
+- `CIELO_PROPERTY_MAP` — set to `"{}"` (empty — the actual blocker above).
+- `AUGUST_IDENTIFIER`, `AUGUST_INSTALL_ID`, `AUGUST_ACCESS_TOKEN` — **empty**, pending Kenny's code + the user running the login script.
+- `AUGUST_PROPERTY_MAP` — set to `"{}"` placeholder (irrelevant until August has a token).
+- `NOTION_API_KEY`, `OWNERREZ_USERNAME`, `OWNERREZ_API_TOKEN` — **not set** (unchanged from earlier sessions; Notion/OwnerRez dashboard sections correctly show "Not connected").
+
+### Client isolation — reconfirmed clean this session
+
+No global shell environment variables, no global `.npmrc`/pnpm config, nothing outside this repo's directory tree was read or written at any point. One formatting bug in the user's own saved Cielo credentials (extra stray quote) was fixed via a pattern-based `sed` substitution that never required displaying the actual value. One temporary diagnostic script (used twice, to run the real `syncCieloDevices()` outside the Next/Clerk request cycle) was created inside `apps/website/`, run, and deleted immediately both times — not committed, not left behind.
+
+### Notion / OwnerRez status (unchanged this session, restated for continuity)
+
+Both have real, credential-gated clients (`packages/integrations/src/notion/`, `.../ownerrez/`) built in an earlier session — genuine HTTP calls, no fabricated data, `IntegrationHighlights<T>` discriminated union (`configured: false` vs. `ok: true/false`). Neither has credentials in this local environment right now, so both dashboard sections honestly show "Not connected." No code changes needed here — just credentials, whenever the client wants to provide them.
+
+### Verification (forced fresh, today)
+
+Full monorepo `lint typecheck test build` — **25/25 tasks, 0 errors**. **368 tests total**: `website` 194, `@stayw/ai` 106, `@stayw/integrations` 59, `@stayw/auth` 5, `@stayw/mcp-servers` 4. Production build succeeds (19 routes). Dev server restarted and healthy after every change today.
+
+**Still not committed to git**: everything from this session (dashboard domain files, smart-devices services, August/Cielo real clients + scripts, integrations service additions) is still working-tree changes, same as the large uncommitted body of work already noted elsewhere in this file. `git status` shows the real current state — check it fresh, don't assume from this doc.
+
+## Increment 20 — 2026-08-14: August proven live end-to-end — real properties, real sync, proven idempotent
+
+Continuation of Increment 19's one remaining August blocker (Kenny's 2FA code). The code was hit with three real, successive failures before it actually worked — each root-caused against the actively-maintained `Yale-Libs/yalexs` library rather than guessed at:
+
+1. **404 on every request** — the integration had been ported from `snjoetw/py-august`, unpushed since 2022-01-31. August had since rotated its app-identification values server-side: stale API key, a six-year-old User-Agent, and two now-required headers (`x-august-branding`, `x-august-country`) that were never sent. Fixed by re-porting against `yalexs` (pushed as recently as 2026-08-10).
+2. **403 Forbidden, both brands tried** — `yalexs` defines two non-OAuth brands (`august`, `yale_access`) sharing one API key/host, differing only in the `x-august-branding` value (accounts get silently migrated between them by Yale). `login.ts` was fixed to try both automatically against one password entry.
+3. **403 with a definitive body, `{"code":"Forbidden","message":"API key is not valid"}`, both brands** — confirmed via real-world reports in `Yale-Libs/yalexs` issues [#99](https://github.com/Yale-Libs/yalexs/issues/99) and [#150](https://github.com/Yale-Libs/yalexs/issues/150) to mean a brand/host/key mismatch, not bad credentials. `yalexs/const.py` actually defines **four** brands, not two — `yale_august` and `yale_global` each have their own API key, and `yale_global` uses an entirely different host (`api.aaecosystem.com`). All four now live in one shared table (`packages/integrations/src/august/types.ts`'s `AUGUST_BRAND_CONFIGS`), used by both `client.ts` and `scripts/login.ts` so they can't drift apart again.
+
+**Real login then succeeded** — matched brand: **`yale_august`** (a Yale-migrated account; yalexs's own enum flags this brand as normally OAuth-only, but the plain password + 2FA-code flow worked anyway). Token valid until 2026-09-12.
+
+**Real device retrieval** (`check.ts`, read-only): 8 real locks across 4 real houses. The user relayed Michelle's full 36-property StayWhile name list plus complete address/type/bed/bath/occupancy/timezone detail for the 4 properties matching those houses. Reconciled without guessing — confirmed aliases: "Bonjour" → **Bonjour AMI**; Island Tides, Miramar Bliss, Aqua Palm unchanged. Two ambiguous locks were resolved by explicit user confirmation, not inferred: "Mother In Law - Door" is Miramar Bliss's second lock; the unbranded "Front Door" (Island Tides, -100% battery — August's "no sensor" reading) is the WiFi bridge/hub, not a real lock.
+
+**4 real `Property` rows created** (leaving `DEMO-001`/`DEMO-002` untouched — confirmed via identical `updatedAt` before/after):
+
+| Property      | Internal code   | id                                     | Real August houseId                    |
+| ------------- | --------------- | -------------------------------------- | -------------------------------------- |
+| Island Tides  | `ISLAND-TIDES`  | `4baac99a-b3f7-4f5b-8031-afcedae24a00` | `1ee6ffaf-6fe7-42e1-9d4a-bc9e66a677c5` |
+| Bonjour AMI   | `BONJOUR-AMI`   | `5c3cdde7-ff8f-47c9-92a0-6b6e61c1b86b` | `81b55799-18f6-48c2-88ec-a8272b5b3b65` |
+| Miramar Bliss | `MIRAMAR-BLISS` | `f7d046c6-e089-41e5-893a-620e5e127c18` | `834a41d3-a673-43e8-a2ea-9d50ab5c6d75` |
+| Aqua Palm     | `AQUA-PALM`     | `b3177e87-4266-4e99-a2c2-12f264513e48` | `c98c1d75-cc3e-4315-be7a-16d6d37a97c8` |
+
+`AUGUST_PROPERTY_MAP` in `.env.local` now holds all four real houseId→propertyId pairs.
+
+**New: `AUGUST_EXCLUDED_LOCK_IDS`** — env-driven denylist (`smart-devices.service.ts`), holding exactly one confirmed non-lock device (`76CD40D8711A4ABB98D150B4E5612E48`, the Island Tides bridge). Deliberately a per-device confirmed list, not a blanket "skip anything with a weird battery reading" heuristic — a real lock's genuine battery-sensor failure should still surface on the dashboard, not silently disappear.
+
+**Real sync run twice to prove idempotency**: both runs returned `{ synced: 7, skippedExternalIds: [] }`. The second run was verified against the first at the row level — same 7 `SmartDevice` row **IDs** both times (proving the upsert updated existing rows rather than inserting duplicates), zero duplicate `externalDeviceId`s, excluded device still absent (0 rows). Real, live battery/status data for all 7 locks — see the resulting table below.
+
+| Lock                       | Property      | Status  | Battery |
+| -------------------------- | ------------- | ------- | ------- |
+| Island Tides - Front Door  | Island Tides  | OFFLINE | 97%     |
+| Island Tides - Man Cave    | Island Tides  | OFFLINE | 69%     |
+| Bonjour - Front Door       | Bonjour AMI   | ONLINE  | 98%     |
+| Bonjour - In Law           | Bonjour AMI   | ONLINE  | 87%     |
+| Miramar Bliss - Front Door | Miramar Bliss | OFFLINE | 76%     |
+| Mother In Law - Door       | Miramar Bliss | OFFLINE | 78%     |
+| Aqua Palm - Front Door     | Aqua Palm     | ONLINE  | 99%     |
+
+**New: `updatePropertyOccupancy`** (schema + service + server action + inline `/properties` UI control, mirroring the existing `updatePropertyStatus` pattern) — added because Michelle noted `maxOccupancy` can change with bed-arrangement changes. Structurally independent of the August mapping: `AUGUST_PROPERTY_MAP` is keyed by the property's `id`, which never changes when `maxOccupancy` does. 2 new RBAC tests cover it.
+
+**Verification, forced fresh**: `pnpm turbo run lint typecheck test build --force` — **25/25 tasks, 0 errors**. **370 tests total**: `website` 196 (up from 194 — the 2 new occupancy tests), `@stayw/ai` 106, `@stayw/integrations` 59, `@stayw/auth` 5, `@stayw/mcp-servers` 4. Production build succeeds (19 routes).
+
+**Client isolation reconfirmed**: only `apps/website/.env.local` and this repo's local dev database were touched. No other client's files, credentials, or environments were read or written at any point. Two temporary one-off scripts (property creation + sync, and the second idempotency-proving sync) were created inside `apps/website/`, run, and deleted immediately both times — not committed, not left behind, same pattern as prior sessions' throwaway diagnostic scripts.
+
+**Result: August is now live end-to-end** — real login → real property records → real lock/property mapping → real sync → proven idempotent, all backed by real device data. **No further August work is needed** unless the client adds more properties or locks later (same code path handles it: re-run `check.ts` for new houseIds, extend `AUGUST_PROPERTY_MAP`, re-run the sync).
+
+**Right now, in this exact database**: August locks = 7 real rows across 4 real properties (`ISLAND-TIDES`, `BONJOUR-AMI`, `MIRAMAR-BLISS`, `AQUA-PALM`), correctly labeled live (not demo) — real August lock IDs never match the `"demo-"` prefix `isDemoSmartDevice()` checks for.
+
+**A note for whoever picks up Cielo next, not acted on this session**: two of the six Cielo devices found in Increment 19 — "Island Tides - Man cave" and "Miramar Blis - MIL" — share property names with two of the properties just created here for August (Island Tides, Miramar Bliss). Worth checking whether these are literally the same physical properties before assuming Cielo still needs 6 brand-new ones. This session did not touch Cielo, `CIELO_PROPERTY_MAP`, or any Cielo code — this is only an observation for the next session to verify, not a decision or mapping made here.
+
+## Increment 21 — 2026-08-15: Cielo proven live end-to-end — real properties, real mapping, real sync, proven idempotent
+
+Continuation of Increment 20's flagged Cielo question. The client (via the user, sourced from Michelle) confirmed the property mapping directly — nothing here was guessed:
+
+- **Island Tides** and **Miramar Bliss** — the same physical properties already created for August in Increment 20. Reused their existing `Property.id`s, no new rows.
+- **Bahamas**, **Ocean Pearl**, **Sandy Nudes** — 3 new, real properties. Full address/type/bed/bath/occupancy/timezone came from Michelle's list, relayed by the user and used exactly as given (no invented values):
+
+  | Property    | Internal code | id                                     | Address                                         | Type  | Bed/Bath | Max occ. | Timezone         |
+  | ----------- | ------------- | -------------------------------------- | ----------------------------------------------- | ----- | -------- | -------- | ---------------- |
+  | Bahamas     | `BAHAMAS`     | `87b19371-2828-44ef-8220-0ad4d5f6a361` | 4411 22nd Ave W, Bradenton, FL 34209            | House | 4 / 2    | 12       | America/New_York |
+  | Ocean Pearl | `OCEAN-PEARL` | `7b0755a1-9e28-4356-aefb-27e231b233e1` | 2330 Kings Point Dr, Largo, FL 33774            | House | 6 / 4.5  | 14       | America/New_York |
+  | Sandy Nudes | `SANDY-NUDES` | `c6ed7ec8-ce8b-43ef-8a66-9284b1d08c77` | 204 W Hibiscus St, South Padre Island, TX 78597 | House | 5 / 3    | 14       | America/Chicago  |
+
+  Created via a temporary Prisma script (same throwaway-script pattern as Increment 20's property creation), run once and deleted immediately — not committed, not left behind.
+
+- **7206 deliberately excluded, not mapped**: Kenny confirmed this device ("7206 - Office", MAC `C45BBEC42260`) is his and Jenny's personal residence and must not appear on the dashboard. Unlike August's `AUGUST_EXCLUDED_LOCK_IDS` (needed because an excluded device shared a houseId with real locks that still had to sync), Cielo's sync already skips any device whose MAC isn't a key in `CIELO_PROPERTY_MAP` — so simply never adding `C45BBEC42260` to the map was sufficient. No new exclusion mechanism was built; verified the skip actually happens (see below) rather than assumed.
+
+**`CIELO_PROPERTY_MAP`** in `apps/website/.env.local` now holds exactly 5 entries (the 5 mapped MACs above); `C45BBEC42260` is absent. `CIELO_USERNAME`/`CIELO_PASSWORD` were not touched — same credentials verified live in Increment 19/20.
+
+**Real sync run twice to prove idempotency**, via a temporary script (same reasoning as Increment 20's: `smart-devices.service.ts` transitively imports `"server-only"`, which unconditionally throws outside Next's request cycle — the script re-implements `syncCieloDevices()`'s exact logic, calling the real `CieloClient` and the real `prisma.smartDevice` table, not a mock). Script created, run twice, deleted immediately after — not committed.
+
+- Both runs: `{ synced: 5, skippedExternalIds: ["C45BBEC42260"] }`.
+- Row-level check between runs: **identical 5 `SmartDevice` row IDs both times** — the upsert updated existing rows, not duplicates. Zero duplicate `externalDeviceId`s across the whole table.
+- Verified via direct query: all 5 rows correctly joined to their intended property (`BAHAMAS`, `ISLAND-TIDES`, `MIRAMAR-BLISS`, `OCEAN-PEARL`, `SANDY-NUDES`); `C45BBEC42260` present in zero `SmartDevice` rows.
+- August confirmed untouched throughout: still exactly 7 `SmartDevice` rows, same row IDs, no code in `packages/integrations/src/august/` or `smart-devices.service.ts`'s August path was modified.
+- `DEMO-001`/`DEMO-002` confirmed untouched: `updated_at` unchanged (2026-08-07) before and after this session's writes.
+
+| Device                  | Property      | Status  |
+| ----------------------- | ------------- | ------- |
+| Island Tides - Man cave | Island Tides  | ONLINE  |
+| Bahamas - Living Room   | Bahamas       | OFFLINE |
+| Ocean Pearl - SPA Room  | Ocean Pearl   | OFFLINE |
+| Miramar Blis - MIL      | Miramar Bliss | OFFLINE |
+| Sandy Nudes - Garage    | Sandy Nudes   | ONLINE  |
+
+**Right now, in this exact database**: 9 `Property` rows total (6 real: `ISLAND-TIDES`, `BONJOUR-AMI`, `MIRAMAR-BLISS`, `AQUA-PALM`, `BAHAMAS`, `OCEAN-PEARL`, `SANDY-NUDES` — that's 7, plus 2 demo: `DEMO-001`, `DEMO-002`). `SmartDevice`: 7 `AUGUST` + 5 `CIELO` = 12 total, zero demo rows, zero duplicates. Real MAC addresses never match `isDemoSmartDevice()`'s `"demo-"` prefix check, so all 5 Cielo rows correctly render as live on the dashboard, not demo.
+
+**Verification, forced fresh**: `pnpm turbo run lint typecheck test build --force` — **25/25 tasks, 0 errors**, only pre-existing `import/order` lint warnings (same known pattern from every prior increment). **370 tests total, unchanged from Increment 20** (`website` 196, `@stayw/ai` 106, `@stayw/integrations` 59, `@stayw/auth` 5, `@stayw/mcp-servers` 4) — expected, since this was a data/config change verified by direct database inspection and live sync runs, not new application code needing new tests. Production build succeeds (19 routes).
+
+**Client isolation reconfirmed**: only `apps/website/.env.local` (one line, `CIELO_PROPERTY_MAP`) and this repo's local dev database were touched. No August credentials, code, or data were modified. No other client's files, credentials, or environments were read or written. Two temporary scripts (property creation, sync) were created inside `packages/database/`, run, and deleted immediately — not committed, not left behind, same pattern as Increment 20.
+
+**Result: Cielo is now live end-to-end**, matching August's status. **No further Cielo work is needed** unless the client adds more thermostats later (same resume path as August: re-run `packages/integrations/src/cielo/scripts/check.ts` for new devices, extend `CIELO_PROPERTY_MAP`, re-run the sync).
+
+**Still not committed to git**: this session made no tracked-file changes other than this `HANDOFF.md` update (the 3 Property rows and `SmartDevice` rows live only in the database; `CIELO_PROPERTY_MAP`'s new value lives only in gitignored `apps/website/.env.local`). The large body of prior uncommitted work (Increments 1–20) is still exactly as uncommitted as `git status` showed at the start of this session — untouched by this session, still worth grouping into logical commits whenever the user is ready.
+
+**Exact next step if picking this up later**: nothing is blocked. Both August and Cielo are fully live. Reasonable next priorities, in no particular order: (a) commit the large uncommitted body of work in logical groups, (b) OwnerRez/Notion credential setup if the client wants those dashboard sections live, (c) revisit Increment 18's flagged gap — no UI/admin flow exists yet for granting a role to a new real Clerk sign-in.
+
 ---
 
 # What Has Been Completed
@@ -212,7 +402,13 @@ Full findings in `N8N_DISCOVERY.md`. Summary: the instance is **effectively empt
 1. ✅ **n8n MCP tools verified working** (2026-08-06 session). `search_workflows`, `list_credentials`, `get_workflow_details`, `list_tags`, `search_projects` all returned real data — the connection is fully functional, not just account-level.
 2. ✅ **OwnerRez confirmed as production data** (2026-08-06 session — user answered directly after being asked a third time). All OwnerRez work must treat reservation/guest records as real. Read-only until the user explicitly authorizes writes.
 3. **No OwnerRez PAT is configured anywhere in this codebase.** The user was told explicitly not to paste it into chat; it was never provided by any other channel either. It needs to go into `.env.local`/`.env` (gitignored) before the OwnerRez client can be implemented for real.
-4. **`packages/ai` doesn't exist yet.** "Build AI automations using Claude" (one of the user's 10 implementation directives) has no foundation to build on until the paused AI-platform-layer work (schema migration + package scaffold) is finished.
+4. ✅ ~~`packages/ai` doesn't exist yet~~ — long since built and complete, see Increment 4–13 above. Stale as of 2026-08-12; kept for historical record only.
+
+## Current blockers (updated 2026-08-14, see Increment 20 for full detail)
+
+5. ✅ **RESOLVED (2026-08-14) — August is live end-to-end.** Real login (brand `yale_august`, token valid until 2026-09-12), 4 real `Property` rows created, `AUGUST_PROPERTY_MAP` fully populated, real sync run twice and proven idempotent (7/7 locks synced both times, no duplicates), the one non-lock device excluded by confirmed ID. No further action needed unless the client adds more properties/locks — see Increment 20 for the exact resume path if that happens.
+6. ✅ **RESOLVED (2026-08-15) — Cielo is live end-to-end.** Client-confirmed mapping (via the user, sourced from Michelle): Island Tides and Miramar Bliss reuse the `Property` rows already created for August; Bahamas, Ocean Pearl, and Sandy Nudes are 3 new real `Property` rows created from Michelle's actual address/type/bed/bath/occupancy/timezone data (no fabrication). 7206 (Kenny & Jenny's personal residence, per Kenny's explicit confirmation) is deliberately excluded — omitted from `CIELO_PROPERTY_MAP` entirely, so it's skipped by the sync and never becomes a `SmartDevice` row. Real sync run twice, proven idempotent (5/5 synced both times, identical row IDs, zero duplicates). See Increment 21 for full detail. No further action needed unless the client adds more thermostats.
+7. **Notion / OwnerRez** — code complete, credential-gated, currently unconfigured in this local environment. Not blocked on anything code-side; just waiting on the client to provide `NOTION_API_KEY` and/or `OWNERREZ_USERNAME`+`OWNERREZ_API_TOKEN` if/when they want those dashboard sections live.
 
 ---
 
@@ -293,6 +489,28 @@ The user has since directed work to continue down **Increment 1** of `IMPLEMENTA
    - If real Clerk keys become available, test the actual sign-in round-trip end-to-end for the first time.
    - The Orchestrator's tool-use loop is now real and wired to the AI domain (Increment 4) — Context Engine wiring (real context providers for `assembleContext()`, so the `{{context}}` prompt placeholder isn't empty) is the next genuinely no-credential AI feature, if the user wants richer conversations. Wiring `completeStream()` into the actual Next.js UI (a streaming route handler + client component) is the other one.
    - Knowledge Retrieval (semantic/long-term memory) needs a vector store decision from the user before any code — a real infra/credential question, not a coding gap.
+
+### Update — 2026-08-12 session (supersedes the steps above; see Increment 19 for full detail)
+
+Everything above this update is now historical — the AI platform, dashboard demo-readiness, and Clerk auth work it describes are all done. The project is now in **live-integration verification mode** for August/Cielo. Exact order of work for the next session:
+
+1. Start in this same project directory. Run `git status` for the real current state — a large amount of work (including all of today's dashboard + August/Cielo work) is still uncommitted.
+2. **Check whether Kenny has provided the August verification code.** If yes: the user runs `pnpm --filter @stayw/integrations exec tsx src/august/scripts/login.ts` themselves (interactive, needs their own terminal — an assistant cannot do this step). Once it reports success, run `pnpm --filter @stayw/integrations exec tsx src/august/scripts/check.ts` to confirm real locks/battery/online-offline, then fill in `AUGUST_PROPERTY_MAP` using the real houseId values it prints, then run the real August sync and verify the dashboard's Locks section.
+3. **Check whether the client has resolved the Cielo property-mapping blocker** (real Property records created for Island Tides / Bahamas / Ocean Pearl / 7206 / Miramar Blis / Sandy Nudes, or an explicit correspondence to existing properties). If yes: fill in `CIELO_PROPERTY_MAP`, re-run `syncCieloDevices`, confirm the resulting `SmartDevice` rows via `psql`, then confirm the dashboard's Thermostats section shows them as live (not demo).
+4. If neither is resolved yet: there's no further live-integration work possible without client input — this is a legitimate stopping point, not a gap to work around. Everything else (dashboard requirements, both integrations' code, tests) is done and verified; re-confirm with a fresh `pnpm turbo run lint typecheck test build --force` if picking up other work, since that's cheap and catches drift.
+5. Do not attempt to complete August's login without a human entering the real password/2FA code, and do not guess a Cielo property mapping — both are explicit standing instructions from the client.
+
+### Update — 2026-08-14 session (August done — see Increment 20 for full detail)
+
+Kenny's code arrived, the user ran the login themselves, and August is now **fully live end-to-end** — real login, 4 real properties, real lock mapping, real sync proven idempotent (twice).
+
+### Update — 2026-08-15 session (supersedes all steps above; Cielo is now also done — see Increment 21 for full detail)
+
+Both August and Cielo are now fully live. Nothing is blocked. Exact order of work for the next session:
+
+1. Start in this same project directory. Run `git status` for the real current state — a very large amount of work (everything from Increment 1 through 21) is still uncommitted; recommend committing in logically-grouped chunks (re-derive current groupings from `git status` directly rather than assuming any prior note's grouping is still accurate).
+2. No live-integration blockers remain. Reasonable next priorities, the user's call to sequence: (a) commit the large uncommitted body of work, (b) OwnerRez/Notion credential setup if the client wants those dashboard sections live (both are code-complete, just unconfigured in this environment), (c) Increment 18's flagged gap — no UI/admin flow exists yet for granting a role to a new real Clerk sign-in, so every future first-time real user still needs a manual SQL grant.
+3. If the client adds more August locks or Cielo thermostats later: same resume path both times — re-run the respective `check.ts` script, extend the respective `*_PROPERTY_MAP`, re-run the sync.
 
 ---
 
