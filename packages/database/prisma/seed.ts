@@ -54,6 +54,10 @@ const SYSTEM_ROLES: Array<{
       "notifications:read",
       "ai_actions:read",
       "ai_actions:update",
+      "smart_devices:read",
+      "smart_devices:update",
+      "integrations:read",
+      "integrations:update",
     ],
   },
   {
@@ -237,6 +241,8 @@ async function seedDemoData(adminUserId: string): Promise<void> {
     },
   });
 
+  await seedDemoSmartDevices(ridge.id, loft.id);
+
   const jordan = await upsertDemoGuest({
     email: "jordan.rivera@example.com",
     firstName: "Jordan",
@@ -304,6 +310,21 @@ async function seedDemoData(adminUserId: string): Promise<void> {
     totalAmount: 450,
   });
 
+  // Ridge: arrives and departs within the dashboard's "Coming Up" window
+  // (the next few days beyond today, not today itself) — without this,
+  // DEMO-RES-003's check-in falls outside that window and "upcoming
+  // check-ins" would always demo empty. Starts the day after DEMO-RES-001
+  // checks out (day 4) so the two don't double-book the property.
+  await upsertDemoReservation({
+    externalReservationId: "DEMO-RES-004",
+    propertyId: ridge.id,
+    guestId: jordan.id,
+    status: "CONFIRMED",
+    checkInDate: daysFromNow(5),
+    checkOutDate: daysFromNow(6),
+    totalAmount: 480,
+  });
+
   // Loft's turnover clean, same-day as today's departure.
   await upsertDemoCleaningSchedule({
     slug: "DEMO-CLEAN-TODAY",
@@ -318,6 +339,19 @@ async function seedDemoData(adminUserId: string): Promise<void> {
     slug: "DEMO-CLEAN-UPCOMING",
     property: ridge,
     scheduledDate: daysFromNow(4),
+    cleaningType: "TURNOVER",
+    createdByUserId: adminUserId,
+  });
+
+  // A clean that was moved after originally being booked — so the
+  // dashboard's "Rescheduled Cleanings" section has a real (if seeded) row
+  // to demo instead of only existing in tests. Distinct slug/date from the
+  // two above so it doesn't collide with them.
+  await upsertDemoCleaningSchedule({
+    slug: "DEMO-CLEAN-RESCHEDULED",
+    property: ridge,
+    scheduledDate: daysFromNow(6),
+    originalScheduledDate: daysFromNow(3),
     cleaningType: "TURNOVER",
     createdByUserId: adminUserId,
   });
@@ -372,7 +406,7 @@ async function seedDemoData(adminUserId: string): Promise<void> {
   await seedDemoAuditTrail(adminUserId);
 
   console.log(
-    "  2 properties, 2 guests, 3 reservations, 2 cleaning schedules, 1 maintenance request, 1 task due today, notifications, a message thread, an AI conversation, and an audit trail ensured.",
+    "  2 properties, 2 guests, 4 reservations, 3 cleaning schedules (1 rescheduled), 6 smart devices, 1 maintenance request, 1 task due today, notifications, a message thread, an AI conversation, and an audit trail ensured.",
   );
 }
 
@@ -552,6 +586,145 @@ async function seedDemoCommunications(input: {
 }
 
 /**
+ * Clearly-fictional smart devices so the dashboard's device-health section
+ * has something real to query when no live August/Cielo connection is
+ * configured yet. Both packages/integrations clients are now real (see
+ * their READMEs) — PROVIDER_CLIENT_STATUS reports AUGUST/CIELO as "real" as
+ * soon as AUGUST_ACCESS_TOKEN / CIELO_USERNAME+PASSWORD exist, which would
+ * mislabel these fake rows as live if they were still sitting in the table.
+ * So: only seed a provider's demo rows while its real credentials are
+ * absent, and delete any leftover demo rows the moment they appear — a real
+ * sync (see smart-devices.service.ts) is what actually replaces them with
+ * live data, but this keeps the table honest even before that first sync
+ * runs. Deliberately includes one offline lock, one low-battery lock, one
+ * offline thermostat, and one lock that's both, so "is there a device
+ * problem right now" has a real non-empty answer to demo.
+ */
+async function seedDemoSmartDevices(
+  ridgePropertyId: string,
+  loftPropertyId: string,
+): Promise<void> {
+  const augustConfigured = Boolean(process.env.AUGUST_ACCESS_TOKEN);
+  const cieloConfigured = Boolean(
+    process.env.CIELO_USERNAME && process.env.CIELO_PASSWORD,
+  );
+
+  const devices: Array<{
+    propertyId: string;
+    provider: "AUGUST" | "CIELO";
+    deviceType: "LOCK" | "THERMOSTAT";
+    externalDeviceId: string;
+    name: string;
+    status: "ONLINE" | "OFFLINE";
+    batteryLevel?: number;
+  }> = [
+    {
+      propertyId: ridgePropertyId,
+      provider: "AUGUST",
+      deviceType: "LOCK",
+      externalDeviceId: "demo-august-ridge-front",
+      name: "Front Door",
+      status: "ONLINE",
+      batteryLevel: 85,
+    },
+    {
+      propertyId: ridgePropertyId,
+      provider: "AUGUST",
+      deviceType: "LOCK",
+      externalDeviceId: "demo-august-ridge-back",
+      name: "Back Door",
+      status: "OFFLINE",
+      batteryLevel: 62,
+    },
+    {
+      propertyId: ridgePropertyId,
+      provider: "CIELO",
+      deviceType: "THERMOSTAT",
+      externalDeviceId: "demo-cielo-ridge-living",
+      name: "Living Room",
+      status: "ONLINE",
+    },
+    {
+      propertyId: loftPropertyId,
+      provider: "AUGUST",
+      deviceType: "LOCK",
+      externalDeviceId: "demo-august-loft-front",
+      name: "Front Door",
+      status: "ONLINE",
+      batteryLevel: 15,
+    },
+    {
+      propertyId: loftPropertyId,
+      provider: "CIELO",
+      deviceType: "THERMOSTAT",
+      externalDeviceId: "demo-cielo-loft-main",
+      name: "Main",
+      status: "OFFLINE",
+    },
+    // Deliberately both offline AND critically low battery — the other
+    // four devices only demo one attention-worthy state at a time
+    // (offline-only, low-battery-only, or neither); this is the only one
+    // that demos the combined "Offline + low battery" wording.
+    {
+      propertyId: loftPropertyId,
+      provider: "AUGUST",
+      deviceType: "LOCK",
+      externalDeviceId: "demo-august-loft-side",
+      name: "Side Door",
+      status: "OFFLINE",
+      batteryLevel: 8,
+    },
+  ];
+
+  for (const device of devices) {
+    const configured =
+      device.provider === "AUGUST" ? augustConfigured : cieloConfigured;
+    if (configured) continue;
+
+    await prisma.smartDevice.upsert({
+      where: {
+        provider_externalDeviceId: {
+          provider: device.provider,
+          externalDeviceId: device.externalDeviceId,
+        },
+      },
+      update: {
+        status: device.status,
+        metadata:
+          device.batteryLevel != null
+            ? { batteryLevel: device.batteryLevel }
+            : {},
+        lastSeenAt: device.status === "ONLINE" ? new Date() : undefined,
+      },
+      create: {
+        propertyId: device.propertyId,
+        provider: device.provider,
+        deviceType: device.deviceType,
+        externalDeviceId: device.externalDeviceId,
+        name: device.name,
+        status: device.status,
+        metadata:
+          device.batteryLevel != null
+            ? { batteryLevel: device.batteryLevel }
+            : {},
+        lastSeenAt: device.status === "ONLINE" ? new Date() : undefined,
+      },
+    });
+  }
+
+  if (augustConfigured) {
+    await prisma.smartDevice.deleteMany({
+      where: { provider: "AUGUST", externalDeviceId: { startsWith: "demo-" } },
+    });
+  }
+  if (cieloConfigured) {
+    await prisma.smartDevice.deleteMany({
+      where: { provider: "CIELO", externalDeviceId: { startsWith: "demo-" } },
+    });
+  }
+}
+
+/**
  * A demo AI conversation showing what the ops-assistant thread looks like
  * — a real user question, followed by the exact SYSTEM notice sendAiMessage
  * actually produces when ANTHROPIC_API_KEY isn't set (packages/ai's
@@ -672,6 +845,7 @@ async function upsertDemoCleaningSchedule(input: {
   slug: string;
   property: { id: string; name: string };
   scheduledDate: Date;
+  originalScheduledDate?: Date;
   cleaningType:
     "TURNOVER" | "DEEP_CLEAN" | "INSPECTION_CLEAN" | "MAINTENANCE_CLEAN";
   createdByUserId: string;
@@ -688,6 +862,7 @@ async function upsertDemoCleaningSchedule(input: {
       data: {
         scheduledDate: input.scheduledDate,
         cleaningType: input.cleaningType,
+        originalScheduledDate: input.originalScheduledDate ?? null,
       },
     });
     return;
@@ -707,6 +882,7 @@ async function upsertDemoCleaningSchedule(input: {
         propertyId: input.property.id,
         taskId: task.id,
         scheduledDate: input.scheduledDate,
+        originalScheduledDate: input.originalScheduledDate ?? null,
         cleaningType: input.cleaningType,
       },
     });

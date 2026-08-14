@@ -275,6 +275,11 @@ model CleaningSchedule {
   reservationId      String?        @map("reservation_id") @db.Uuid
   taskId             String         @unique @map("task_id") @db.Uuid
   scheduledDate      DateTime       @map("scheduled_date") @db.Date
+  /// Set the first time this schedule's date is changed after creation, and
+  /// left untouched on every reschedule after that — so it always holds the
+  /// *original* date, not just "whatever it was before the most recent
+  /// change." Null means never rescheduled.
+  originalScheduledDate DateTime?   @map("original_scheduled_date") @db.Date
   scheduledStartTime String?        @map("scheduled_start_time")
   scheduledEndTime   String?        @map("scheduled_end_time")
   cleaningType       CleaningType   @map("cleaning_type")

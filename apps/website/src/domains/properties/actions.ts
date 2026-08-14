@@ -2,8 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 
-import { createPropertySchema } from "./schemas/properties.schema";
-import { createProperty } from "./services/properties.service";
+import {
+  createPropertySchema,
+  updatePropertyOccupancySchema,
+  updatePropertyStatusSchema,
+} from "./schemas/properties.schema";
+import {
+  createProperty,
+  deleteProperty,
+  updatePropertyOccupancy,
+  updatePropertyStatus,
+} from "./services/properties.service";
 
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
@@ -26,5 +35,37 @@ export async function createPropertyAction(formData: FormData) {
   });
 
   await createProperty(actor, input);
+  revalidatePath("/properties");
+}
+
+export async function updatePropertyStatusAction(formData: FormData) {
+  const actor = await getCurrentUser();
+  const propertyId = formData.get("propertyId") as string;
+
+  const input = updatePropertyStatusSchema.parse({
+    status: formData.get("status"),
+  });
+
+  await updatePropertyStatus(actor, propertyId, input);
+  revalidatePath("/properties");
+}
+
+export async function updatePropertyOccupancyAction(formData: FormData) {
+  const actor = await getCurrentUser();
+  const propertyId = formData.get("propertyId") as string;
+
+  const input = updatePropertyOccupancySchema.parse({
+    maxOccupancy: Number(formData.get("maxOccupancy")),
+  });
+
+  await updatePropertyOccupancy(actor, propertyId, input);
+  revalidatePath("/properties");
+}
+
+export async function deletePropertyAction(formData: FormData) {
+  const actor = await getCurrentUser();
+  const propertyId = formData.get("propertyId") as string;
+
+  await deleteProperty(actor, propertyId);
   revalidatePath("/properties");
 }

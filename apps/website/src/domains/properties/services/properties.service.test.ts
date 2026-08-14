@@ -5,6 +5,7 @@ vi.mock("@stayw/database", () => ({
     property: {
       findMany: vi.fn(),
       create: vi.fn(),
+      update: vi.fn(),
     },
   },
 }));
@@ -25,7 +26,13 @@ import { triggerWorkflow } from "@stayw/ai-automation";
 import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
 
-import { createProperty, listProperties } from "./properties.service";
+import {
+  createProperty,
+  deleteProperty,
+  listProperties,
+  updatePropertyOccupancy,
+  updatePropertyStatus,
+} from "./properties.service";
 
 import { recordAudit } from "@/platform/audit/record-audit";
 
@@ -108,5 +115,118 @@ describe("createProperty", () => {
     expect(prisma.property.create).not.toHaveBeenCalled();
     expect(recordAudit).not.toHaveBeenCalled();
     expect(triggerWorkflow).not.toHaveBeenCalled();
+  });
+});
+
+describe("updatePropertyStatus", () => {
+  it("updates the status and audits it", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    const updated = { id: "p1", status: "INACTIVE" };
+    vi.mocked(prisma.property.update).mockResolvedValueOnce(updated as never);
+
+    const result = await updatePropertyStatus(actor, "p1", {
+      status: "INACTIVE",
+    });
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "properties:update");
+    expect(prisma.property.update).toHaveBeenCalledWith({
+      where: { id: "p1" },
+      data: { status: "INACTIVE" },
+    });
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: actor.userId,
+        action: "property.status_updated",
+        entityType: "Property",
+        entityId: "p1",
+      }),
+    );
+    expect(result).toEqual(updated);
+  });
+
+  it("denies the update and performs no writes when the actor lacks properties:update", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(
+      updatePropertyStatus(actor, "p1", { status: "INACTIVE" }),
+    ).rejects.toThrow();
+    expect(prisma.property.update).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+});
+
+describe("updatePropertyOccupancy", () => {
+  it("updates maxOccupancy and audits it, independent of any other field", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    const updated = { id: "p1", maxOccupancy: 10 };
+    vi.mocked(prisma.property.update).mockResolvedValueOnce(updated as never);
+
+    const result = await updatePropertyOccupancy(actor, "p1", {
+      maxOccupancy: 10,
+    });
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "properties:update");
+    expect(prisma.property.update).toHaveBeenCalledWith({
+      where: { id: "p1" },
+      data: { maxOccupancy: 10 },
+    });
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: actor.userId,
+        action: "property.occupancy_updated",
+        entityType: "Property",
+        entityId: "p1",
+      }),
+    );
+    expect(result).toEqual(updated);
+  });
+
+  it("denies the update and performs no writes when the actor lacks properties:update", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(
+      updatePropertyOccupancy(actor, "p1", { maxOccupancy: 10 }),
+    ).rejects.toThrow();
+    expect(prisma.property.update).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+});
+
+describe("deleteProperty", () => {
+  it("soft-deletes the property by setting deletedAt, and audits it", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    const deleted = { id: "p1", deletedAt: new Date() };
+    vi.mocked(prisma.property.update).mockResolvedValueOnce(deleted as never);
+
+    const result = await deleteProperty(actor, "p1");
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "properties:delete");
+    expect(prisma.property.update).toHaveBeenCalledWith({
+      where: { id: "p1" },
+      data: { deletedAt: expect.any(Date) },
+    });
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: actor.userId,
+        action: "property.deleted",
+        entityType: "Property",
+        entityId: "p1",
+      }),
+    );
+    expect(result).toEqual(deleted);
+  });
+
+  it("denies deletion and performs no writes when the actor lacks properties:delete", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(deleteProperty(actor, "p1")).rejects.toThrow();
+    expect(prisma.property.update).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
   });
 });

@@ -17,3 +17,27 @@ export const createPropertySchema = z.object({
 });
 
 export type CreatePropertyInput = z.infer<typeof createPropertySchema>;
+
+export const updatePropertyStatusSchema = z.object({
+  status: z.enum(["ACTIVE", "INACTIVE", "ONBOARDING", "OFFBOARDED"]),
+});
+
+export type UpdatePropertyStatusInput = z.infer<
+  typeof updatePropertyStatusSchema
+>;
+
+/**
+ * maxOccupancy changes independently of everything else on a Property —
+ * bed arrangements get reconfigured over time. Deliberately its own
+ * schema/service/action (not folded into a general "edit property" form)
+ * so it's obvious this touches nothing else, in particular no relationship
+ * to AUGUST_PROPERTY_MAP/SmartDevice: that mapping is keyed by the
+ * property's id, which never changes when occupancy does.
+ */
+export const updatePropertyOccupancySchema = z.object({
+  maxOccupancy: z.number().int().min(1),
+});
+
+export type UpdatePropertyOccupancyInput = z.infer<
+  typeof updatePropertyOccupancySchema
+>;
