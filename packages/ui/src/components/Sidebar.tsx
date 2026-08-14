@@ -11,6 +11,7 @@ import {
   Plug,
   Sparkles,
   ShieldCheck,
+  UserCog,
   Users,
   Wrench,
   LayoutDashboard,
@@ -46,6 +47,7 @@ const NAV_ICONS = {
   bot: Bot,
   plug: Plug,
   shield: ShieldCheck,
+  userCog: UserCog,
 } as const;
 
 export type NavIconKey = keyof typeof NAV_ICONS;
