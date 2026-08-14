@@ -1,6 +1,6 @@
 import type { SyncDirection } from "@stayw/database/enums";
 
-import { NotImplementedError } from "../core";
+import { HttpClient, NotImplementedError } from "../core";
 import type {
   BaseIntegrationClient,
   IntegrationCapability,
@@ -8,12 +8,25 @@ import type {
   WebhookReceivable,
 } from "../core";
 
-import type { OwnerrezCredentials } from "./types";
+import type {
+  OwnerrezBooking,
+  OwnerrezCredentials,
+  OwnerrezGuest,
+  OwnerrezPage,
+  OwnerrezProperty,
+} from "./types";
+
+export type { OwnerrezBooking, OwnerrezProperty } from "./types";
+
+const BASE_URL = "https://api.ownerreservations.com/v2";
 
 /**
- * OwnerRez integration client. Structural stub for Phase 1 — every method
- * throws NotImplementedError until this integration is built out (see the
- * roadmap in 03 Documentation/roadmap/development-roadmap.md).
+ * OwnerRez integration client — real HTTP calls against the v2 API (Basic
+ * Auth over HttpClient, StayWhile's shared retry/timeout fetch wrapper).
+ * receiveWebhook() remains a stub: OwnerRez's webhook payload shape is an
+ * open design question (see INTEGRATION_INVENTORY.md), not a credential gap,
+ * so there's nothing correct to implement yet — that's the actual boundary
+ * this client can't cross without more information.
  */
 export class OwnerrezClient
   implements BaseIntegrationClient, SyncCapable, WebhookReceivable
@@ -24,18 +37,36 @@ export class OwnerrezClient
     "webhook",
   ] as const satisfies readonly IntegrationCapability[];
 
-  constructor(private readonly credentials: OwnerrezCredentials) {}
+  private readonly http: HttpClient;
+
+  constructor(private readonly credentials: OwnerrezCredentials) {
+    const basicAuth = Buffer.from(
+      `${credentials.username}:${credentials.token}`,
+    ).toString("base64");
+
+    this.http = new HttpClient({
+      baseUrl: BASE_URL,
+      headers: {
+        Authorization: `Basic ${basicAuth}`,
+        Accept: "application/json",
+      },
+    });
+  }
 
   async connect(): Promise<{ connected: boolean; connectedAt: Date }> {
-    throw new NotImplementedError("OwnerRez", "connect");
+    await this.http.request<OwnerrezPage<OwnerrezProperty>>(
+      "/properties?page_size=1",
+    );
+    return { connected: true, connectedAt: new Date() };
   }
 
   async disconnect(): Promise<void> {
-    throw new NotImplementedError("OwnerRez", "disconnect");
+    // Stateless REST API over static Basic Auth credentials — nothing to
+    // tear down server-side; nothing persisted client-side either.
   }
 
   async authenticate(): Promise<void> {
-    throw new NotImplementedError("OwnerRez", "authenticate");
+    await this.connect();
   }
 
   async healthCheck(): Promise<{
@@ -43,17 +74,76 @@ export class OwnerrezClient
     checkedAt: Date;
     details?: string;
   }> {
-    throw new NotImplementedError("OwnerRez", "healthCheck");
+    try {
+      await this.http.request<OwnerrezPage<OwnerrezProperty>>(
+        "/properties?page_size=1",
+      );
+      return { healthy: true, checkedAt: new Date() };
+    } catch (err) {
+      return {
+        healthy: false,
+        checkedAt: new Date(),
+        details: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   async validateCredentials(): Promise<{ valid: boolean; reason?: string }> {
-    throw new NotImplementedError("OwnerRez", "validateCredentials");
+    try {
+      await this.http.request<OwnerrezPage<OwnerrezProperty>>(
+        "/properties?page_size=1",
+      );
+      return { valid: true };
+    } catch (err) {
+      return {
+        valid: false,
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
+  async listProperties(): Promise<OwnerrezProperty[]> {
+    const page =
+      await this.http.request<OwnerrezPage<OwnerrezProperty>>("/properties");
+    return page.items;
+  }
+
+  async listBookings(params?: {
+    sinceUtc?: string;
+  }): Promise<OwnerrezBooking[]> {
+    const query = params?.sinceUtc
+      ? `?since_utc=${encodeURIComponent(params.sinceUtc)}`
+      : "";
+    const page = await this.http.request<OwnerrezPage<OwnerrezBooking>>(
+      `/bookings${query}`,
+    );
+    return page.items;
+  }
+
+  async getGuest(guestId: number): Promise<OwnerrezGuest> {
+    return this.http.request<OwnerrezGuest>(`/guests/${guestId}`);
+  }
+
+  /**
+   * Read-only: fetches real booking data from OwnerRez but does not write it
+   * into StayWhile's database. OwnerRez is confirmed production data (see
+   * HANDOFF.md) — mapping bookings into Reservation/Guest rows needs its own
+   * identity-matching and dedupe design plus explicit write authorization,
+   * not just a token, so that stays a deliberately separate follow-up. Only
+   * INBOUND is meaningful here — OwnerRez is the system of record for its
+   * own bookings, StayWhile never pushes booking changes back to it.
+   */
   async sync(
-    _direction: SyncDirection,
+    direction: SyncDirection,
   ): Promise<{ recordsProcessed: number; direction: SyncDirection }> {
-    throw new NotImplementedError("OwnerRez", "sync");
+    if (direction !== "INBOUND") {
+      throw new Error(
+        "OwnerRez sync only supports INBOUND — it's the system of record for its own bookings.",
+      );
+    }
+
+    const bookings = await this.listBookings();
+    return { recordsProcessed: bookings.length, direction };
   }
 
   async receiveWebhook(

@@ -1,4 +1,4 @@
-import { NotImplementedError } from "../core";
+import { HttpClient } from "../core";
 import type {
   BaseIntegrationClient,
   IntegrationCapability,
@@ -6,12 +6,20 @@ import type {
   WebhookReceivable,
 } from "../core";
 
-import type { SlackCredentials } from "./types";
+import type {
+  SlackApiResponse,
+  SlackCredentials,
+  SlackPostMessageResponse,
+} from "./types";
+import { verifySlackSignature } from "./verify-signature";
+
+const BASE_URL = "https://slack.com/api";
 
 /**
- * Slack integration client. Structural stub for Phase 1 — every method
- * throws NotImplementedError until this integration is built out (see the
- * roadmap in 03 Documentation/roadmap/development-roadmap.md).
+ * Slack Web API client — real HTTP calls via HttpClient (Bearer bot token).
+ * Every Slack API response is HTTP 200 even on failure, with `ok: false` +
+ * an `error` string in the body, so success is checked on the body, not the
+ * status code.
  */
 export class SlackClient
   implements BaseIntegrationClient, WebhookReceivable, MessagingCapable
@@ -22,18 +30,32 @@ export class SlackClient
     "messaging",
   ] as const satisfies readonly IntegrationCapability[];
 
-  constructor(private readonly credentials: SlackCredentials) {}
+  private readonly http: HttpClient;
+
+  constructor(private readonly credentials: SlackCredentials) {
+    this.http = new HttpClient({
+      baseUrl: BASE_URL,
+      headers: {
+        Authorization: `Bearer ${credentials.botToken}`,
+        "Content-Type": "application/json; charset=utf-8",
+      },
+    });
+  }
 
   async connect(): Promise<{ connected: boolean; connectedAt: Date }> {
-    throw new NotImplementedError("Slack", "connect");
+    const result = await this.validateCredentials();
+    if (!result.valid) {
+      throw new Error(result.reason ?? "Slack credentials are invalid.");
+    }
+    return { connected: true, connectedAt: new Date() };
   }
 
   async disconnect(): Promise<void> {
-    throw new NotImplementedError("Slack", "disconnect");
+    // Bot tokens aren't sessions — nothing to tear down server-side.
   }
 
   async authenticate(): Promise<void> {
-    throw new NotImplementedError("Slack", "authenticate");
+    await this.connect();
   }
 
   async healthCheck(): Promise<{
@@ -41,24 +63,78 @@ export class SlackClient
     checkedAt: Date;
     details?: string;
   }> {
-    throw new NotImplementedError("Slack", "healthCheck");
+    const result = await this.validateCredentials();
+    return {
+      healthy: result.valid,
+      checkedAt: new Date(),
+      details: result.reason,
+    };
   }
 
   async validateCredentials(): Promise<{ valid: boolean; reason?: string }> {
-    throw new NotImplementedError("Slack", "validateCredentials");
-  }
-
-  async receiveWebhook(
-    _rawBody: string,
-    _headers: Record<string, string>,
-  ): Promise<{ accepted: boolean; entityType?: string; entityId?: string }> {
-    throw new NotImplementedError("Slack", "receiveWebhook");
+    try {
+      const response = await this.http.request<
+        SlackApiResponse & { user_id?: string; team?: string }
+      >("/auth.test", { method: "POST" });
+      if (!response.ok) {
+        return {
+          valid: false,
+          reason: response.error ?? "unknown Slack API error",
+        };
+      }
+      return { valid: true };
+    } catch (err) {
+      return {
+        valid: false,
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   async sendMessage(
-    _to: string,
-    _body: string,
+    to: string,
+    body: string,
   ): Promise<{ externalMessageId: string; sentAt: Date }> {
-    throw new NotImplementedError("Slack", "sendMessage");
+    const response = await this.http.request<SlackPostMessageResponse>(
+      "/chat.postMessage",
+      {
+        method: "POST",
+        body: JSON.stringify({ channel: to, text: body }),
+      },
+    );
+
+    if (!response.ok) {
+      throw new Error(`Slack chat.postMessage failed: ${response.error}`);
+    }
+
+    return { externalMessageId: response.ts, sentAt: new Date() };
+  }
+
+  /**
+   * Verifies Slack's v0 signature scheme before treating the payload as
+   * accepted. Actual event routing (message vs. interactivity vs. slash
+   * command) is left to the caller — this only answers "is this genuinely
+   * from Slack."
+   */
+  async receiveWebhook(
+    rawBody: string,
+    headers: Record<string, string>,
+  ): Promise<{ accepted: boolean; entityType?: string; entityId?: string }> {
+    const timestamp = headers["x-slack-request-timestamp"];
+    const signature = headers["x-slack-signature"];
+    if (!timestamp || !signature) {
+      return { accepted: false };
+    }
+
+    const valid = verifySlackSignature(
+      rawBody,
+      { timestamp, signature },
+      this.credentials.signingSecret,
+    );
+    if (!valid) {
+      return { accepted: false };
+    }
+
+    return { accepted: true, entityType: "slack.event" };
   }
 }

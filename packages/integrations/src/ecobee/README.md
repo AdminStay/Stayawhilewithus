@@ -1,6 +1,6 @@
 # Ecobee integration
 
-Status: not implemented (structural stub only).
+Status: not implemented (structural stub only). **Deliberately still a stub as of 2026-08-07**: Ecobee auth is a PIN-based OAuth2 flow (authorize → PIN → poll for token → refresh), not a static API key — the current `EcobeeCredentials` shape (`apiKey`) doesn't match what real implementation needs, and there's no token-storage/refresh design yet. Same complexity class as Gmail; needs that design decision before real code, not just a credential.
 
 Capabilities: sync, webhook.
 

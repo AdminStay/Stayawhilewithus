@@ -13,7 +13,7 @@ import { NotImplementedError } from "./errors";
 
 describe("capability type guards", () => {
   it("narrows a sync+webhook client (OwnerRez) correctly", () => {
-    const client = new OwnerrezClient({ apiKey: "test" });
+    const client = new OwnerrezClient({ username: "test", token: "test" });
 
     expect(hasCapability(client, "sync")).toBe(true);
     expect(hasCapability(client, "webhook")).toBe(true);
@@ -31,8 +31,11 @@ describe("capability type guards", () => {
     expect(isMessagingCapable(client)).toBe(false);
   });
 
-  it("every declared capability method still throws NotImplementedError", async () => {
-    const client = new OwnerrezClient({ apiKey: "test" });
+  // OwnerRez has real HTTP wiring now (see ownerrez/client.test.ts) and is no
+  // longer a pure stub, so it's excluded here — Yale still is, and stands in
+  // for "every other provider client is still a structural stub."
+  it("every declared capability method on a still-stubbed client throws NotImplementedError", async () => {
+    const client = new YaleClient({ apiKey: "test" });
 
     await expect(client.connect()).rejects.toThrow(NotImplementedError);
     await expect(client.healthCheck()).rejects.toThrow(NotImplementedError);

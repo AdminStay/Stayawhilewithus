@@ -21,7 +21,10 @@
   "scripts": {
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "august:login": "tsx src/august/scripts/login.ts",
+    "august:check": "tsx src/august/scripts/check.ts",
+    "cielo:check": "tsx src/cielo/scripts/check.ts"
   },
   "dependencies": {
     "@stayw/database": "workspace:*"
@@ -32,6 +35,7 @@
     "@stayw/eslint-config": "workspace:*",
     "@stayw/typescript-config": "workspace:*",
     "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }

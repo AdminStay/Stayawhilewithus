@@ -1,4 +1,19 @@
-// Asana API credentials — filled in when this integration is implemented.
+// Asana API credentials — a personal access token (Bearer auth).
 export interface AsanaCredentials {
-  apiKey: string;
+  accessToken: string;
+}
+
+export interface AsanaUser {
+  gid: string;
+  name?: string;
+  email?: string;
+}
+
+export interface AsanaWorkspace {
+  gid: string;
+  name: string;
+}
+
+export interface AsanaListResponse<T> {
+  data: T[];
 }

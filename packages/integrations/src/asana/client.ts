@@ -1,6 +1,6 @@
 import type { SyncDirection } from "@stayw/database/enums";
 
-import { NotImplementedError } from "../core";
+import { HttpClient, NotImplementedError } from "../core";
 import type {
   BaseIntegrationClient,
   IntegrationCapability,
@@ -8,12 +8,19 @@ import type {
   WebhookReceivable,
 } from "../core";
 
-import type { AsanaCredentials } from "./types";
+import type {
+  AsanaCredentials,
+  AsanaListResponse,
+  AsanaUser,
+  AsanaWorkspace,
+} from "./types";
+
+const BASE_URL = "https://app.asana.com/api/1.0";
 
 /**
- * Asana integration client. Structural stub for Phase 1 — every method
- * throws NotImplementedError until this integration is built out (see the
- * roadmap in 03 Documentation/roadmap/development-roadmap.md).
+ * Asana API client — real HTTP calls via HttpClient (Bearer personal access
+ * token). `Task.asanaTaskId` already exists in the schema for this
+ * integration to eventually target; nothing writes to it yet.
  */
 export class AsanaClient
   implements BaseIntegrationClient, SyncCapable, WebhookReceivable
@@ -24,18 +31,29 @@ export class AsanaClient
     "webhook",
   ] as const satisfies readonly IntegrationCapability[];
 
-  constructor(private readonly credentials: AsanaCredentials) {}
+  private readonly http: HttpClient;
+
+  constructor(private readonly credentials: AsanaCredentials) {
+    this.http = new HttpClient({
+      baseUrl: BASE_URL,
+      headers: {
+        Authorization: `Bearer ${credentials.accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+  }
 
   async connect(): Promise<{ connected: boolean; connectedAt: Date }> {
-    throw new NotImplementedError("Asana", "connect");
+    await this.http.request<AsanaListResponse<AsanaUser>>("/users/me");
+    return { connected: true, connectedAt: new Date() };
   }
 
   async disconnect(): Promise<void> {
-    throw new NotImplementedError("Asana", "disconnect");
+    // Personal access tokens aren't sessions — nothing to tear down server-side.
   }
 
   async authenticate(): Promise<void> {
-    throw new NotImplementedError("Asana", "authenticate");
+    await this.connect();
   }
 
   async healthCheck(): Promise<{
@@ -43,19 +61,58 @@ export class AsanaClient
     checkedAt: Date;
     details?: string;
   }> {
-    throw new NotImplementedError("Asana", "healthCheck");
+    try {
+      await this.http.request<AsanaListResponse<AsanaUser>>("/users/me");
+      return { healthy: true, checkedAt: new Date() };
+    } catch (err) {
+      return {
+        healthy: false,
+        checkedAt: new Date(),
+        details: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
   async validateCredentials(): Promise<{ valid: boolean; reason?: string }> {
-    throw new NotImplementedError("Asana", "validateCredentials");
+    try {
+      await this.http.request<AsanaListResponse<AsanaUser>>("/users/me");
+      return { valid: true };
+    } catch (err) {
+      return {
+        valid: false,
+        reason: err instanceof Error ? err.message : String(err),
+      };
+    }
   }
 
+  /**
+   * Same reasoning as Notion: Asana has no single "list everything
+   * relevant" endpoint, and which workspace/project StayWhile tasks should
+   * sync against isn't decided yet. This lists the workspaces the token can
+   * see as a real, generically meaningful connectivity + count check; it
+   * does not write anything into StayWhile's database.
+   */
   async sync(
-    _direction: SyncDirection,
+    direction: SyncDirection,
   ): Promise<{ recordsProcessed: number; direction: SyncDirection }> {
-    throw new NotImplementedError("Asana", "sync");
+    if (direction !== "INBOUND") {
+      throw new Error(
+        "Asana sync only supports INBOUND until a write target (which workspace/project) is designed.",
+      );
+    }
+
+    const response =
+      await this.http.request<AsanaListResponse<AsanaWorkspace>>("/workspaces");
+    return { recordsProcessed: response.data.length, direction };
   }
 
+  /**
+   * Asana webhook secrets are per-webhook (returned when the webhook is
+   * created, via X-Hook-Secret on the handshake request) rather than a
+   * single static account secret — there's nowhere to store/retrieve that
+   * yet, so signature verification genuinely can't be implemented until a
+   * webhook-registration flow exists, not just a credential.
+   */
   async receiveWebhook(
     _rawBody: string,
     _headers: Record<string, string>,
