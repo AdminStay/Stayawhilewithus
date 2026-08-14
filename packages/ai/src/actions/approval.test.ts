@@ -17,6 +17,7 @@ import { prisma } from "@stayw/database";
 import {
   approveAction,
   listPendingActions,
+  listRecentResolvedActions,
   markActionExecuted,
   markActionFailed,
   proposeAction,
@@ -135,5 +136,29 @@ describe("listPendingActions", () => {
       where: { status: "PENDING" },
       orderBy: { createdAt: "asc" },
     });
+  });
+});
+
+describe("listRecentResolvedActions", () => {
+  it("queries EXECUTED/EXECUTION_FAILED/REJECTED actions ordered newest-first, defaulting to 20", async () => {
+    vi.mocked(prisma.aiAction.findMany).mockResolvedValue([] as never);
+
+    await listRecentResolvedActions();
+
+    expect(prisma.aiAction.findMany).toHaveBeenCalledWith({
+      where: { status: { in: ["EXECUTED", "EXECUTION_FAILED", "REJECTED"] } },
+      orderBy: { updatedAt: "desc" },
+      take: 20,
+    });
+  });
+
+  it("honors a custom limit", async () => {
+    vi.mocked(prisma.aiAction.findMany).mockResolvedValue([] as never);
+
+    await listRecentResolvedActions(5);
+
+    expect(prisma.aiAction.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ take: 5 }),
+    );
   });
 });

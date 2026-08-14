@@ -41,6 +41,24 @@ export function getConversationHistory(conversationId: string) {
   });
 }
 
+export function listConversations() {
+  return prisma.aiConversation.findMany({
+    orderBy: { updatedAt: "desc" },
+    include: {
+      messages: { orderBy: { createdAt: "desc" }, take: 1 },
+    },
+  });
+}
+
+export function getConversation(conversationId: string) {
+  return prisma.aiConversation.findUnique({
+    where: { id: conversationId },
+    include: {
+      messages: { orderBy: { createdAt: "asc" } },
+    },
+  });
+}
+
 export function closeConversation(
   conversationId: string,
   status: Extract<AiConversationStatus, "RESOLVED" | "ESCALATED"> = "RESOLVED",

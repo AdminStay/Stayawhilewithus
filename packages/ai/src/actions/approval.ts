@@ -86,3 +86,12 @@ export function listPendingActions() {
     orderBy: { createdAt: "asc" },
   });
 }
+
+/** Actions a human has already resolved (approved-and-executed, approved-but-failed, or rejected) — the approval UX's confirmation view, since a resolved action simply disappears from listPendingActions() with nothing else showing what happened to it. */
+export function listRecentResolvedActions(limit = 20) {
+  return prisma.aiAction.findMany({
+    where: { status: { in: ["EXECUTED", "EXECUTION_FAILED", "REJECTED"] } },
+    orderBy: { updatedAt: "desc" },
+    take: limit,
+  });
+}
