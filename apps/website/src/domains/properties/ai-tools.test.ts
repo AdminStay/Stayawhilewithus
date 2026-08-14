@@ -29,12 +29,16 @@ vi.mock("@stayw/ai", () => {
 
 vi.mock("./services/properties.service", () => ({
   listProperties: vi.fn(),
+  updatePropertyStatus: vi.fn(),
 }));
 
 import { executeTool } from "@stayw/ai";
 
 import { registerPropertiesAiTools } from "./ai-tools";
-import { listProperties } from "./services/properties.service";
+import {
+  listProperties,
+  updatePropertyStatus,
+} from "./services/properties.service";
 
 registerPropertiesAiTools();
 
@@ -57,5 +61,41 @@ describe("properties.list AI tool", () => {
       /requires an authenticated userId/,
     );
     expect(listProperties).not.toHaveBeenCalled();
+  });
+});
+
+describe("properties.updateStatus AI tool", () => {
+  it("delegates to updatePropertyStatus with the id split out of the input", async () => {
+    vi.mocked(updatePropertyStatus).mockResolvedValueOnce({
+      id: "p1",
+      status: "INACTIVE",
+    } as never);
+
+    const result = await executeTool(
+      "properties.updateStatus",
+      { propertyId: "p1", status: "INACTIVE" },
+      { userId: "user-1" },
+    );
+
+    expect(updatePropertyStatus).toHaveBeenCalledWith(
+      { userId: "user-1" },
+      "p1",
+      { status: "INACTIVE" },
+    );
+    expect(result).toEqual({
+      status: "executed",
+      output: { id: "p1", status: "INACTIVE" },
+    });
+  });
+
+  it("refuses to run without an authenticated userId", async () => {
+    await expect(
+      executeTool(
+        "properties.updateStatus",
+        { propertyId: "p1", status: "INACTIVE" },
+        {},
+      ),
+    ).rejects.toThrow(/requires an authenticated userId/);
+    expect(updatePropertyStatus).not.toHaveBeenCalled();
   });
 });
