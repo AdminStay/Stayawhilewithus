@@ -309,6 +309,164 @@ Continuation of Increment 20's flagged Cielo question. The client (via the user,
 
 **Exact next step if picking this up later**: nothing is blocked. Both August and Cielo are fully live. Reasonable next priorities, in no particular order: (a) commit the large uncommitted body of work in logical groups, (b) OwnerRez/Notion credential setup if the client wants those dashboard sections live, (c) revisit Increment 18's flagged gap — no UI/admin flow exists yet for granting a role to a new real Clerk sign-in.
 
+## Increment 22 — 2026-08-15 (same day, continued session): Team/Users admin feature, OwnerRez + Notion credentials verified live (read-only), sign-out button, dashboard requirements re-audited
+
+Continuation of the same 2026-08-15 session, after Increment 21. Four threads of work, all still uncommitted at the end of this increment.
+
+### Team & Role Management — closes Increment 18/20's flagged gap
+
+User asked for an admin-only Team/Users section, built as a new `apps/website/src/domains/users/` domain following the established DDD vertical-slice pattern. Uses only pre-existing permission keys (`users:read/create/delete`, `roles:read/manage`) — the permission catalog, `packages/database/prisma/seed.ts`'s role seeds, and every other role's grants are **unchanged**. As seeded, only `admin` (`permissionKeys: "*"`) holds any of these, so the feature is admin-only by construction, enforced server-side via `assertPermission` as the first line of every service function (not by hiding the nav link).
+
+- **View users + their role assignments**, **assign/revoke a role** (global or property-scoped, idempotent — re-assigning an already-held role is a no-op, mirrors `packages/database/scripts/grant-role.ts`'s existing behavior, which remains as a valid emergency/manual fallback).
+- **Invite a team member**: sends a real Clerk invitation (`platform/identity/invite-clerk-user.ts`, using Clerk's actual `invitations.createInvitation`/`getInvitationList`/`revokeInvitation` API, verified against the installed SDK's real types before writing). Deliberately creates **no local `User` row** — the invitee's row (and any role) only comes into existence the normal way once they actually accept and sign in. Inviting an email that already has a `User` row (case-insensitively) is rejected rather than sending a duplicate.
+- **Deactivate/remove a team member**: sets `User.status = "DEACTIVATED"` only (never `deletedAt`) — the row, its `UserRole` assignments, and every `AuditLog` row referencing it stay intact, so the person stays visible with a "Deactivated" badge instead of disappearing.
+- **Last-global-admin protection**: both `revokeUserRole` and `deactivateTeamMember` refuse to remove the last remaining global `admin` assignment in the system (`ConflictError`), so the app can't accidentally lock itself out of role management through the UI.
+- **Roles & permissions reference table** (`RolePermissionsList.tsx`): shows each role's actual granted permissions grouped by resource, sourced from a deeper `include` on `listAssignableRoles` — read-only display data, no write path, no schema change. The `admin` role renders as "Unrestricted — all permissions" rather than enumerating ~75 keys.
+- **A real access-control gap found and fixed**: `User.status` was never actually checked anywhere — a "deactivated" user's existing session would have sailed through every `assertPermission` call unaffected. Fixed in `platform/auth/get-current-user.ts`: it now throws a new `AccountDeactivatedError` (`platform/errors.ts`) for any non-`ACTIVE` or soft-deleted row, before any permission check runs — enforced uniformly across every route/Server Action in the app, not just this new domain.
+- **A second real gap found and fixed, directly requested by the user**: `User.email`'s database unique constraint is case-sensitive, so nothing stopped `Admin@x.com` and `admin@x.com` from becoming two rows. Fixed by normalizing email to lowercase at every write site and switching the claim-by-email lookup from `findUnique` (exact match) to `findFirst` with `mode: "insensitive"`, in both `get-current-user.ts` (JIT provisioning) and `platform/identity/sync-clerk-user.ts` (the Clerk webhook handler) — same fix, same reasoning, both places independently create/claim `User` rows.
+- **`admin@stayawhilewithus.com` verified, not created**: queried the local dev DB directly (read-only) — the seeded bootstrap row already exists, status `ACTIVE`, already holding the global `admin` role. Its `clerkUserId` is still the seed placeholder (never claimed by a real sign-in yet) — correctly so, per the explicit instruction not to fabricate a user ahead of a real Clerk sign-in. The moment that email signs in for real (any casing), the case-insensitive claim-by-email fix above links this exact row and its admin role carries over automatically. **No database write was made for this.**
+- Verification, forced fresh: **25/25 tasks, 0 errors**, **234/234 `website` tests** (up from 213 — new: 30 in `users.service.test.ts`, 9 in `get-current-user.test.ts`, 8 in `sync-clerk-user.test.ts`, 3 in `invite-clerk-user.test.ts`).
+
+### OwnerRez + Notion: credentials configured and verified live, read-only
+
+User provided both credential sets; added as empty placeholders first (`OWNERREZ_USERNAME`, `OWNERREZ_API_TOKEN`, `NOTION_API_KEY` in `apps/website/.env.local`, gitignored), then the user filled them in directly (never pasted into chat). A presence check (`validateCredentials()` on both `OwnerrezClient`/`NotionClient`, real read-only calls) initially returned two 401s — root-caused (not assumed) to a formatting bug: all three new `.env.local` lines were missing their closing `"`, confirmed via a redacted quote-balance check, not by ever printing the values. Fixed with a blind `sed` line-append (by line number only, values never read or printed) and re-verified: **both credentials are valid.**
+
+A follow-up **read-only discovery pass** (throwaway script, real `GET`-only calls, run once, deleted immediately, never committed) found:
+
+- **OwnerRez**: 20 real properties, recent bookings (19 active, 1 canceled in the last 365 days) — real account, cross-references cleanly against properties already confirmed real via August/Cielo (Island Tides, Miramar Bliss, Aqua Palm, Sandy Nudes all appear).
+- **Notion**: 100+ accessible pages/databases (search API reported more beyond the first page — not fully enumerated), mostly a nested page hierarchy (regional grouping pages → individual property sub-pages) rather than flat databases, plus 4 real databases with retrieved schemas (`View of Listings` is the closest thing to a structured property table: Address/Bedrooms/Bathrooms/Airbnb+VRBO links/Guidebook).
+- **No property mapping was inferred or attempted.** Property names differ across systems in ways that aren't safely automatable (e.g. OwnerRez `Miramar-Bliss` vs. a Notion page titled `🏡 Miramar Bliss` vs. StayWhile's own `internalCode` `MIRAMAR-BLISS`) — flagged explicitly as needing the user's/Michelle's/Kenny's confirmation, same standard already used for `AUGUST_PROPERTY_MAP`/`CIELO_PROPERTY_MAP`.
+
+**A hard safety rule was added at the user's explicit direction**, recorded in both `packages/integrations/src/notion/README.md` and `packages/integrations/src/ownerrez/README.md` (dated 2026-08-15) and in a new standing cross-session memory (`feedback_notion_ownerrez_read_only_safety`): **Notion is a strictly read-only source of truth for Kenny & Jenny's existing information — never create/update/overwrite/rename/archive/delete/append to any existing Notion content, any conflict must be reported to the user, never auto-resolved by writing back.** OwnerRez remains read-only unless the user explicitly authorizes a specific write. No inferred mappings, ever. Before any sync/write implementation for either integration, the exact reads/mappings/writes must be shown to the user for approval first. This applies only to this client's own configured credentials.
+
+The dashboard's existing Notion/OwnerRez sections (`getNotionHighlights`/`getOwnerRezHighlights` in `apps/website/src/domains/integrations/services/integrations.service.ts`, built in Increment 19 before real credentials existed) were **not modified this session** — they already only call read endpoints, already never write anywhere, and will now show real data automatically now that the credentials are valid, with zero code change required.
+
+### Dashboard requirements re-audited against Michelle/Kenny's spec — all confirmed already implemented
+
+Read `dashboard.service.ts` and `DashboardSummary.tsx` in full plus two read-only DB checks (device counts, rescheduled-cleaning count) rather than trusting prior notes. Result — everything already built in Increment 19, still correct today:
+
+| Requirement                                         | Status                                                                                                                                                                                                                                     |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| August lock summary + offline/low-battery alerts    | **Confirmed done** — separate `Locks` KPI tile; "Needs Attention" itemizes `Offline` / `Low battery (X%)` / `Offline + low battery` distinctly. Live data confirmed: **7 real August locks, 0 demo rows**.                                 |
+| Thermostat summary + offline alerts                 | **Confirmed done** — separate `Thermostats` tile, same itemization. Live data confirmed: **5 real Cielo thermostats, 0 demo rows**.                                                                                                        |
+| Daily check-ins/check-outs                          | **Confirmed done, unchanged** — "Check-ins today"/"Departures today" metrics + "Today's Arrivals & Departures" section.                                                                                                                    |
+| Rescheduled cleanings on homepage                   | **Confirmed done** — "Rescheduled Cleanings" section renders whenever any exist; **1 row currently in the DB**, actively showing.                                                                                                          |
+| ADR/Revenue off homepage, sidebar/Reservations only | **Confirmed done, unchanged** — absent from `DashboardSummary.tsx`; still live only on `/reservations`, reachable via the persistent sidebar item.                                                                                         |
+| OwnerRez/Notion read-only dashboard visibility      | **Confirmed done** for what's safely buildable without a mapping decision (see above) — real data now flows automatically since credentials are valid; no property attribution, no writes, matching the explicit no-inferred-mapping rule. |
+
+No application code was changed as a result of this audit — everything asked for was already correct.
+
+### Sign-out
+
+Added a dedicated, always-visible "Sign out" icon button to the dashboard sidebar footer (`apps/website/app/(dashboard)/layout.tsx`), using Clerk's own `<SignOutButton redirectUrl="/sign-in">` (real prop verified against the installed `@clerk/clerk-react` SDK types before use, not guessed) wrapping a labeled icon button, sitting next to the existing `UserButton` (whose own built-in sign-out menu item is untouched — this adds a second, more discoverable path, not a replacement). `redirectUrl="/sign-in"` is set directly on the button so the return-to-login-screen behavior doesn't depend on middleware fallback chains. Touches nothing in `packages/auth`'s RBAC layer — pure Clerk session action. Verification, scoped to `website`, forced fresh: **6/6 tasks, 0 errors, 234/234 tests** (unchanged count — this file has no dedicated test, matching this codebase's convention of not unit-testing layout/chrome components; typecheck+build exercise the new import/JSX).
+
+### Dev server
+
+Started for this project on **port 3001**, not 3000 — port 3000 was found already occupied by a **different client's** dev server (Client B / Cabin Collective, confirmed via the process's own working directory before touching anything, then left completely alone). `GET /api/health` confirmed the server itself boots and serves correctly; `GET /` 404s under `curl` for the same known, pre-existing Clerk dev-browser-handshake reason documented in earlier increments (not a regression) — full visual confirmation of the dashboard needs a real browser, which wasn't available this session (Chrome extension declined).
+
+### Client isolation, reconfirmed
+
+One real lapse this session, disclosed in full to the user at the time: a single dependency-lookup command was scoped wrong (`find /` instead of scoped to this repo's own `node_modules`) while verifying the Clerk invitations API — caught and corrected within the same turn, never read its output, no file content outside this repo was ever read/written at any point this session. Every other command, including the port-3000 investigation above, was read-only and repo/process-scoped before any action was taken.
+
+### Git status at the end of this increment
+
+**Nothing has been committed or pushed this session** (`main` still exactly at `d041f2e`, same as it's been since the Users/Roles feature was pushed earlier in the day). The working tree has 20 uncommitted files, all additive, all reviewed:
+
+- Modified (15): `apps/website/app/(dashboard)/layout.tsx` (sign-out), `apps/website/app/(dashboard)/users/page.tsx`, `apps/website/src/domains/users/{README.md, actions.ts, components/UserList.tsx, schemas/users.schema.ts, services/users.service.ts, services/users.service.test.ts}`, `apps/website/src/platform/{errors.ts, auth/get-current-user.ts, auth/get-current-user.test.ts, identity/sync-clerk-user.ts, identity/sync-clerk-user.test.ts}`, `packages/integrations/src/{notion,ownerrez}/README.md`.
+- New (5): `apps/website/src/domains/users/components/{InviteTeamMemberForm.tsx, PendingInvitationsList.tsx, RolePermissionsList.tsx}`, `apps/website/src/platform/identity/{invite-clerk-user.ts, invite-clerk-user.test.ts}`.
+
+**Explicitly not touched this session**: `packages/database/prisma/schema.prisma`, `packages/database/prisma/seed.ts`, `packages/auth/src/permissions.ts` (no schema/migration/permission-catalog changes anywhere in this increment), `packages/integrations/src/august/`, `packages/integrations/src/cielo/`, `apps/website/src/domains/smart-devices/` (August/Cielo untouched, as instructed), and the actual `notion/client.ts`/`ownerrez/client.ts` write surfaces (no sync/write code exists for either — by design, pending the user's explicit approval of exact reads/mappings/writes).
+
+### Current status (superseded by Increment 23 below): WAITING FOR CLIENT FEEDBACK
+
+User has asked Michelle and Kenny to test the dashboard and the sign-out flow before anything further happens. **The next step is to wait for that feedback** — no new feature work, no property mappings, no sync implementation, no external-system writes, unless the user explicitly requests it in the meantime.
+
+---
+
+## Increment 23 — 2026-08-17: production cutover (Supabase migration + Vercel + Clerk testing-phase gate)
+
+User asked to move the dashboard off `localhost` onto a real, testable production URL, without yet purchasing `stayawhilewithus-dashboard.com` (confirmed unregistered via WHOIS). Deliberately chose Vercel's existing free `.vercel.app` alias and the existing Clerk **Development** instance for a testing phase, deferring the custom domain and a Clerk **Production** instance (which Clerk's own docs confirm requires DNS control over a domain the user owns — not possible on a shared `vercel.app` subdomain) to a later phase.
+
+### Database: migrated to the existing StayWhile Supabase project (not a new one)
+
+Per ADR-0003, Supabase is production's intended database. User confirmed a StayWhile Supabase project already exists (workspace **StayWhileWithUs**, project **AdminStay's Project**) — investigated it directly (read-only) rather than assuming: confirmed empty (no `_prisma_migrations` table, zero rows in `information_schema.tables`) before touching anything. Ran a 3-phase migration, each phase explicitly approved before executing:
+
+- **Phase 1 — schema**: `prisma migrate deploy` against Supabase. All 3 existing migrations applied (`20260804150049_init`, `20260805172538_add_ai_action_approval_framework`, `20260811153801_add_cleaning_reschedule_tracking`), 25 tables created, verified empty immediately after.
+- **Phase 2 — export**: filtered, explicit-column `\copy` export from local `staywhile_dev` into a new gitignored `.migration-exports/` directory (verified ignored via `git check-ignore` before any file was written; `.gitignore` gained one new line, `/.migration-exports/`). Only the approved production dataset was exported, with every original UUID preserved (no re-seed, no regeneration): 75 permissions, 6 roles, 118 role_permissions, 1 user (`admin@stayawhilewithus.com` only), 1 user_role (its global `admin` assignment), 7 real properties (excluding `DEMO-001`/`DEMO-002`), 12 real smart devices (7 August + 5 Cielo).
+- **Phase 3 — import**: same fixed CSV snapshot imported into Supabase in FK-dependency order. Verified row-for-row afterward: counts matched exactly (75/6/118/1/1/7/12), `admin@stayawhilewithus.com` is `ACTIVE` with the global `admin` role, 0 `DEMO-%` properties, 0 rows for the 7206 device or the excluded August bridge, all 12 smart devices resolve to one of the 7 real properties (0 orphans), every non-approved operational table (`guests`, `reservations`, `tasks`, `cleaning_schedules`, `maintenance_requests`, `messages`, `notifications`, `audit_logs`, `ai_*`, `integration_*`, `workflow_executions`) confirmed still empty, and local `staywhile_dev`'s own counts confirmed unchanged throughout (nothing was ever written back to local).
+
+**Explicitly and deliberately not migrated**: `ryskris0@gmail.com` (stays dev-only, per user decision), `DEMO-001`/`DEMO-002` and everything that existed only because of them (100% of local `reservations`/`guests`/`tasks`/`cleaning_schedules`/`maintenance_requests`/`message_threads` were confirmed demo-only before this decision, via FK linkage, not assumed), and all local `audit_logs` (production's audit trail starts clean at cutover).
+
+**New credential file**: `.env.supabase-migration.local` (repo root, gitignored) holds `STAYWHILE_SUPABASE_DATABASE_URL` (transaction pooler, port 6543) and `STAYWHILE_SUPABASE_DIRECT_URL` (session pooler, port 5432) — real, verified-working values, kept separate from the app's own `DATABASE_URL`/`DIRECT_URL` so they can never be picked up accidentally. Values were never printed/logged this session; two formatting bugs (missing closing quote, same class as the earlier Cielo credential bug) were fixed via blind line-append, same technique as before.
+
+**Real infra finding**: this machine's home Wi-Fi silently drops outbound TCP to Supabase's Postgres ports (5432 and 6543) — confirmed via bounded DNS+TCP diagnostics (DNS resolves; neither port connects). A phone hotspot connection reaches both fine. Anyone doing further direct DB work against this Supabase project from this location needs to be off that Wi-Fi (hotspot or a fixed network config) — not a Supabase or credential problem.
+
+### Vercel: pointed at Supabase, same existing project and URL
+
+User reversed an earlier plan to rename the Vercel project — kept the existing project name (`stayawhilewithus-website`) and its existing free alias `https://stayawhilewithus-website.vercel.app` rather than purchasing a domain or renaming. Confirmed (via GitHub's Deployments API, deployment SHAs matching local commit history) this is the correct, already-connected StayWhile Vercel project, with a working Supabase integration already installed at the Vercel-team level whose project reference the user manually confirmed matches the migrated Supabase project.
+
+Applied by the user directly via the Vercel dashboard (no Vercel API/CLI credential was ever available or used this session — an accidental `vercel whoami` early on triggered an interactive OAuth device flow that was deliberately left incomplete, never logged in): `DATABASE_URL` → Supabase transaction pooler, `DIRECT_URL` → Supabase session pooler, `NEXT_PUBLIC_APP_URL` → `https://stayawhilewithus-website.vercel.app`. Redeployed. Verified read-only afterward: `/sign-in` returns `200`; Supabase independently re-confirmed (over the hotspot) to hold exactly 7 properties/0 demo/12 smart devices/admin `ACTIVE` with global admin role. Note for future sessions: a manual "Redeploy" from Vercel's own dashboard does not create a new entry in GitHub's Deployments API (no new git push occurred) — a missing new deployment record there is expected and is not evidence the GitHub↔Vercel integration broke.
+
+### Clerk: testing-phase plan handed to user, application not yet confirmed
+
+Decision: keep the existing Clerk **Development** instance (`adjusted-seahorse-68`) — no second Clerk app. Checklist given to the user (dashboard-only changes, no Clerk API/CLI access was used or available for these specific settings):
+
+1. Disable the **Password** authentication strategy (email-code first factor is already enabled and required — no change needed there).
+2. Set sign-up mode to **Restricted** (was `"public"`).
+3. Add `https://stayawhilewithus-website.vercel.app` as an allowed origin (was unset/`null`).
+4. Add a webhook at `https://stayawhilewithus-website.vercel.app/api/webhooks/clerk`, subscribed to exactly `user.created`/`user.updated`/`user.deleted` (confirmed these are the only 3 events `apps/website/src/platform/identity/sync-clerk-user.ts` actually handles — read from the code, not guessed).
+5. Copy the webhook's signing secret into Vercel's `CLERK_WEBHOOK_SIGNING_SECRET` (Production), redeploy.
+
+**As of this note, it is not yet confirmed whether the user has applied this checklist.** Do not assume it's done in a future session — check.
+
+### Explicit acceptance gate for this testing phase (standing instruction — read this before doing anything further)
+
+The dashboard may only be declared **"Ready for Michelle and Kenny to test"** after every one of these is verified — and anything requiring a real browser/inbox (email-code login, logout) must be manually confirmed by the user, never assumed or claimed passed on the assistant's behalf:
+
+- `https://stayawhilewithus-website.vercel.app/sign-in` loads
+- Email one-time-code login works (**manual, user-confirmed**)
+- `admin@stayawhilewithus.com` has unrestricted global admin access
+- 7 real properties are visible
+- 12 real smart devices are visible
+- No `DEMO` properties appear
+- Logout works (**manual, user-confirmed**)
+- OwnerRez remains read-only
+- Notion remains read-only
+- No other client's environment (Supabase/Vercel/Clerk/database/local server) was inspected, modified, stopped, connected, or affected
+
+**Until every item above is verified, and the user has explicitly said the gate is satisfied, do not say anything is "ready."** Once it is: the exact required phrase is **"Ready for Michelle and Kenny to test."** After that phrase is said, **stop** — do not start new feature work, property mappings, OwnerRez/Notion sync, write functionality, Supabase data changes, or further Vercel/Clerk changes, and do not act on any assumption about what Michelle or Kenny will want — wait for the user to relay their actual feedback first.
+
+### Isolation, reconfirmed throughout this session
+
+Every step was scoped to the one confirmed StayWhile Supabase project, the one confirmed StayWhile Vercel project, and the one confirmed StayWhile Clerk Development instance. A dedicated repo-scoped environment-isolation audit was run before any migration work (local DB name/source, shell env override risk, repo-local mechanisms that could point at a shared database) — nothing found. No other client's Supabase, Vercel, Clerk, database, repository, or running local server was inspected, connected to, or modified at any point.
+
+---
+
+## Increment 24 — 2026-08-18: two real production bugs found and fixed via live testing, admin@stayawhilewithus.com invited, ryskris0@gmail.com set up as second global admin, Locks drill-down page added
+
+Continuation of Increment 23's cutover, driven by actually testing the live production login rather than assuming the earlier work was sufficient — both bugs below were only found because real sign-in attempts were made, not by code review.
+
+### Bug 1 — Prisma query engine missing from the Vercel serverless bundle (fixed, committed, deployed)
+
+First real production sign-in attempt (`ryskris0@gmail.com`) crashed with Next.js's generic "Application error" page. Vercel's own runtime logs (checked by the user, not assumed) showed the real cause: `PrismaClientInitializationError: ... could not locate the Query Engine for runtime "rhel-openssl-3.0.x"`. Root-caused precisely: `apps/website/package.json` depends only on `@stayw/database` (a sibling workspace package), never on `@prisma/client` directly — with pnpm's non-hoisted `node_modules`, Next.js's build-time file tracer failed to detect and bundle the Prisma-generated native query engine binary, which lives deep in the root `.pnpm` virtual store. Reproduced locally before touching anything (a clean build's `.next/server` output had zero references to the engine binary in any `.nft.json` trace file, and the binary itself was physically absent) — then fixed with Prisma's own documented minimal fix: added `@prisma/nextjs-monorepo-workaround-plugin` (pinned to `6.19.3`, the exact resolved `prisma`/`@prisma/client` version confirmed from `pnpm-lock.yaml`, matching Vercel's own error output — not the outdated `^6.1.0` range in `package.json`) as a devDependency of `apps/website`, and wired `PrismaPlugin()` into `next.config.js`'s server-side webpack config. One incidental fix: this repo's `no-require-imports` ESLint rule fired on Prisma's own documented `require()` usage in the CommonJS `next.config.js` — resolved with a single targeted inline disable comment, not a rule change. Verified before deploying: same before/after trace-file check, now showing the engine binary referenced in 22+ `.nft.json` files and physically present in `.next/server/chunks/`. Full monorepo `lint typecheck test build --force` green, 25/25. Committed as a single 3-file commit (`next.config.js`, `package.json`, `pnpm-lock.yaml` only — every other pre-existing uncommitted file deliberately excluded), pushed to `main`, auto-deployed by Vercel. Confirmed fixed by a real second sign-in attempt succeeding.
+
+### Bug 2 — Prisma + Supabase transaction-pooler prepared-statement conflict (fixed, Vercel env only, no code change)
+
+Retrying the RBAC bootstrap (`packages/database/scripts/grant-role.ts` against production Supabase) failed with Postgres error `42P05: prepared statement "s0" already exists` — the well-documented Prisma-vs-Supavisor-transaction-mode-pooler incompatibility (Prisma's prepared statements aren't supported by pgbouncer transaction mode without `?pgbouncer=true`). Confirmed nothing had been written before fixing (full read-only recheck of `users`/`user_roles`/`properties`/`smart_devices` counts, all unchanged). Fixed by appending `?pgbouncer=true&connection_limit=1` to the **`DATABASE_URL`** value only (transaction pooler, port 6543) in Vercel's Production env and in `.env.supabase-migration.local`'s `STAYWHILE_SUPABASE_DATABASE_URL` — `DIRECT_URL` (session pooler, port 5432) deliberately left untouched, since it doesn't hit this issue. Verified with a real read-only Prisma query through the qualified URL before retrying anything. `grant-role.ts` retry succeeded on the first attempt afterward.
+
+### Admin accounts
+
+- **`admin@stayawhilewithus.com`**: real Clerk invitation sent (via the Backend API, mirroring the app's own `createClerkInvitation()` call exactly). Not yet accepted as of this note — check current state before assuming otherwise.
+- **`ryskris0@gmail.com`** (the user's own personal testing account, already had a real Clerk identity from earlier local-dev sessions): signed in for real through the production app's normal email-code flow (no invitation needed — Clerk's Restricted/invite-only mode only gates new sign-_up_, not sign-_in_ for an existing account, confirmed against Clerk's own docs before relying on this). JIT-provisioned exactly one Supabase `User` row, zero duplicates. Initially had zero RBAC roles (expected — authentication and authorization are deliberately separate in this app); granted the existing global `admin` role via `grant-role.ts` (Bug 2 above blocked the first attempt) — verified afterward: exactly one global `admin` `UserRole`, `property_id` null, `status ACTIVE`. `admin@stayawhilewithus.com`'s own row/role confirmed untouched throughout both admin-setup threads.
+
+### New: `/locks` drill-down page
+
+User requested a dedicated Locks page for the client-testing/feedback phase, in addition to (not replacing) the existing homepage August-lock summary. Added `apps/website/app/(dashboard)/locks/page.tsx` + `apps/website/src/domains/smart-devices/components/LocksList.tsx`, using the **exact same** `listSmartDevices()` service call and `isLowBattery`/`getBatteryLevel`/`isDemoSmartDevice` helpers the homepage already uses — no second data source, no change to August sync/mapping logic, no new RBAC permission (reuses the existing `smart_devices:read` check already inside `listSmartDevices()`). Nav item added under Operations, after Properties (`packages/ui/src/components/Sidebar.tsx` gained a `lock` icon key; `apps/website/src/platform/layout/nav-config.ts` gained the route). Shows summary metrics (Total/Online/Offline/Low battery) + a per-lock table (Property, Lock name, Status, Battery %, Offline/Low-battery/Both warning badges, Provider, Last synced) — `lastSeenAt` rendered as `—` when null (offline locks), no invented fallback timestamp. Verified against real production data: exactly 7 real August locks, 0 demo rows, matches the homepage's own device counts exactly. Homepage (`DashboardSummary.tsx`/`dashboard.service.ts`) deliberately untouched — confirmed via `git status` showing zero modifications to either file — so the original client-requested homepage sections (August lock summary with offline/low-battery/both distinction, Thermostats summary, Today's Arrivals & Departures, Coming Up, Rescheduled Cleanings, Notion/OwnerRez read-only visibility, ADR/Revenue kept off the homepage) are all still exactly as they were. Full monorepo verification green, 25/25. **Not committed/pushed — waiting for user approval.**
+
+### Standing acceptance gate — still not cleared as of this note
+
+The dashboard still cannot be declared "Ready for Michelle and Kenny to test" — `admin@stayawhilewithus.com` hasn't completed its own invitation/login yet, and a full click-through (real email-code login + logout, both user-confirmed, not assumed) hasn't happened since the two bug fixes above landed. See Increment 23's full gate checklist — it still applies unchanged. Do not say the "ready" phrase until every item on it passes.
+
 ---
 
 # What Has Been Completed
@@ -511,6 +669,40 @@ Both August and Cielo are now fully live. Nothing is blocked. Exact order of wor
 1. Start in this same project directory. Run `git status` for the real current state — a very large amount of work (everything from Increment 1 through 21) is still uncommitted; recommend committing in logically-grouped chunks (re-derive current groupings from `git status` directly rather than assuming any prior note's grouping is still accurate).
 2. No live-integration blockers remain. Reasonable next priorities, the user's call to sequence: (a) commit the large uncommitted body of work, (b) OwnerRez/Notion credential setup if the client wants those dashboard sections live (both are code-complete, just unconfigured in this environment), (c) Increment 18's flagged gap — no UI/admin flow exists yet for granting a role to a new real Clerk sign-in, so every future first-time real user still needs a manual SQL grant.
 3. If the client adds more August locks or Cielo thermostats later: same resume path both times — re-run the respective `check.ts` script, extend the respective `*_PROPERTY_MAP`, re-run the sync.
+
+### Update — 2026-08-15 session, continued (supersedes all steps above — see Increment 22 for full detail)
+
+**Current status: WAITING FOR CLIENT FEEDBACK.** Michelle and Kenny are testing the dashboard and the new sign-out flow; the user has explicitly asked for no further feature work, mappings, syncs, or external-system writes until they give new instructions. Exact order of work for the next session:
+
+1. Start in this same project directory. **Check with the user for feedback from Michelle/Kenny before doing anything else** — if none yet, the correct action is to wait, not to proceed with new work independently.
+2. Run `git status` for the real current state — 20 files uncommitted (the Team/Users admin feature across Increments 21–22, the case-insensitive-email + last-admin-deactivation-guard fixes, the Notion/OwnerRez read-only safety README updates, and the sign-out button), plus everything from Increments 1–20 already noted as uncommitted in every prior update. Do not assume only the sign-out file is uncommitted — see Increment 22's "Git status at the end of this increment" for the exact file list.
+3. Once feedback arrives and the user is ready: commit the uncommitted work in logically-grouped chunks (re-derive current groupings from `git status` directly). The Team/Users feature, the RBAC safety fixes, the Notion/OwnerRez doc updates, and the sign-out button are four reasonably separable commits, but confirm with the user before grouping.
+4. **Do not implement any OwnerRez/Notion sync or write path** without first showing the user the exact reads, exact property mappings, and exact writes, and getting explicit approval — this is a standing hard rule (see `packages/integrations/src/notion/README.md`, `packages/integrations/src/ownerrez/README.md`, and the `feedback_notion_ownerrez_read_only_safety` cross-session memory), not just a one-time instruction.
+5. **StayWhile's dev server may still be running on port 3001** (started this session because port 3000 belongs to a different client's project — never touch whatever is on port 3000 without first confirming, the same way this session did, that it actually belongs to StayWhile). Check `lsof -i :3001` before assuming it's still up; restart with `PORT=3001 pnpm --filter website dev` if not.
+6. If the client adds more August locks or Cielo thermostats later: unchanged, same resume path as before (step 3 in the prior update block).
+
+### Update — 2026-08-17 session (supersedes all steps above — see Increment 23 for full detail)
+
+**Current status: PRODUCTION CUTOVER IN PROGRESS — Clerk testing-phase gate not yet cleared.** Do not resume the "commit uncommitted work" / "wait for Michelle & Kenny feedback on the old dev flow" track above — that was superseded the moment this session began production migration work. Exact state:
+
+- **Supabase**: migration complete and fully verified (Phase 1–3, see Increment 23). The existing StayWhile Supabase project now holds exactly the approved production dataset. Do not re-run any phase of this migration or treat it as still pending.
+- **Vercel**: `DATABASE_URL`/`DIRECT_URL`/`NEXT_PUBLIC_APP_URL` already updated and redeployed, pointing at Supabase. Live at `https://stayawhilewithus-website.vercel.app` (project not renamed — user reversed that plan; do not rename it).
+- **Clerk**: a testing-phase checklist was handed to the user (disable Password strategy, restrict sign-up, add allowed origin, add webhook + its signing secret to Vercel) — **check with the user whether this has actually been applied yet before assuming it has.**
+- **Standing acceptance gate** (see Increment 23 for the full checklist): the dashboard cannot be declared ready for Michelle/Kenny until every gate item is verified, with browser/inbox-dependent items (email-code login, logout) confirmed by the user directly, never assumed. The required exact phrase, once cleared, is **"Ready for Michelle and Kenny to test."**
+- **After that phrase is said**: stop. No new feature work, property mappings, OwnerRez/Notion sync, write functionality, Supabase data changes, or further Vercel/Clerk changes — and no acting on assumptions about Michelle or Kenny's preferences — until the user relays their actual feedback.
+- The large body of previously-uncommitted work (Increments 1–22) is **still uncommitted** — this session added no new commits either. Still worth grouping and committing whenever the user is ready, but that's independent of and lower-priority than the production cutover/testing-gate work above.
+- Local dev server situation (port 3001 vs. another client's port 3000) is unchanged from the prior note — still applies if local dev work resumes.
+
+### Update — 2026-08-18 session (supersedes all steps above — see Increment 24 for full detail)
+
+**Current status: still PRODUCTION CUTOVER IN PROGRESS — acceptance gate still not cleared.** This session found and fixed two real production bugs via actual live-login testing (not code review), got `ryskris0@gmail.com` working end-to-end as a second global admin, and added a `/locks` drill-down page at the user's request. Exact state for the next session:
+
+- **Two real bugs fixed this session** — full detail in Increment 24: (1) Prisma query engine wasn't bundled into the Vercel serverless function (fixed via `@prisma/nextjs-monorepo-workaround-plugin`, committed as `e23bcd0`, already deployed and confirmed working by a real sign-in); (2) Prisma + Supabase transaction-pooler prepared-statement conflict (`42P05`), fixed by appending `?pgbouncer=true&connection_limit=1` to Vercel's Production `DATABASE_URL` only — **do not remove this query string**, it's required, not optional.
+- **`admin@stayawhilewithus.com`**: invited via Clerk, **not yet confirmed accepted/signed-in as of this note** — check current state, don't assume either way.
+- **`ryskris0@gmail.com`**: fully working — real Clerk sign-in, one clean Supabase row, global `admin` role granted and verified. This is the user's own personal testing account, kept deliberately separate from `admin@stayawhilewithus.com`.
+- **`/locks` page**: implemented and verified against real production data (7 real August locks, 0 demo), full suite green (25/25) — **not committed/pushed yet**, waiting for user approval. Files: `apps/website/app/(dashboard)/locks/page.tsx`, `apps/website/src/domains/smart-devices/components/LocksList.tsx`, plus small additive changes to `packages/ui/src/components/Sidebar.tsx` and `apps/website/src/platform/layout/nav-config.ts`. Homepage (`DashboardSummary.tsx`/`dashboard.service.ts`) deliberately untouched.
+- **Standing acceptance gate unchanged** (Increment 23's full checklist still applies): do not say **"Ready for Michelle and Kenny to test"** until every item passes, with email-code login and logout confirmed by the user directly. Not cleared as of this note — `admin@stayawhilewithus.com`'s own login is still outstanding, and a full click-through hasn't happened since the bug fixes landed.
+- The large body of previously-uncommitted work (Increments 1–22) is still uncommitted, plus now the `/locks` feature is also uncommitted pending approval. Still lower priority than clearing the acceptance gate.
 
 ---
 

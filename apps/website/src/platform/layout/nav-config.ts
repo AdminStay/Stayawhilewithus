@@ -18,6 +18,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: "/", label: "Dashboard", icon: "dashboard" },
       { href: "/properties", label: "Properties", icon: "building" },
+      { href: "/locks", label: "Locks", icon: "lock" },
       { href: "/reservations", label: "Reservations", icon: "calendar" },
       { href: "/guests", label: "Guests", icon: "users" },
     ],
