@@ -279,7 +279,7 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
           href="/reservations"
         />
         <Metric
-          label="Departures today"
+          label="Check-outs today"
           value={summary.departuresToday.length}
           icon={LogOut}
           href="/reservations"
@@ -378,9 +378,13 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
             )}
           </div>
 
-          {summary.recentlyRescheduledCleanings.length > 0 && (
-            <div>
-              <SectionHeader title="Rescheduled Cleanings" />
+          <div>
+            <SectionHeader title="Rescheduled Cleanings" />
+            {summary.recentlyRescheduledCleanings.length === 0 ? (
+              <p className="text-sm text-ink-muted">
+                No rescheduled cleanings.
+              </p>
+            ) : (
               <ul className="divide-y divide-border border-t border-border">
                 {summary.recentlyRescheduledCleanings.map((c) => (
                   <li key={c.id} className="flex items-center gap-3 py-3">
@@ -400,13 +404,13 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
                   </li>
                 ))}
               </ul>
-            </div>
-          )}
+            )}
+          </div>
 
           {(summary.arrivalsToday.length > 0 ||
             summary.departuresToday.length > 0) && (
             <div>
-              <SectionHeader title="Today's Arrivals & Departures" />
+              <SectionHeader title="Today's Check-ins & Check-outs" />
               <div className="grid divide-y divide-border rounded-card border border-border sm:grid-cols-2 sm:divide-x sm:divide-y-0">
                 <div className="p-5">
                   <h3 className="text-xs font-medium uppercase tracking-wide text-ink-muted">
@@ -434,11 +438,11 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
                 </div>
                 <div className="p-5">
                   <h3 className="text-xs font-medium uppercase tracking-wide text-ink-muted">
-                    Departing today
+                    Checking out today
                   </h3>
                   {summary.departuresToday.length === 0 ? (
                     <p className="mt-2 text-sm text-ink-muted">
-                      No departures today.
+                      No check-outs today.
                     </p>
                   ) : (
                     <ul className="mt-3 space-y-2 text-sm text-ink">
