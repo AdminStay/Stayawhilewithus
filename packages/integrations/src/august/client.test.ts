@@ -92,11 +92,14 @@ describe("AugustClient", () => {
       name: "Front Door",
       houseId: "house-1",
       batteryLevel: 85,
-      online: true,
+      connectivity: "ONLINE",
+      lockState: null,
+      telemetryUpdatedAt: null,
+      seenAt: null,
     });
   });
 
-  it("getLockDetail() prefers bridge.status.current === 'online' when a status object is present", async () => {
+  it("getLockDetail() prefers bridge.status.current === 'online' when a status object is present, and reports OFFLINE (not UNKNOWN) when the provider explicitly says offline", async () => {
     mockRequest.mockResolvedValueOnce({
       LockID: "lock-2",
       LockName: "Back Door",
@@ -108,10 +111,10 @@ describe("AugustClient", () => {
 
     const detail = await client.getLockDetail("lock-2");
 
-    expect(detail.online).toBe(false);
+    expect(detail.connectivity).toBe("OFFLINE");
   });
 
-  it("getLockDetail() reports offline when there's no Bridge at all", async () => {
+  it("getLockDetail() reports UNKNOWN — not OFFLINE — when there's no Bridge at all (regression: this was the real production bug misclassifying working locks as down)", async () => {
     mockRequest.mockResolvedValueOnce({
       LockID: "lock-3",
       LockName: "Side Door",
@@ -122,7 +125,49 @@ describe("AugustClient", () => {
 
     const detail = await client.getLockDetail("lock-3");
 
-    expect(detail.online).toBe(false);
+    expect(detail.connectivity).toBe("UNKNOWN");
+  });
+
+  it("getLockDetail() reads lockState and seenAt from LockStatus only when the provider marks it valid", async () => {
+    mockRequest.mockResolvedValueOnce({
+      LockID: "lock-4",
+      LockName: "Patio Door",
+      HouseID: "house-1",
+      battery: 0.7,
+      Bridge: { operative: true, status: { current: "online" } },
+      LockStatus: {
+        status: "locked",
+        valid: true,
+        dateTime: "2026-08-19T19:23:18.000Z",
+      },
+      batteryInfo: { infoUpdatedDate: "2026-08-19T18:00:00.000Z" },
+    });
+    const client = new AugustClient(credentials);
+
+    const detail = await client.getLockDetail("lock-4");
+
+    expect(detail.lockState).toBe("locked");
+    expect(detail.seenAt).toBe("2026-08-19T19:23:18.000Z");
+    expect(detail.telemetryUpdatedAt).toBe("2026-08-19T18:00:00.000Z");
+  });
+
+  it("getLockDetail() never fabricates lockState/seenAt when LockStatus is present but not valid", async () => {
+    mockRequest.mockResolvedValueOnce({
+      LockID: "lock-5",
+      LockName: "Garage Door",
+      HouseID: "house-1",
+      battery: 0.9,
+      LockStatus: { status: "unknown" },
+      batteryInfo: { infoUpdatedDate: "2026-08-19T18:00:00.000Z" },
+    });
+    const client = new AugustClient(credentials);
+
+    const detail = await client.getLockDetail("lock-5");
+
+    expect(detail.connectivity).toBe("UNKNOWN");
+    expect(detail.lockState).toBeNull();
+    expect(detail.seenAt).toBeNull();
+    expect(detail.telemetryUpdatedAt).toBe("2026-08-19T18:00:00.000Z");
   });
 
   it("sync(INBOUND) fetches locks and reports the count processed, without writing to the database", async () => {

@@ -128,15 +128,30 @@ export async function syncAugustDevices(
     }
 
     const detail = await client.getLockDetail(lock.id);
+    // Only safe, non-sensitive provider fields ever go into metadata —
+    // battery, telemetry recency, lock state. Never PIN values, guest
+    // names, or anything from the account/auth surface of the raw
+    // response, even though those live right alongside these fields in
+    // August's actual API payload.
     const data = {
       propertyId,
       name: detail.name,
-      status: detail.online ? ("ONLINE" as const) : ("OFFLINE" as const),
-      metadata:
-        detail.batteryLevel != null
-          ? { batteryLevel: detail.batteryLevel }
-          : {},
-      lastSeenAt: detail.online ? new Date() : null,
+      status: detail.connectivity,
+      metadata: {
+        ...(detail.batteryLevel != null && {
+          batteryLevel: detail.batteryLevel,
+        }),
+        ...(detail.telemetryUpdatedAt != null && {
+          telemetryUpdatedAt: detail.telemetryUpdatedAt,
+        }),
+        ...(detail.lockState != null && { lockState: detail.lockState }),
+      },
+      // seenAt only exists for the lock generation that gives August's own
+      // real-time-confirmed timestamp (LockStatus.dateTime) — never
+      // backfilled from telemetry or our own sync time for the rest, per
+      // the standing rule that lastSeenAt means "provider confirmed this
+      // device," not "we ran a sync."
+      lastSeenAt: detail.seenAt ? new Date(detail.seenAt) : null,
     };
     await prisma.smartDevice.upsert({
       where: {
@@ -302,6 +317,49 @@ export function getHumidity(
   const metadata = device.metadata as Record<string, unknown> | null;
   const value = metadata?.humidity;
   return typeof value === "number" ? value : null;
+}
+
+/** Locked/unlocked, only where the provider gives a valid reading — see AugustLockDetail.lockState. Never guessed. */
+export function getLockState(
+  device: Pick<SmartDevice, "metadata">,
+): string | null {
+  const metadata = device.metadata as Record<string, unknown> | null;
+  const value = metadata?.lockState;
+  return typeof value === "string" ? value : null;
+}
+
+/** The provider's own last-telemetry timestamp (e.g. August's batteryInfo.infoUpdatedDate) — distinct from SmartDevice.updatedAt, which is when StayWhile itself last synced this row. */
+export function getTelemetryUpdatedAt(
+  device: Pick<SmartDevice, "metadata">,
+): Date | null {
+  const metadata = device.metadata as Record<string, unknown> | null;
+  const value = metadata?.telemetryUpdatedAt;
+  if (typeof value !== "string") return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/**
+ * A device's provider telemetry is considered stale after 24 hours.
+ * Chosen from real observed data (2026-08-20 investigation), not a guess:
+ * six of seven real August locks reported telemetry 136-227 minutes old at
+ * check time (roughly 2-4 hours — the normal reporting cadence for this
+ * fleet); one outlier was ~2,781 minutes old (~46 hours). 24 hours sits
+ * comfortably above the normal cadence (so a routine gap between checks
+ * never misfires) while still catching a genuinely stale device like that
+ * one well before it reaches 46 hours. Applies to any device with a
+ * telemetryUpdatedAt value, not a per-property or per-lock special case.
+ */
+const TELEMETRY_STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+export function isTelemetryStale(
+  device: Pick<SmartDevice, "metadata">,
+): boolean {
+  const telemetryUpdatedAt = getTelemetryUpdatedAt(device);
+  if (!telemetryUpdatedAt) return false;
+  return (
+    Date.now() - telemetryUpdatedAt.getTime() > TELEMETRY_STALE_THRESHOLD_MS
+  );
 }
 
 const PROVIDER_DISPLAY_NAMES: Partial<Record<SmartDevice["provider"], string>> =

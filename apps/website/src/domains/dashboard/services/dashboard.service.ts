@@ -24,6 +24,7 @@ import { listReservations } from "@/domains/reservations/services/reservations.s
 import {
   isDemoSmartDevice,
   isLowBattery,
+  isTelemetryStale,
   listSmartDevices,
 } from "@/domains/smart-devices/services/smart-devices.service";
 import { listTasks } from "@/domains/tasks/services/tasks.service";
@@ -185,8 +186,15 @@ export async function getDashboardSummary(actor: AuthContext) {
 
   const locks = smartDevices.filter((d) => d.deviceType === "LOCK");
   const thermostats = smartDevices.filter((d) => d.deviceType === "THERMOSTAT");
+  // UNKNOWN (provider gave no reliable connectivity signal) is deliberately
+  // NOT treated as needing attention on its own — that was the exact bug
+  // this status model replaced (a device the provider simply didn't report
+  // on was being shown as a critical Offline alert). A device only lands
+  // here for an explicit OFFLINE report, low battery, or stale telemetry —
+  // the last of which can affect an UNKNOWN-connectivity device too, so
+  // staleness still surfaces even though bare UNKNOWN doesn't.
   const devicesNeedingAttention = smartDevices.filter(
-    (d) => d.status !== "ONLINE" || isLowBattery(d),
+    (d) => d.status === "OFFLINE" || isLowBattery(d) || isTelemetryStale(d),
   );
   // Per-row, not per-provider: a provider's packages/integrations client
   // being "real" (see PROVIDER_CLIENT_STATUS) doesn't mean THIS row came
@@ -215,7 +223,7 @@ export async function getDashboardSummary(actor: AuthContext) {
     locks,
     thermostats,
     devicesNeedingAttention,
-    offlineDeviceCount: smartDevices.filter((d) => d.status !== "ONLINE")
+    offlineDeviceCount: smartDevices.filter((d) => d.status === "OFFLINE")
       .length,
     lowBatteryDeviceCount: smartDevices.filter((d) => isLowBattery(d)).length,
     hasLiveDeviceData,

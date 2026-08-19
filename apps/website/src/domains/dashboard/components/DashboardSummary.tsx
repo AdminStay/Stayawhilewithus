@@ -74,19 +74,41 @@ function isDemoDevice(device: SmartDeviceLike): boolean {
   return device.externalDeviceId.startsWith("demo-");
 }
 
+/** Mirrors smart-devices.service.ts's TELEMETRY_STALE_THRESHOLD_MS/isTelemetryStale() — see that file for why 24h was chosen from real observed data, not guessed. */
+const TELEMETRY_STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+function isDeviceTelemetryStale(device: SmartDeviceLike): boolean {
+  const metadata = device.metadata as Record<string, unknown> | null;
+  const value = metadata?.telemetryUpdatedAt;
+  if (typeof value !== "string") return false;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return false;
+  return Date.now() - parsed.getTime() > TELEMETRY_STALE_THRESHOLD_MS;
+}
+
 /**
  * A device can be both offline AND low battery at once — report both
  * facts rather than letting "offline" silently hide a real battery
  * reading, so the client can tell "offline" apart from "offline, also
  * about to die" once real hardware is connected.
+ *
+ * UNKNOWN connectivity is deliberately never called "offline" here — a
+ * device only reaches this function at all when it's OFFLINE, low
+ * battery, or has stale telemetry (see dashboard.service.ts's
+ * devicesNeedingAttention filter), so an UNKNOWN-connectivity device
+ * showing up means its telemetry is stale, not that it's confirmed down.
  */
 function deviceAttentionReason(device: SmartDeviceLike): string {
-  const offline = device.status !== "ONLINE";
+  const offline = device.status === "OFFLINE";
   const battery = getBatteryLevel(device);
   const lowBattery = battery !== null && battery < LOW_BATTERY_THRESHOLD;
+  const staleTelemetry = isDeviceTelemetryStale(device);
 
   if (offline && lowBattery) return `Offline, low battery (${battery}%)`;
   if (offline) return "Offline";
+  if (staleTelemetry && lowBattery)
+    return `Telemetry stale, low battery (${battery}%)`;
+  if (staleTelemetry) return "Attention needed — telemetry stale";
   if (lowBattery) return `Low battery (${battery}%)`;
   return "Needs attention";
 }
@@ -152,14 +174,22 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
 
   const needsAttention = [
     ...summary.devicesNeedingAttention.map((d) => {
-      const offline = d.status !== "ONLINE";
+      // Bare UNKNOWN connectivity never lands here at all (see
+      // dashboard.service.ts's devicesNeedingAttention filter) — a device
+      // only shows up for an explicit OFFLINE report, low battery, or
+      // stale telemetry, so `offline` below is only ever true for a real
+      // provider-confirmed OFFLINE, never an unreported device.
+      const offline = d.status === "OFFLINE";
       const battery = getBatteryLevel(d);
       const lowBattery = battery !== null && battery < LOW_BATTERY_THRESHOLD;
+      const staleTelemetry = isDeviceTelemetryStale(d);
       return {
         id: `device-${d.id}`,
         icon: d.deviceType === "LOCK" ? Lock : Thermometer,
         // Offline is the more severe condition — takes the error tone even
-        // when the device is also low battery.
+        // when the device is also low battery. Stale telemetry alone is
+        // informational (warning), not alarming (error) — the device may
+        // well still be fine, we just haven't heard from it recently.
         tone: offline ? ("error" as const) : ("warning" as const),
         label: `${d.name} — ${d.property.name}`,
         meta: deviceAttentionReason(d),
@@ -172,7 +202,9 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
             ? "Offline + low battery"
             : offline
               ? "Offline"
-              : "Low battery",
+              : staleTelemetry
+                ? "Telemetry stale"
+                : "Low battery",
         // No dedicated device-management page exists yet (out of scope — the
         // client's ask was status visibility, not device control) — link to
         // the property instead of a dead self-link back to the dashboard.

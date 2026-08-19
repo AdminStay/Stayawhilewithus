@@ -174,4 +174,37 @@ describe("August end-to-end: raw API response -> AugustClient -> syncAugustDevic
 
     expect(prisma.smartDevice.deleteMany).not.toHaveBeenCalled();
   });
+
+  it("a lock with no Bridge in the raw response is stored as UNKNOWN, never OFFLINE, through the full real-client path (regression: this was the real production bug misclassifying a mixed August fleet)", async () => {
+    setConfigured({ "house-1": "property-ridge" });
+    mockRequest.mockResolvedValueOnce({
+      "lock-legacy": { LockName: "Legacy Lock", HouseID: "house-1" },
+    });
+    mockRequest.mockResolvedValueOnce({
+      LockID: "lock-legacy",
+      LockName: "Legacy Lock",
+      HouseID: "house-1",
+      battery: 0.93,
+      // No Bridge field at all — the real shape returned by some
+      // hardware/firmware generations in the account this fix was built
+      // against.
+      LockStatus: { status: "unknown" },
+      batteryInfo: { infoUpdatedDate: "2026-08-19T18:00:00.000Z" },
+    });
+
+    await syncAugustDevices(actor);
+
+    expect(prisma.smartDevice.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          status: "UNKNOWN",
+          lastSeenAt: null,
+          metadata: {
+            batteryLevel: 93,
+            telemetryUpdatedAt: "2026-08-19T18:00:00.000Z",
+          },
+        }),
+      }),
+    );
+  });
 });

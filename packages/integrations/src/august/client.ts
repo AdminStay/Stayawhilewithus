@@ -10,12 +10,18 @@ import type {
 
 import {
   AUGUST_BRAND_CONFIGS,
+  type AugustConnectivity,
   type AugustCredentials,
   type AugustLock,
   type AugustLockDetail,
 } from "./types";
 
-export type { AugustBrand, AugustLock, AugustLockDetail } from "./types";
+export type {
+  AugustBrand,
+  AugustConnectivity,
+  AugustLock,
+  AugustLockDetail,
+} from "./types";
 export { isAugustBrand } from "./types";
 
 // Fixed values every August client (mobile app and this integration alike)
@@ -56,19 +62,42 @@ interface RawAugustBridge {
   status?: RawAugustBridgeStatus;
 }
 
+interface RawAugustLockStatus {
+  status?: string;
+  valid?: boolean;
+  dateTime?: string;
+}
+
+interface RawAugustBatteryInfo {
+  infoUpdatedDate?: string;
+}
+
 interface RawAugustLockDetail {
   LockID: string;
   LockName: string;
   HouseID: string;
   battery: number;
   Bridge?: RawAugustBridge;
+  LockStatus?: RawAugustLockStatus;
+  batteryInfo?: RawAugustBatteryInfo;
 }
 
-/** Verified against py-august's `LockDetail.bridge_is_online` (august/lock.py) — connectivity of the lock's WiFi Bridge/Connect hub, not locked/unlocked state. */
-function bridgeIsOnline(bridge: RawAugustBridge | undefined): boolean {
-  if (!bridge) return false;
-  if (!bridge.status && bridge.operative) return true;
-  return bridge.status?.current === "online";
+/**
+ * Verified against py-august's `LockDetail.bridge_is_online` (august/lock.py)
+ * for the Bridge-present case. The UNKNOWN branch is the fix for a real
+ * production bug: a live field-by-field audit (2026-08-20) found that some
+ * lock hardware/firmware generations never return a `Bridge` object at all
+ * — not `operative: false`, structurally absent — while still sending
+ * recent battery telemetry (see telemetryUpdatedAt on the same response).
+ * Mapping "no Bridge" to OFFLINE was misclassifying working devices as
+ * down. No Bridge means no reliable signal, not "confirmed offline."
+ */
+function deriveConnectivity(
+  bridge: RawAugustBridge | undefined,
+): AugustConnectivity {
+  if (!bridge) return "UNKNOWN";
+  if (!bridge.status && bridge.operative) return "ONLINE";
+  return bridge.status?.current === "online" ? "ONLINE" : "OFFLINE";
 }
 
 /**
@@ -167,18 +196,29 @@ export class AugustClient
     }));
   }
 
-  /** `GET /locks/{lockId}` — battery level and bridge connectivity for one lock. */
+  /**
+   * `GET /locks/{lockId}` — battery level, connectivity, and (where the
+   * provider gives a valid reading) lock state and a real-time seen
+   * timestamp for one lock. See AugustLockDetail's doc comment (./types.ts)
+   * for exactly what each field means and why several are nullable rather
+   * than guessed.
+   */
   async getLockDetail(lockId: string): Promise<AugustLockDetail> {
     const raw = await this.http.request<RawAugustLockDetail>(
       `/locks/${encodeURIComponent(lockId)}`,
     );
+    const lockStatus = raw.LockStatus;
+    const validLockStatus = lockStatus?.valid === true;
     return {
       id: raw.LockID,
       name: raw.LockName,
       houseId: raw.HouseID,
       batteryLevel:
         typeof raw.battery === "number" ? Math.round(raw.battery * 100) : null,
-      online: bridgeIsOnline(raw.Bridge),
+      connectivity: deriveConnectivity(raw.Bridge),
+      lockState: validLockStatus ? (lockStatus?.status ?? null) : null,
+      telemetryUpdatedAt: raw.batteryInfo?.infoUpdatedDate ?? null,
+      seenAt: validLockStatus ? (lockStatus?.dateTime ?? null) : null,
     };
   }
 

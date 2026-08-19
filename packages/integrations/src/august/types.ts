@@ -114,20 +114,50 @@ export interface AugustLock {
 }
 
 /**
+ * Not every lock in a real account reports connectivity the same way.
+ * Verified directly against a live mixed fleet (2026-08-20 investigation):
+ * some hardware/firmware generations return a `Bridge` object (WiFi
+ * Bridge/Connect hub relay + real-time push channel) and connectivity is
+ * reliably ONLINE/OFFLINE from that. Other generations never return a
+ * `Bridge` object at all — not empty, structurally absent — and have no
+ * other authoritative connectivity field either. Collapsing "no Bridge"
+ * into OFFLINE was a real bug: those locks were still sending recent
+ * telemetry, just not through a channel this integration could read as
+ * "online." UNKNOWN means exactly that — the provider gave us no reliable
+ * signal, not that the device is confirmed down.
+ */
+export type AugustConnectivity = "ONLINE" | "OFFLINE" | "UNKNOWN";
+
+/**
  * `GET /locks/{lockId}`, normalized — verified against py-august's
- * `LockDetail` class (august/lock.py). `battery` in the raw API response is
+ * `LockDetail` class (august/lock.py) plus a live field-by-field audit
+ * across StayWhile's real mixed fleet. `battery` in the raw API response is
  * a 0–1 fraction; the client converts it to a 0–100 integer to match
  * SmartDevice.metadata.batteryLevel's existing convention (see
- * smart-devices.service.ts). `online` reflects the lock's WiFi
- * Bridge/Connect hub connectivity (py-august's `bridge_is_online`) — a
- * different concept from locked/unlocked, which this integration
- * deliberately does not report (StayWhile only needs connectivity +
- * battery, not lock state).
+ * smart-devices.service.ts).
+ *
+ * - `connectivity`: see AugustConnectivity above.
+ * - `lockState`: raw `LockStatus.status` ("locked"/"unlocked") — only
+ *   populated when the provider marks it `valid: true`, which today only
+ *   happens for the same Bridge-connected lock generation. `null` (never
+ *   guessed) for every lock where the provider doesn't give a valid state.
+ * - `telemetryUpdatedAt`: `batteryInfo.infoUpdatedDate` — the provider's
+ *   own last-telemetry timestamp, present on every lock regardless of
+ *   connectivity signal, and the only field found that meaningfully varies
+ *   across the whole fleet (used to detect a genuinely stale device even
+ *   when connectivity itself is UNKNOWN).
+ * - `seenAt`: raw `LockStatus.dateTime` — a provider-confirmed real-time
+ *   timestamp, only present alongside a valid LockStatus (same lock
+ *   generation as lockState). `null`, not guessed or backfilled, for any
+ *   lock the provider doesn't give this for.
  */
 export interface AugustLockDetail {
   id: string;
   name: string;
   houseId: string;
   batteryLevel: number | null;
-  online: boolean;
+  connectivity: AugustConnectivity;
+  lockState: string | null;
+  telemetryUpdatedAt: string | null;
+  seenAt: string | null;
 }

@@ -783,6 +783,7 @@ enum SmartDeviceStatus {
   ONLINE
   OFFLINE
   ERROR
+  UNKNOWN
 }
 
 enum IntegrationProvider {

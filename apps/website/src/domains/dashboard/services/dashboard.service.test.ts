@@ -36,6 +36,13 @@ vi.mock("@/domains/smart-devices/services/smart-devices.service", () => ({
   },
   isDemoSmartDevice: (device: { externalDeviceId: string }) =>
     device.externalDeviceId.startsWith("demo-"),
+  isTelemetryStale: (device: { metadata: Record<string, unknown> | null }) => {
+    const value = device.metadata?.telemetryUpdatedAt;
+    if (typeof value !== "string") return false;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return false;
+    return Date.now() - parsed.getTime() > 24 * 60 * 60 * 1000;
+  },
 }));
 vi.mock("@/domains/maintenance/services/maintenance.service", () => ({
   listMaintenanceRequests: vi.fn(),
@@ -247,6 +254,62 @@ describe("getDashboardSummary", () => {
     ]);
     expect(summary.offlineDeviceCount).toBe(2);
     expect(summary.lowBatteryDeviceCount).toBe(1);
+  });
+
+  it("UNKNOWN connectivity is not counted as Offline and does not appear in Needs Attention on its own — but stale telemetry on an UNKNOWN device still does (regression: this was the real production bug)", async () => {
+    mockAllLists();
+    // Overrides the persistent smart-devices mock above with a one-time
+    // return value for this test's single call — mockResolvedValueOnce is
+    // always consumed first regardless of setup order.
+    vi.mocked(listSmartDevices).mockResolvedValueOnce([
+      {
+        id: "d1",
+        provider: "AUGUST",
+        deviceType: "LOCK",
+        status: "ONLINE",
+        metadata: {},
+        externalDeviceId: "lock-1",
+      },
+      {
+        id: "d2",
+        provider: "AUGUST",
+        deviceType: "LOCK",
+        status: "UNKNOWN",
+        metadata: { telemetryUpdatedAt: new Date().toISOString() },
+        externalDeviceId: "lock-2",
+      },
+      {
+        id: "d3",
+        provider: "AUGUST",
+        deviceType: "LOCK",
+        status: "UNKNOWN",
+        metadata: {
+          telemetryUpdatedAt: new Date(
+            Date.now() - 46 * 60 * 60 * 1000,
+          ).toISOString(),
+        },
+        externalDeviceId: "lock-3",
+      },
+      {
+        id: "d4",
+        provider: "AUGUST",
+        deviceType: "LOCK",
+        status: "OFFLINE",
+        metadata: {},
+        externalDeviceId: "lock-4",
+      },
+    ] as never);
+
+    const summary = await getDashboardSummary(actor);
+
+    // d2: UNKNOWN, fresh telemetry — not offline, not needing attention.
+    // d3: UNKNOWN, stale telemetry — not offline, but DOES need attention.
+    // d4: explicit OFFLINE — counted and needs attention.
+    expect(summary.offlineDeviceCount).toBe(1);
+    expect(summary.devicesNeedingAttention.map((d) => d.id)).toEqual([
+      "d3",
+      "d4",
+    ]);
   });
 
   it("reports device data as not live when every device row is still seed data (a demo-prefixed externalDeviceId)", async () => {

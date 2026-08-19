@@ -7,8 +7,9 @@
  *
  *   pnpm --filter @stayw/integrations exec tsx src/august/scripts/check.ts
  *
- * Prints lock names, house IDs, online/offline, and battery % — never the
- * access token or any other credential.
+ * Prints lock names, house IDs, connectivity (ONLINE/OFFLINE/UNKNOWN — see
+ * AugustLockDetail's doc comment in ../types.ts for what UNKNOWN means),
+ * and battery % — never the access token or any other credential.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -91,7 +92,7 @@ async function main(): Promise<void> {
         ? `${detail.batteryLevel}% battery`
         : "no battery reading";
     console.log(
-      `  - "${detail.name}" (id: ${detail.id}, houseId: ${detail.houseId}) — ${detail.online ? "ONLINE" : "OFFLINE"}, ${batteryText}`,
+      `  - "${detail.name}" (id: ${detail.id}, houseId: ${detail.houseId}) — ${detail.connectivity}, ${batteryText}`,
     );
   }
 

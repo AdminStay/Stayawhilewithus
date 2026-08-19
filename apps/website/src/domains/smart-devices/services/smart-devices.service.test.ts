@@ -35,8 +35,11 @@ import { prisma } from "@stayw/database";
 
 import {
   getBatteryLevel,
+  getLockState,
+  getTelemetryUpdatedAt,
   isDemoSmartDevice,
   isLowBattery,
+  isTelemetryStale,
   listSmartDevices,
   syncAugustDevices,
   syncCieloDevices,
@@ -88,6 +91,46 @@ describe("getBatteryLevel / isLowBattery", () => {
 
   it("does not flag a device with no reported battery as low", () => {
     expect(isLowBattery({ metadata: {} })).toBe(false);
+  });
+});
+
+describe("getLockState / getTelemetryUpdatedAt / isTelemetryStale", () => {
+  it("reads lockState from metadata, null when absent", () => {
+    expect(getLockState({ metadata: { lockState: "locked" } })).toBe("locked");
+    expect(getLockState({ metadata: {} })).toBeNull();
+  });
+
+  it("parses telemetryUpdatedAt from metadata into a Date, null when absent or invalid", () => {
+    const result = getTelemetryUpdatedAt({
+      metadata: { telemetryUpdatedAt: "2026-08-19T18:00:00.000Z" },
+    });
+    expect(result).toEqual(new Date("2026-08-19T18:00:00.000Z"));
+    expect(getTelemetryUpdatedAt({ metadata: {} })).toBeNull();
+    expect(
+      getTelemetryUpdatedAt({ metadata: { telemetryUpdatedAt: "not-a-date" } }),
+    ).toBeNull();
+  });
+
+  it("flags telemetry stale only past the 24-hour threshold, chosen from real observed data (see the doc comment on TELEMETRY_STALE_THRESHOLD_MS)", () => {
+    const threeHoursAgo = new Date(
+      Date.now() - 3 * 60 * 60 * 1000,
+    ).toISOString();
+    const fortySixHoursAgo = new Date(
+      Date.now() - 46 * 60 * 60 * 1000,
+    ).toISOString();
+
+    expect(
+      isTelemetryStale({ metadata: { telemetryUpdatedAt: threeHoursAgo } }),
+    ).toBe(false);
+    expect(
+      isTelemetryStale({
+        metadata: { telemetryUpdatedAt: fortySixHoursAgo },
+      }),
+    ).toBe(true);
+  });
+
+  it("does not flag a device with no telemetry timestamp at all as stale", () => {
+    expect(isTelemetryStale({ metadata: {} })).toBe(false);
   });
 });
 
@@ -170,7 +213,10 @@ describe("syncAugustDevices", () => {
       name: "Front Door",
       houseId: "house-1",
       batteryLevel: 72,
-      online: true,
+      connectivity: "ONLINE",
+      lockState: "locked",
+      telemetryUpdatedAt: "2026-08-19T18:00:00.000Z",
+      seenAt: "2026-08-19T19:00:00.000Z",
     });
 
     const result = await syncAugustDevices(actor);
@@ -190,9 +236,110 @@ describe("syncAugustDevices", () => {
           externalDeviceId: "lock-1",
           propertyId: "property-1",
           status: "ONLINE",
-          metadata: { batteryLevel: 72 },
+          metadata: {
+            batteryLevel: 72,
+            lockState: "locked",
+            telemetryUpdatedAt: "2026-08-19T18:00:00.000Z",
+          },
+          lastSeenAt: new Date("2026-08-19T19:00:00.000Z"),
         }),
       }),
+    );
+  });
+
+  it("classifies UNKNOWN connectivity correctly at the sync layer, never falling back to OFFLINE (regression: this was the real production bug)", async () => {
+    setConfigured();
+    process.env.AUGUST_PROPERTY_MAP = JSON.stringify({
+      "house-1": "property-1",
+    });
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListLocks.mockResolvedValueOnce([
+      { id: "lock-1", name: "Front Door", houseId: "house-1" },
+    ]);
+    mockGetLockDetail.mockResolvedValueOnce({
+      id: "lock-1",
+      name: "Front Door",
+      houseId: "house-1",
+      batteryLevel: 93,
+      connectivity: "UNKNOWN",
+      lockState: null,
+      telemetryUpdatedAt: "2026-08-19T18:00:00.000Z",
+      seenAt: null,
+    });
+
+    await syncAugustDevices(actor);
+
+    expect(prisma.smartDevice.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          status: "UNKNOWN",
+          lastSeenAt: null,
+          metadata: {
+            batteryLevel: 93,
+            telemetryUpdatedAt: "2026-08-19T18:00:00.000Z",
+          },
+        }),
+      }),
+    );
+  });
+
+  it("stores explicit OFFLINE (provider-confirmed), never conflated with UNKNOWN", async () => {
+    setConfigured();
+    process.env.AUGUST_PROPERTY_MAP = JSON.stringify({
+      "house-1": "property-1",
+    });
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListLocks.mockResolvedValueOnce([
+      { id: "lock-1", name: "Front Door", houseId: "house-1" },
+    ]);
+    mockGetLockDetail.mockResolvedValueOnce({
+      id: "lock-1",
+      name: "Front Door",
+      houseId: "house-1",
+      batteryLevel: 40,
+      connectivity: "OFFLINE",
+      lockState: "locked",
+      telemetryUpdatedAt: "2026-08-19T18:00:00.000Z",
+      seenAt: "2026-08-19T17:00:00.000Z",
+    });
+
+    await syncAugustDevices(actor);
+
+    expect(prisma.smartDevice.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ status: "OFFLINE" }),
+      }),
+    );
+  });
+
+  it("never puts PIN values, guest names, or any raw account/auth data into SmartDevice.metadata — only the whitelisted safe fields", async () => {
+    setConfigured();
+    process.env.AUGUST_PROPERTY_MAP = JSON.stringify({
+      "house-1": "property-1",
+    });
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListLocks.mockResolvedValueOnce([
+      { id: "lock-1", name: "Front Door", houseId: "house-1" },
+    ]);
+    mockGetLockDetail.mockResolvedValueOnce({
+      id: "lock-1",
+      name: "Front Door",
+      houseId: "house-1",
+      batteryLevel: 93,
+      connectivity: "ONLINE",
+      lockState: "locked",
+      telemetryUpdatedAt: "2026-08-19T18:00:00.000Z",
+      seenAt: "2026-08-19T19:00:00.000Z",
+    });
+
+    await syncAugustDevices(actor);
+
+    const call = vi.mocked(prisma.smartDevice.upsert).mock.calls[0]?.[0];
+    const metadataKeys = Object.keys(
+      (call as { create: { metadata: object } }).create.metadata,
+    );
+    expect(metadataKeys.sort()).toEqual(
+      ["batteryLevel", "lockState", "telemetryUpdatedAt"].sort(),
     );
   });
 
@@ -223,7 +370,10 @@ describe("syncAugustDevices", () => {
       name: "Front Door",
       houseId: "house-1",
       batteryLevel: 90,
-      online: true,
+      connectivity: "ONLINE",
+      lockState: null,
+      telemetryUpdatedAt: null,
+      seenAt: null,
     });
 
     const result = await syncAugustDevices(actor);
@@ -268,7 +418,10 @@ describe("syncAugustDevices", () => {
         name: "Front Door",
         houseId: "house-1",
         batteryLevel: 90,
-        online: true,
+        connectivity: "ONLINE",
+        lockState: null,
+        telemetryUpdatedAt: null,
+        seenAt: null,
       })
       .mockRejectedValueOnce(new Error("August API request failed"));
 
