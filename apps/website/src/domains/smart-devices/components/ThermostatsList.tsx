@@ -18,12 +18,13 @@ import {
   getMode,
   getProviderDisplayName,
   getTargetTemperature,
+  getTelemetryUpdatedAt,
   type SmartDevice,
 } from "../services/smart-devices.service";
 
 type ThermostatWithProperty = SmartDevice & { property: { name: string } };
 
-function formatLastSynced(date: Date | null): string {
+function formatTimestamp(date: Date | null): string {
   return date ? new Date(date).toLocaleString() : "—";
 }
 
@@ -74,11 +75,13 @@ export function ThermostatsList({
           <TableHeaderCell>Mode</TableHeaderCell>
           <TableHeaderCell>Humidity</TableHeaderCell>
           <TableHeaderCell>Last synced</TableHeaderCell>
+          <TableHeaderCell>Last telemetry</TableHeaderCell>
         </TableHead>
         <TableBody>
           {thermostats.map((thermostat) => {
             const mode = getMode(thermostat);
             const humidity = getHumidity(thermostat);
+            const telemetryUpdatedAt = getTelemetryUpdatedAt(thermostat);
 
             return (
               <TableRow key={thermostat.id}>
@@ -112,7 +115,10 @@ export function ThermostatsList({
                   {humidity !== null ? `${humidity}%` : "—"}
                 </TableCell>
                 <TableCell className="text-ink-muted">
-                  {formatLastSynced(thermostat.lastSeenAt)}
+                  {formatTimestamp(thermostat.updatedAt)}
+                </TableCell>
+                <TableCell className="text-ink-muted">
+                  {formatTimestamp(telemetryUpdatedAt)}
                 </TableCell>
               </TableRow>
             );
