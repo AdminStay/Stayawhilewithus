@@ -125,35 +125,157 @@ export async function disconnectIntegration(
 }
 
 /**
- * Records the outcome of a smart-device sync (see
- * apps/website/src/domains/smart-devices/services/smart-devices.service.ts's
- * syncAugustDevices()/syncCieloDevices(), the only current callers) against
- * that provider's IntegrationConnection: one IntegrationSyncLog row per
- * call (the convention documented on each provider's README), and — only on
- * success — status flips to CONNECTED and lastSyncedAt updates. A failed
- * sync is still logged (status FAILED, the error message attached) rather
- * than silently dropped, but never marks the connection as connected.
+ * A RUNNING IntegrationSyncLog row older than this is treated as abandoned
+ * by a request that crashed or was terminated before ever calling
+ * finishDeviceSync() — closed out as FAILED so the connection can't stay
+ * permanently locked.
+ *
+ * No real historical duration sample was available when this was chosen:
+ * the local dev DB's sync-log history was reset since the increments that
+ * ran real syncs, and production Supabase was unreachable this session
+ * (the already-documented flaky-Wi-Fi issue, not new). Instead, this is
+ * derived from the exact theoretical worst case in
+ * packages/integrations/src/core/http-client.ts's own retry logic: 10s
+ * timeout, 2 retries (3 attempts total) + backoff ≈ 30.75s worst case per
+ * HTTP call, even if every single attempt times out. August's sync makes
+ * one listLocks() + one getLockDetail() per lock (8 calls today, 7 real
+ * locks) ≈ 246s (~4.1 min) worst case; Cielo makes login()+listDevices()
+ * (2 calls) ≈ 62s worst case. 10 minutes gives comfortable margin over
+ * today's worst case AND real near-term growth — Michelle is expected to
+ * grant access to more August locks (see HANDOFF.md's Priority 7) — while
+ * staying short enough that a genuinely crashed request self-heals within
+ * a reasonable window rather than blocking a connection all day.
  */
-export async function recordIntegrationSync(
+const STALE_RUNNING_THRESHOLD_MS = 10 * 60 * 1000;
+
+/**
+ * Starts a manual smart-device sync against a SPECIFIC IntegrationConnection
+ * row, identified by its real id — not by provider name. `provider` is
+ * still passed and checked against the connection's actual provider as a
+ * cheap defensive guard (catches a button ever being wired to the wrong
+ * connection), but it is never used to look the connection up. This is
+ * deliberate: a provider name is not a safe identifier for "which
+ * connection" the moment more than one connection could exist for the same
+ * provider (see the standing ProviderDevice/multi-account design work —
+ * not implemented yet, but this function doesn't bake in the assumption
+ * that would need undoing later).
+ *
+ * The check-for-RUNNING-then-create-RUNNING step is wrapped in a Postgres
+ * advisory lock — the two-key form, pg_try_advisory_xact_lock(key1, key2) —
+ * NOT a single hashed bigint. key1 is a fixed namespace
+ * (hashtext('integration_sync'), a stable constant for this whole feature);
+ * key2 is derived from connectionId. This isn't awkward in Prisma at all
+ * (a $queryRaw template just takes two interpolated args instead of one),
+ * so there's no reason to fall back to a single key: the two-key form means
+ * this feature's lock keyspace can never collide with any unrelated
+ * advisory lock some other future feature picks, since it lives in its own
+ * namespace rather than sharing the single 64-bit space with everything
+ * else in the app. (For the record, a single hashtext(connectionId)::bigint
+ * key would also have been low-risk on its own — a 64-bit hash space has
+ * negligible collision probability at this app's scale, a handful of
+ * connections ever — but "low-risk" isn't the same as "can't collide by
+ * construction," and the two-key form costs nothing extra to get the
+ * stronger guarantee.)
+ *
+ * The lock is transaction-scoped: it's held only for this handful of fast
+ * local queries and releases the instant the transaction commits, a few
+ * milliseconds later. The slow part — the actual August/Cielo HTTP call —
+ * deliberately happens OUTSIDE this transaction, in the caller (see
+ * actions.ts's runDeviceSync), so nothing here holds a DB transaction open
+ * across a slow external request. That distinction matters specifically
+ * because production's DATABASE_URL uses Supabase's transaction-mode
+ * pooler (?pgbouncer=true&connection_limit=1, see HANDOFF.md Increment 24)
+ * — holding a lock across a slow external call under that pooler would be
+ * genuinely risky; a few local queries are not.
+ *
+ * Returns `{ alreadyRunning: true }` without writing anything if a RUNNING
+ * row already exists and is still fresh. A stale RUNNING row (older than
+ * STALE_RUNNING_THRESHOLD_MS) is closed out as FAILED first, then a new
+ * sync proceeds — this is the crashed-request recovery path.
+ */
+export async function beginDeviceSync(
   actor: AuthContext,
+  connectionId: string,
   provider: "AUGUST" | "CIELO",
+): Promise<
+  | { logId: string; alreadyRunning: false }
+  | { alreadyRunning: true }
+  | { wrongConnection: true }
+> {
+  await assertPermission(actor, "integrations:update");
+
+  const connection = await prisma.integrationConnection.findUnique({
+    where: { id: connectionId },
+  });
+  if (!connection || connection.provider !== provider) {
+    return { wrongConnection: true };
+  }
+
+  return prisma.$transaction(async (tx) => {
+    const lockRows = await tx.$queryRaw<{ locked: boolean }[]>`
+      SELECT pg_try_advisory_xact_lock(hashtext('integration_sync'), hashtext(${connectionId})) AS locked
+    `;
+    if (!lockRows[0]?.locked) {
+      // Another request is inside this exact critical section right now.
+      return { alreadyRunning: true } as const;
+    }
+
+    const existingRunning = await tx.integrationSyncLog.findFirst({
+      where: { integrationConnectionId: connection.id, status: "RUNNING" },
+    });
+
+    if (existingRunning) {
+      const ageMs = Date.now() - existingRunning.startedAt.getTime();
+      if (ageMs < STALE_RUNNING_THRESHOLD_MS) {
+        return { alreadyRunning: true } as const;
+      }
+      await tx.integrationSyncLog.update({
+        where: { id: existingRunning.id },
+        data: {
+          status: "FAILED",
+          errorMessage:
+            "Sync timed out or the process terminated unexpectedly.",
+          finishedAt: new Date(),
+        },
+      });
+    }
+
+    const log = await tx.integrationSyncLog.create({
+      data: {
+        integrationConnectionId: connection.id,
+        direction: "INBOUND",
+        entityType: "SmartDevice",
+        status: "RUNNING",
+      },
+    });
+
+    return { logId: log.id, alreadyRunning: false } as const;
+  });
+}
+
+/**
+ * Finishes a sync started by beginDeviceSync() — updates the SAME log row
+ * (never creates a second one) to its terminal status. Only a SUCCEEDED
+ * outcome flips the connection to CONNECTED and bumps lastSyncedAt; a FAILED
+ * outcome is still logged with its error message, but the connection's
+ * lastSyncedAt is left untouched — this is what "preserve the last good
+ * data when a new sync fails" means at the connection-status level (the
+ * device-row upserts themselves already only ever apply to devices actually
+ * returned by a successful provider call, per syncAugustDevices/
+ * syncCieloDevices' own per-device upsert loop).
+ */
+export async function finishDeviceSync(
+  actor: AuthContext,
+  logId: string,
   result:
     | { status: "SUCCEEDED"; recordsProcessed: number }
     | { status: "FAILED"; errorMessage: string },
 ): Promise<void> {
   await assertPermission(actor, "integrations:update");
 
-  const connection = await prisma.integrationConnection.upsert({
-    where: { provider },
-    create: { provider, ...PROVIDER_DEFAULTS[provider] },
-    update: {},
-  });
-
-  await prisma.integrationSyncLog.create({
+  const log = await prisma.integrationSyncLog.update({
+    where: { id: logId },
     data: {
-      integrationConnectionId: connection.id,
-      direction: "INBOUND",
-      entityType: "SmartDevice",
       status: result.status,
       recordsProcessed:
         result.status === "SUCCEEDED" ? result.recordsProcessed : 0,
@@ -164,7 +286,7 @@ export async function recordIntegrationSync(
 
   if (result.status === "SUCCEEDED") {
     await prisma.integrationConnection.update({
-      where: { id: connection.id },
+      where: { id: log.integrationConnectionId },
       data: { status: "CONNECTED", lastSyncedAt: new Date() },
     });
   }

@@ -1,17 +1,32 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@stayw/database", () => ({
-  prisma: {
-    integrationConnection: {
-      upsert: vi.fn().mockResolvedValue({}),
-      findMany: vi.fn(),
-      update: vi.fn(),
-    },
+vi.mock("@stayw/database", () => {
+  const tx = {
+    $queryRaw: vi.fn(),
     integrationSyncLog: {
+      findFirst: vi.fn(),
       create: vi.fn().mockResolvedValue({}),
+      update: vi.fn().mockResolvedValue({}),
     },
-  },
-}));
+  };
+  return {
+    prisma: {
+      integrationConnection: {
+        upsert: vi.fn().mockResolvedValue({}),
+        findMany: vi.fn(),
+        findUnique: vi.fn(),
+        update: vi.fn(),
+      },
+      integrationSyncLog: {
+        create: vi.fn().mockResolvedValue({}),
+        findFirst: vi.fn(),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      $transaction: vi.fn((callback: (tx: unknown) => unknown) => callback(tx)),
+      __tx: tx,
+    },
+  };
+});
 
 vi.mock("@stayw/auth", () => ({
   assertPermission: vi.fn(),
@@ -39,16 +54,19 @@ import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
 
 import {
+  beginDeviceSync,
   disconnectIntegration,
+  finishDeviceSync,
   getNotionHighlights,
   getOwnerRezHighlights,
   listIntegrationConnections,
-  recordIntegrationSync,
 } from "./integrations.service";
 
 import { recordAudit } from "@/platform/audit/record-audit";
 
 const actor = { userId: "user-1" };
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const tx = (prisma as any).__tx;
 
 describe("listIntegrationConnections", () => {
   it("upserts a row for every provider in the catalog, then lists them, when granted", async () => {
@@ -130,24 +148,157 @@ describe("disconnectIntegration", () => {
   });
 });
 
-describe("recordIntegrationSync", () => {
-  it("logs a SUCCEEDED sync and marks the connection CONNECTED with lastSyncedAt", async () => {
+describe("beginDeviceSync", () => {
+  it("acquires the advisory lock, creates a RUNNING log row, and returns its id when nothing else is running", async () => {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
-    vi.mocked(prisma.integrationConnection.upsert).mockResolvedValueOnce({
+    vi.mocked(prisma.integrationConnection.findUnique).mockResolvedValueOnce({
       id: "ic-august",
+      provider: "AUGUST",
+    } as never);
+    vi.mocked(tx.$queryRaw).mockResolvedValueOnce([{ locked: true }]);
+    vi.mocked(tx.integrationSyncLog.findFirst).mockResolvedValueOnce(null);
+    vi.mocked(tx.integrationSyncLog.create).mockResolvedValueOnce({
+      id: "log-1",
     } as never);
 
-    await recordIntegrationSync(actor, "AUGUST", {
+    const result = await beginDeviceSync(actor, "ic-august", "AUGUST");
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "integrations:update");
+    expect(prisma.integrationConnection.findUnique).toHaveBeenCalledWith({
+      where: { id: "ic-august" },
+    });
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(tx.$queryRaw).toHaveBeenCalled();
+    expect(tx.integrationSyncLog.findFirst).toHaveBeenCalledWith({
+      where: { integrationConnectionId: "ic-august", status: "RUNNING" },
+    });
+    expect(tx.integrationSyncLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        integrationConnectionId: "ic-august",
+        direction: "INBOUND",
+        entityType: "SmartDevice",
+        status: "RUNNING",
+      }),
+    });
+    expect(result).toEqual({ logId: "log-1", alreadyRunning: false });
+  });
+
+  it("refuses immediately when the advisory lock is already held by a concurrent request", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.integrationConnection.findUnique).mockResolvedValueOnce({
+      id: "ic-cielo",
+      provider: "CIELO",
+    } as never);
+    vi.mocked(tx.$queryRaw).mockResolvedValueOnce([{ locked: false }]);
+
+    const result = await beginDeviceSync(actor, "ic-cielo", "CIELO");
+
+    expect(result).toEqual({ alreadyRunning: true });
+    expect(tx.integrationSyncLog.findFirst).not.toHaveBeenCalled();
+    expect(tx.integrationSyncLog.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses to start a second sync when a fresh RUNNING row already exists", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.integrationConnection.findUnique).mockResolvedValueOnce({
+      id: "ic-cielo",
+      provider: "CIELO",
+    } as never);
+    vi.mocked(tx.$queryRaw).mockResolvedValueOnce([{ locked: true }]);
+    vi.mocked(tx.integrationSyncLog.findFirst).mockResolvedValueOnce({
+      id: "log-existing",
+      startedAt: new Date(), // just started — well within the staleness window
+    } as never);
+
+    const result = await beginDeviceSync(actor, "ic-cielo", "CIELO");
+
+    expect(result).toEqual({ alreadyRunning: true });
+    expect(tx.integrationSyncLog.update).not.toHaveBeenCalled();
+    expect(tx.integrationSyncLog.create).not.toHaveBeenCalled();
+  });
+
+  it("closes out a stale RUNNING row (older than 5 minutes) as FAILED, then proceeds with a new sync", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.integrationConnection.findUnique).mockResolvedValueOnce({
+      id: "ic-august",
+      provider: "AUGUST",
+    } as never);
+    vi.mocked(tx.$queryRaw).mockResolvedValueOnce([{ locked: true }]);
+    vi.mocked(tx.integrationSyncLog.findFirst).mockResolvedValueOnce({
+      id: "log-stale",
+      startedAt: new Date(Date.now() - 10 * 60 * 1000), // 10 minutes ago — stale
+    } as never);
+    vi.mocked(tx.integrationSyncLog.create).mockResolvedValueOnce({
+      id: "log-new",
+    } as never);
+
+    const result = await beginDeviceSync(actor, "ic-august", "AUGUST");
+
+    expect(tx.integrationSyncLog.update).toHaveBeenCalledWith({
+      where: { id: "log-stale" },
+      data: expect.objectContaining({
+        status: "FAILED",
+        errorMessage: expect.stringContaining("terminated unexpectedly"),
+      }),
+    });
+    expect(tx.integrationSyncLog.create).toHaveBeenCalled();
+    expect(result).toEqual({ logId: "log-new", alreadyRunning: false });
+  });
+
+  it("refuses when the connection id's actual provider doesn't match the expected provider", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.integrationConnection.findUnique).mockResolvedValueOnce({
+      id: "ic-cielo",
+      provider: "CIELO",
+    } as never);
+
+    const result = await beginDeviceSync(actor, "ic-cielo", "AUGUST");
+
+    expect(result).toEqual({ wrongConnection: true });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the connection id doesn't exist", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.integrationConnection.findUnique).mockResolvedValueOnce(
+      null,
+    );
+
+    const result = await beginDeviceSync(actor, "missing-id", "AUGUST");
+
+    expect(result).toEqual({ wrongConnection: true });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("denies starting a sync and performs no writes when the actor lacks integrations:update", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(
+      beginDeviceSync(actor, "ic-august", "AUGUST"),
+    ).rejects.toThrow();
+    expect(prisma.integrationSyncLog.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("finishDeviceSync", () => {
+  it("updates the same log row to SUCCEEDED and marks the connection CONNECTED with lastSyncedAt", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.integrationSyncLog.update).mockResolvedValueOnce({
+      id: "log-1",
+      integrationConnectionId: "ic-august",
+    } as never);
+
+    await finishDeviceSync(actor, "log-1", {
       status: "SUCCEEDED",
       recordsProcessed: 3,
     });
 
     expect(assertPermission).toHaveBeenCalledWith(actor, "integrations:update");
-    expect(prisma.integrationSyncLog.create).toHaveBeenCalledWith({
+    expect(prisma.integrationSyncLog.update).toHaveBeenCalledWith({
+      where: { id: "log-1" },
       data: expect.objectContaining({
-        integrationConnectionId: "ic-august",
-        direction: "INBOUND",
-        entityType: "SmartDevice",
         status: "SUCCEEDED",
         recordsProcessed: 3,
         errorMessage: null,
@@ -159,20 +310,21 @@ describe("recordIntegrationSync", () => {
     });
   });
 
-  it("logs a FAILED sync with the error message and does not mark the connection connected", async () => {
+  it("updates the same log row to FAILED with the error message and does not mark the connection connected", async () => {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
-    vi.mocked(prisma.integrationConnection.upsert).mockResolvedValueOnce({
-      id: "ic-cielo",
+    vi.mocked(prisma.integrationSyncLog.update).mockResolvedValueOnce({
+      id: "log-2",
+      integrationConnectionId: "ic-cielo",
     } as never);
 
-    await recordIntegrationSync(actor, "CIELO", {
+    await finishDeviceSync(actor, "log-2", {
       status: "FAILED",
       errorMessage: "Cielo login failed: bad credentials",
     });
 
-    expect(prisma.integrationSyncLog.create).toHaveBeenCalledWith({
+    expect(prisma.integrationSyncLog.update).toHaveBeenCalledWith({
+      where: { id: "log-2" },
       data: expect.objectContaining({
-        integrationConnectionId: "ic-cielo",
         status: "FAILED",
         recordsProcessed: 0,
         errorMessage: "Cielo login failed: bad credentials",
@@ -181,18 +333,18 @@ describe("recordIntegrationSync", () => {
     expect(prisma.integrationConnection.update).not.toHaveBeenCalled();
   });
 
-  it("denies recording and performs no writes when the actor lacks integrations:update", async () => {
+  it("denies finishing a sync and performs no writes when the actor lacks integrations:update", async () => {
     vi.mocked(assertPermission).mockRejectedValueOnce(
       new Error("ForbiddenError"),
     );
 
     await expect(
-      recordIntegrationSync(actor, "AUGUST", {
+      finishDeviceSync(actor, "log-1", {
         status: "SUCCEEDED",
         recordsProcessed: 1,
       }),
     ).rejects.toThrow();
-    expect(prisma.integrationSyncLog.create).not.toHaveBeenCalled();
+    expect(prisma.integrationSyncLog.update).not.toHaveBeenCalled();
   });
 });
 

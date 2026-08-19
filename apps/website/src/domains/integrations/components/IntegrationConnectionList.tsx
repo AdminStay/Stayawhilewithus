@@ -6,8 +6,9 @@ import {
   syncCieloDevicesAction,
 } from "../actions";
 import { PROVIDER_CLIENT_STATUS } from "../services/integrations.service";
-
 import type { IntegrationConnection } from "../services/integrations.service";
+
+import { SyncNowButton } from "./SyncNowButton";
 
 /** Only these two providers currently have a real, credential-gated device sync — see smart-devices.service.ts. Every other "real" provider (Notion, OwnerRez, Slack, Asana) is read-only-on-render, with nothing to trigger from this page. */
 const SYNC_ACTIONS = {
@@ -67,6 +68,11 @@ export function IntegrationConnectionList({
             <p className="mt-3 text-xs text-ink-muted">
               Last synced {formatDate(c.lastSyncedAt)}
             </p>
+            {c.syncLogs[0]?.status === "FAILED" && (
+              <p className="mt-0.5 text-xs text-error-500">
+                Last attempt failed {formatDate(c.syncLogs[0].startedAt)}
+              </p>
+            )}
 
             {c.syncLogs.length > 0 && (
               <ul className="mt-2 space-y-0.5 border-t border-border pt-2 text-xs text-ink-faint">
@@ -81,18 +87,10 @@ export function IntegrationConnectionList({
 
             <div className="mt-4 space-y-2">
               {c.provider in SYNC_ACTIONS && (
-                <form
+                <SyncNowButton
+                  connectionId={c.id}
                   action={SYNC_ACTIONS[c.provider as keyof typeof SYNC_ACTIONS]}
-                >
-                  <Button
-                    type="submit"
-                    variant="primary"
-                    size="sm"
-                    className="w-full"
-                  >
-                    Sync now
-                  </Button>
-                </form>
+                />
               )}
 
               {c.status !== "DISCONNECTED" && (
