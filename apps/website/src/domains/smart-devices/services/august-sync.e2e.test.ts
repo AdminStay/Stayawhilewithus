@@ -156,4 +156,22 @@ describe("August end-to-end: raw API response -> AugustClient -> syncAugustDevic
     expect(mockRequest).toHaveBeenCalledTimes(1);
     expect(prisma.smartDevice.upsert).not.toHaveBeenCalled();
   });
+
+  it("never calls deleteMany, through the full real-client path, regardless of how many locks the provider returns (regression: this class of call is what deleted real Cielo device rows in production)", async () => {
+    setConfigured({ "house-1": "property-ridge" });
+    mockRequest.mockResolvedValueOnce({
+      "lock-front": { LockName: "Front Door", HouseID: "house-1" },
+    });
+    mockRequest.mockResolvedValueOnce({
+      LockID: "lock-front",
+      LockName: "Front Door",
+      HouseID: "house-1",
+      battery: 0.85,
+      Bridge: { operative: true, status: { current: "online" } },
+    });
+
+    await syncAugustDevices(actor);
+
+    expect(prisma.smartDevice.deleteMany).not.toHaveBeenCalled();
+  });
 });

@@ -180,4 +180,31 @@ describe("Cielo end-to-end: raw API response -> CieloClient -> syncCieloDevices 
     );
     expect(prisma.smartDevice.upsert).not.toHaveBeenCalled();
   });
+
+  it("never calls deleteMany, through the full real-client path, regardless of how many devices the provider returns (regression: this is exactly the path that deleted the real Ocean Pearl/Miramar Bliss rows in production)", async () => {
+    process.env.CIELO_USERNAME = "owner@example.com";
+    process.env.CIELO_PASSWORD = "hunter2";
+    process.env.CIELO_PROPERTY_MAP = JSON.stringify({
+      "aa:bb:cc": "property-ridge",
+    });
+
+    mockRequest.mockResolvedValueOnce(LOGIN_SUCCESS);
+    mockRequest.mockResolvedValueOnce({
+      status: 200,
+      message: "SUCCESS",
+      data: {
+        listDevices: [
+          {
+            deviceName: "Living Room",
+            macAddress: "aa:bb:cc",
+            deviceStatus: 1,
+          },
+        ],
+      },
+    });
+
+    await syncCieloDevices(actor);
+
+    expect(prisma.smartDevice.deleteMany).not.toHaveBeenCalled();
+  });
 });

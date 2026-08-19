@@ -196,7 +196,7 @@ describe("syncAugustDevices", () => {
     );
   });
 
-  it("prunes stale rows (demo or previously-synced) not present in this sync, but never wipes everything on an empty fetch", async () => {
+  it("never deletes anything, even on a completely empty fetch (regression: pruneStaleDevices used to hard-delete on this exact path)", async () => {
     setConfigured();
     process.env.AUGUST_PROPERTY_MAP = JSON.stringify({});
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
@@ -204,6 +204,82 @@ describe("syncAugustDevices", () => {
 
     await syncAugustDevices(actor);
 
+    expect(prisma.smartDevice.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("never deletes anything when the provider returns fewer devices than a prior sync would have known about (the exact scenario that caused real Cielo data loss)", async () => {
+    setConfigured();
+    process.env.AUGUST_PROPERTY_MAP = JSON.stringify({
+      "house-1": "property-1",
+    });
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    // Only one lock returned this run — simulates a provider account that
+    // used to have more locks visible to it.
+    mockListLocks.mockResolvedValueOnce([
+      { id: "lock-1", name: "Front Door", houseId: "house-1" },
+    ]);
+    mockGetLockDetail.mockResolvedValueOnce({
+      id: "lock-1",
+      name: "Front Door",
+      houseId: "house-1",
+      batteryLevel: 90,
+      online: true,
+    });
+
+    const result = await syncAugustDevices(actor);
+
+    expect(result.synced).toBe(1);
+    expect(prisma.smartDevice.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("excludes a lock ID listed in AUGUST_EXCLUDED_LOCK_IDS — it never reaches the upsert call and never becomes a SmartDevice", async () => {
+    setConfigured();
+    process.env.AUGUST_PROPERTY_MAP = JSON.stringify({
+      "house-1": "property-1",
+    });
+    process.env.AUGUST_EXCLUDED_LOCK_IDS = JSON.stringify(["lock-bridge"]);
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListLocks.mockResolvedValueOnce([
+      { id: "lock-bridge", name: "Bridge", houseId: "house-1" },
+    ]);
+
+    const result = await syncAugustDevices(actor);
+
+    expect(result).toEqual({ synced: 0, skippedExternalIds: [] });
+    expect(mockGetLockDetail).not.toHaveBeenCalled();
+    expect(prisma.smartDevice.upsert).not.toHaveBeenCalled();
+    delete process.env.AUGUST_EXCLUDED_LOCK_IDS;
+  });
+
+  it("a failure partway through the loop does not erase or delete devices already synced earlier in the same run", async () => {
+    setConfigured();
+    process.env.AUGUST_PROPERTY_MAP = JSON.stringify({
+      "house-1": "property-1",
+      "house-2": "property-2",
+    });
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListLocks.mockResolvedValueOnce([
+      { id: "lock-1", name: "Front Door", houseId: "house-1" },
+      { id: "lock-2", name: "Back Door", houseId: "house-2" },
+    ]);
+    mockGetLockDetail
+      .mockResolvedValueOnce({
+        id: "lock-1",
+        name: "Front Door",
+        houseId: "house-1",
+        batteryLevel: 90,
+        online: true,
+      })
+      .mockRejectedValueOnce(new Error("August API request failed"));
+
+    await expect(syncAugustDevices(actor)).rejects.toThrow(
+      "August API request failed",
+    );
+
+    // lock-1 was already upserted before lock-2's failure — that write
+    // isn't undone, and nothing was ever deleted as a result of the
+    // failure.
+    expect(prisma.smartDevice.upsert).toHaveBeenCalledTimes(1);
     expect(prisma.smartDevice.deleteMany).not.toHaveBeenCalled();
   });
 });
@@ -260,5 +336,71 @@ describe("syncCieloDevices", () => {
         }),
       }),
     );
+  });
+
+  it("never deletes a mapped device that the provider stops returning (regression: this exact case deleted the real Ocean Pearl/Miramar Bliss SmartDevice rows in production)", async () => {
+    process.env.CIELO_USERNAME = "user@example.com";
+    process.env.CIELO_PASSWORD = "hunter2";
+    process.env.CIELO_PROPERTY_MAP = JSON.stringify({
+      "aa:bb:cc": "property-2",
+      "dd:ee:ff": "property-3",
+    });
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    // Only one of the two mapped devices comes back this run.
+    mockListDevices.mockResolvedValueOnce([
+      { id: "aa:bb:cc", name: "Living Room", online: true },
+    ]);
+
+    const result = await syncCieloDevices(actor);
+
+    expect(result.synced).toBe(1);
+    expect(prisma.smartDevice.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("an intentionally unmapped device (no entry in CIELO_PROPERTY_MAP) never becomes a SmartDevice, even though the provider still returns it", async () => {
+    process.env.CIELO_USERNAME = "user@example.com";
+    process.env.CIELO_PASSWORD = "hunter2";
+    process.env.CIELO_PROPERTY_MAP = JSON.stringify({
+      "aa:bb:cc": "property-2",
+    });
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListDevices.mockResolvedValueOnce([
+      { id: "aa:bb:cc", name: "Living Room", online: true },
+      { id: "ff:ff:ff", name: "Personal Residence", online: true },
+    ]);
+
+    const result = await syncCieloDevices(actor);
+
+    expect(result).toEqual({ synced: 1, skippedExternalIds: ["ff:ff:ff"] });
+    expect(prisma.smartDevice.upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.smartDevice.upsert).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ externalDeviceId: "ff:ff:ff" }),
+      }),
+    );
+  });
+
+  it("a Prisma failure partway through the loop does not delete or erase devices already synced earlier in the same run", async () => {
+    process.env.CIELO_USERNAME = "user@example.com";
+    process.env.CIELO_PASSWORD = "hunter2";
+    process.env.CIELO_PROPERTY_MAP = JSON.stringify({
+      "aa:bb:cc": "property-2",
+      "dd:ee:ff": "property-3",
+    });
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListDevices.mockResolvedValueOnce([
+      { id: "aa:bb:cc", name: "Living Room", online: true },
+      { id: "dd:ee:ff", name: "Bedroom", online: true },
+    ]);
+    vi.mocked(prisma.smartDevice.upsert)
+      .mockResolvedValueOnce({} as never)
+      .mockRejectedValueOnce(new Error("Database connection lost"));
+
+    await expect(syncCieloDevices(actor)).rejects.toThrow(
+      "Database connection lost",
+    );
+
+    expect(prisma.smartDevice.upsert).toHaveBeenCalledTimes(2);
+    expect(prisma.smartDevice.deleteMany).not.toHaveBeenCalled();
   });
 });

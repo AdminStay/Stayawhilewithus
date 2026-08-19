@@ -81,25 +81,6 @@ function parseExcludedLockIds(raw: string | undefined): Set<string> {
 }
 
 /**
- * Deletes SmartDevice rows for this provider that weren't in the set the
- * provider just returned — covers both the seeded demo rows (which have
- * externalDeviceIds like "demo-august-...", never returned by a real
- * account) and locks/devices genuinely removed from the account since the
- * last sync. Guarded against an empty `keepIds`: a sync that legitimately
- * returned zero devices (network blip, empty account) should never be
- * treated as "delete everything."
- */
-async function pruneStaleDevices(
-  provider: "AUGUST" | "CIELO",
-  keepExternalIds: string[],
-): Promise<void> {
-  if (keepExternalIds.length === 0) return;
-  await prisma.smartDevice.deleteMany({
-    where: { provider, externalDeviceId: { notIn: keepExternalIds } },
-  });
-}
-
-/**
  * Real sync against the account authenticated via AUGUST_IDENTIFIER /
  * AUGUST_INSTALL_ID / AUGUST_ACCESS_TOKEN (see
  * packages/integrations/src/august/README.md for how those are obtained —
@@ -175,10 +156,31 @@ export async function syncAugustDevices(
     synced++;
   }
 
-  await pruneStaleDevices(
-    "AUGUST",
-    locks.map((l) => l.id),
-  );
+  /**
+   * Deliberately no pruning of SmartDevice rows missing from `locks`. This
+   * used to hard-delete any row not in the current run's response — real,
+   * confirmed data loss the moment a provider account temporarily stops
+   * returning a device it still owns (a Cielo sync did exactly this: two
+   * real thermostats vanished from the account's API response for reasons
+   * external to StayWhile, and the deleted call here removed their rows on
+   * the very next sync, cascading away any SmartDeviceEvent history too via
+   * that table's onDelete: Cascade).
+   *
+   * A device not returned by a sync is simply never touched — its row,
+   * propertyId, status, lastSeenAt, and history stay exactly as last
+   * reported, so it keeps showing on /locks with its last known state
+   * instead of silently disappearing. There's no existing
+   * SmartDeviceStatus value that can represent "not returned by the latest
+   * sync" without conflating it with a real provider-reported OFFLINE
+   * signal — a dedicated status would need a schema change, not made here
+   * without explicit sign-off. Real tradeoff, stated plainly: a device
+   * that's genuinely, permanently retired now lingers indefinitely with
+   * stale data — there is no automatic cleanup path, deliberately, since
+   * classifying a missing device as "removed" is a decision only a human
+   * should make, not an automatic side effect of a sync. That decision
+   * point belongs in the ProviderDevice architecture's admin-driven
+   * unmap/disable flow (not built yet).
+   */
 
   return { synced, skippedExternalIds: skipped };
 }
@@ -241,10 +243,11 @@ export async function syncCieloDevices(
     synced++;
   }
 
-  await pruneStaleDevices(
-    "CIELO",
-    devices.map((d) => d.id),
-  );
+  // Deliberately no pruning of devices missing from `devices` — see
+  // syncAugustDevices' matching comment above for the full reasoning. This
+  // is exactly the case that caused real data loss for two real Cielo
+  // thermostats (Ocean Pearl, Miramar Bliss) when they temporarily stopped
+  // appearing in the account's API response.
 
   return { synced, skippedExternalIds: skipped };
 }
@@ -261,4 +264,58 @@ export function getBatteryLevel(
 export function isLowBattery(device: Pick<SmartDevice, "metadata">): boolean {
   const level = getBatteryLevel(device);
   return level !== null && level < LOW_BATTERY_THRESHOLD;
+}
+
+/**
+ * Thermostat readings (temperature/setpoint/mode/humidity) are read the
+ * same way battery is — from SmartDevice.metadata, since not every provider
+ * reports every field. No current provider's sync function writes any of
+ * these yet (CieloClient.listDevices() only returns name/online), so these
+ * will honestly return null — rendered as "—" — until a provider that
+ * reports them is actually synced. Never fabricated.
+ */
+export function getCurrentTemperature(
+  device: Pick<SmartDevice, "metadata">,
+): number | null {
+  const metadata = device.metadata as Record<string, unknown> | null;
+  const value = metadata?.currentTemperature;
+  return typeof value === "number" ? value : null;
+}
+
+export function getTargetTemperature(
+  device: Pick<SmartDevice, "metadata">,
+): number | null {
+  const metadata = device.metadata as Record<string, unknown> | null;
+  const value = metadata?.targetTemperature;
+  return typeof value === "number" ? value : null;
+}
+
+export function getMode(device: Pick<SmartDevice, "metadata">): string | null {
+  const metadata = device.metadata as Record<string, unknown> | null;
+  const value = metadata?.mode;
+  return typeof value === "string" ? value : null;
+}
+
+export function getHumidity(
+  device: Pick<SmartDevice, "metadata">,
+): number | null {
+  const metadata = device.metadata as Record<string, unknown> | null;
+  const value = metadata?.humidity;
+  return typeof value === "number" ? value : null;
+}
+
+const PROVIDER_DISPLAY_NAMES: Partial<Record<SmartDevice["provider"], string>> =
+  {
+    AUGUST: "August",
+    YALE: "Yale",
+    CIELO: "Cielo",
+    NEST: "Nest",
+    ECOBEE: "Ecobee",
+    HONEYWELL: "Honeywell",
+  };
+
+export function getProviderDisplayName(
+  device: Pick<SmartDevice, "provider">,
+): string {
+  return PROVIDER_DISPLAY_NAMES[device.provider] ?? device.provider;
 }
