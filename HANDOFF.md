@@ -12,6 +12,122 @@
 
 ---
 
+# ⚠️ Standing Architecture Requirement — Dynamic, Dashboard-Configurable Integrations (read before touching ANY integration)
+
+**Set 2026-08-19 by Kenny, via the user — a hard architecture requirement, not a preference.** Applies to every current and future device/data integration: August, Cielo, Nest, Honeywell/Resideo, Ecobee, and (flagged for the same treatment, not yet actioned) OwnerRez/Notion property associations.
+
+- **Production device↔property mappings must NOT be hard-coded in source/env config.** `AUGUST_PROPERTY_MAP` and `CIELO_PROPERTY_MAP` (both real, live, currently working — see Increments 19–21) are **legacy/bootstrap behavior that needs to migrate to database-backed, dashboard-managed configuration** — they are not being ripped out today, and they are not "wrong" for having gotten August/Cielo live, but they are not the target end state and must not be extended.
+- **Do NOT create `NEST_PROPERTY_MAP`, `HONEYWELL_PROPERTY_MAP`, `ECOBEE_PROPERTY_MAP`, or any similarly-shaped hard-coded env-var mapping for a new provider.** This directly supersedes Increment 27's original recommendation (§"Exact code/schema changes recommended", item 4) to extend the exact `*_PROPERTY_MAP` pattern to new providers — that recommendation is now wrong and should not be followed.
+- **Target end state**: admins can, from the dashboard alone, with no code change or redeploy — discover devices a connected provider account can see, map/unmap them to properties, change an existing mapping, enable/disable an integration or an individual device, control sync settings (on/off, frequency), and see sync/error status. This is a real schema + UI body of work (likely a `SmartDeviceMapping`/config table plus admin UI), **not yet designed or built** — do not assume any of it exists.
+- **Device mapping changes must be RBAC-controlled and auditable** — same standard as every other write path in this app (`assertPermission` + `recordAudit`, per `packages/auth`/`platform/audit` conventions already used everywhere else).
+- **No automatic name-based device↔property matching, ever.** An admin must explicitly confirm every mapping — this is the same standing rule already in force for August/Cielo/OwnerRez/Notion (see `feedback_notion_ownerrez_read_only_safety` memory and every prior increment's mapping work), now explicitly generalized to apply to the _mechanism_ (a confirmation UI), not just to this session's manual chat-based confirmations.
+- **Why provider registrations (Honeywell/Resideo developer account, Ecobee SmartBuildings request) are happening at all despite this**: they are for obtaining official, secure **API authorization** — a prerequisite to discovering devices at all, dynamically, through the provider's own API. They are explicitly **not** an indication that any device/property pairing will be hard-coded. The eventual real architecture is: provider authorization (OAuth/API key, however each provider requires it) → dynamic device discovery via that provider's API → admin reviews discovered devices in the dashboard → admin explicitly confirms each mapping → mapping is stored in the database, editable/revocable from the dashboard going forward.
+- **Sequencing note**: this requirement governs the _target_ architecture. It does not retroactively block anything already live (August/Cielo keep working exactly as they do today) and does not block the in-progress provider-authorization steps for Honeywell/Ecobee (getting API access is a separate, still-needed prerequisite regardless of how mapping is eventually stored). It does mean: when real Nest/Honeywell/Ecobee sync code is eventually written, it must NOT copy the `*_PROPERTY_MAP` env-var pattern — that design conversation (schema + admin UI) needs to happen first, as its own piece of work.
+
+See also the dedicated cross-session memory `project_dynamic_integration_config` for this requirement, and `project_thermostat_provider_expansion` for the per-provider status this interacts with.
+
+---
+
+# 🔖 Continuation Checkpoint — 2026-08-21 (READ THIS FIRST)
+
+**Read this section before anything else in this file.** It is a self-contained snapshot of the current project state so a new session doesn't need to read all 37 increments below to continue safely. Full historical detail for anything summarized here is in `## Increment 33` through `## Increment 37`.
+
+## Completed and deployed as of 2026-08-20/21
+
+All of the following are shipped, verified (`lint`/`typecheck`/tests/`build` all green each time), and deployed to production (`stayawhilewithus-website.vercel.app`, health-checked via `/api/health` + `/sign-in` returning 200 after each deploy):
+
+| Commit    | What                                                                                                                                                                                                                                                                                                                                                                                       |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `52890d9` | Sync Now fix: connectionId-scoped, race-safe (two-key Postgres advisory lock), stale-RUNNING self-heal, clear UI states                                                                                                                                                                                                                                                                    |
+| `bc37897` | Fixed real data-loss bug: `pruneStaleDevices()` was hard-deleting `SmartDevice` rows a provider temporarily stopped returning — removed the delete entirely (both August and Cielo). Confirmed this had already deleted 2 real Cielo rows (Ocean Pearl, Miramar Bliss thermostats) before the fix landed — recovery options were reported, nothing has been restored, no decision made yet |
+| `13cea96` | Fixed false-Offline classification for August locks lacking a `Bridge` object — added tri-state `UNKNOWN` to `SmartDeviceStatus` (additive migration, `ALTER TYPE ... ADD VALUE`)                                                                                                                                                                                                          |
+| `8dbebae` | Exposed the read-only `/thermostats` page under Locks in the sidebar                                                                                                                                                                                                                                                                                                                       |
+| `0f2ffc7` | Fixed Thermostats "Last synced" to read `updatedAt` (not `lastSeenAt`) and added a separate "Last telemetry" column, matching Locks' existing pattern                                                                                                                                                                                                                                      |
+
+## August Locks — current state
+
+- **44 locks discovered total: 7 original + 37 newly discovered** (Michelle added more locks to the authorized account specifically to stress-test connectivity logic against a bigger fleet).
+- **Verified connectivity logic** (`deriveConnectivity()` in `packages/integrations/src/august/client.ts`): tri-state `ONLINE` / `OFFLINE` / `UNKNOWN` — `Bridge` object absent → `UNKNOWN` (never `OFFLINE`, this was the bug); `Bridge` present + no status + operative → `ONLINE`; `Bridge` present + `status.current === "online"` → `ONLINE`; else `OFFLINE`. Validated empirically against the full 44-lock fleet, not just the original 7 — **no further connectivity-logic change needed**, explicit user decision.
+- **Telemetry/stale-device behavior**: `isTelemetryStale()` flags any device whose `telemetryUpdatedAt` is >24h old (threshold derived from real observed data — normal cadence is 2–4h, one genuine outlier was ~46h). Stale telemetry is its own "Attention needed" signal, separate from connectivity — never counted as Offline, never hidden.
+- **New devices must NOT be manually hard-coded into `AUGUST_PROPERTY_MAP`.** All 37 newly discovered locks are deliberately left unmapped/discovered-only — no `SmartDevice` rows created for them yet. This is the standing architecture requirement (see the banner near the top of this file) — hard-coded env-var mappings are legacy/bootstrap only, not to be extended.
+- **`ProviderDevice`/admin-mapping requirement**: designed extensively (staging table for discovered devices independent of `SmartDevice`, `integrationConnectionId`-scoped, `onDelete: Restrict`, admin-owned fields never touched by sync) but **not yet built**. Blocked behind OwnerRez property sync landing first — see priority order below.
+- **Michelle's requirement for eventual lock access-code (PIN) management**: recorded, not started. **No unsafe lock/write controls (lock/unlock, PIN create/update/delete) should be implemented until the actual August API write capability is independently verified** — currently only read access to the `pins` array is confirmed; write capability is unverified. Standing rule, applies to every provider, not just August.
+
+## Thermostats — current state
+
+- `/thermostats` page + sidebar navigation (under Locks) — live, read-only, real `SmartDevice` data only, no fabricated values.
+- **Cielo**: real HTTP client, returns `{id, name, online}` only — no temperature/target/mode/humidity/telemetry-timestamp data available from this provider today. Fields the UI can't get from Cielo honestly render "—", never invented.
+- **Timestamp fix shipped** (`0f2ffc7`, see table above).
+- **Honeywell/Resideo**: developer/API registration submitted, **awaiting approval** — external blocker, not a coding task right now.
+- **Ecobee SmartBuildings**: registration/API access **pending** — external blocker (account/API approval, possibly payment), not a coding task right now.
+- **Nest**: connected (Increment 31) — OAuth working, 33 devices discovered via SDM API read-only. Not yet wired into `/thermostats` display (that would need the same `ProviderDevice`/mapping work as August).
+- **Eventual thermostat management/control** (setpoint changes, mode changes): recorded as a future requirement, **not started**, gated behind independently verifying each provider's write-capability, same standing rule as lock control.
+
+## OwnerRez audit — findings (Increment 37, read-only, nothing implemented)
+
+- **Real integration confirmed**: `OwnerrezClient` makes genuine HTTP calls (Basic Auth) for `connect`/`disconnect`/`authenticate`/`healthCheck`/`validateCredentials`/`listProperties`/`listBookings`/`getGuest`/`sync("INBOUND")`. Only `receiveWebhook()` is stubbed (undocumented payload shape).
+- **20 active properties** confirmed live against the real account (checked 2026-08-20, single page, no pagination needed).
+- **Endpoints implemented**: `GET /properties`, `GET /bookings` (+ `since_utc`), `GET /guests/{id}`.
+- **Bookings currently reach the dashboard** (5-item read-only "upcoming" preview) — **property data does not reach the dashboard at all**. Nothing OwnerRez-sourced is ever written to the database.
+- **`Property.ownerRezPropertyId` already exists in the schema and is completely unused** — zero reads or writes anywhere in the codebase outside its own definition.
+- **No schema/migration is currently required** — that column is ready to receive confirmed mappings as-is.
+- **Matching findings**: OwnerRez's real field set (`id`, `key`, `internal_code`, `name`, full address, `bedrooms`, `bathrooms*`, `max_guests`, `property_type`, `time_zone`, lat/long, etc.) maps closely to StayWhile's `Property` model. Checked against the **local dev DB only** (no production DB connection this session): of 7 real (non-demo) local `Property` rows, only 2 are exact name/internal_code matches (Ocean Pearl, Bonjour AMI), 1 is close-but-not-exact (Miramar Bliss), 4 have no OwnerRez counterpart at all — **17 of the 20 real OwnerRez properties have no matching StayWhile row in local dev.** This is exactly why matching must stay human-confirmed, never automatic.
+- **No automatic matching or writes have been performed** — this was audit-only. No `ownerRezPropertyId` value has been set on any row.
+- **Intended end state**: OwnerRez becomes the **authoritative read-only property source** for the dashboard — StayWhile never writes back to OwnerRez, properties are no longer created one-by-one by hand once this lands.
+
+## Vercel status
+
+- **OwnerRez Production credentials still need verification** — whether `OWNERREZ_USERNAME`/`OWNERREZ_API_TOKEN` exist (names only, never values) in Vercel Production is **unconfirmed**.
+- **Vercel CLI authorization/isolation issue, unresolved**: this session's Vercel CLI has no stored auth token (`~/Library/Application Support/com.vercel.cli/config.json` has no `token` key) and no `.vercel/project.json` is linked in this repo. Every attempt to run `vercel whoami`/`vercel env ls` hangs on an interactive browser login that could not be completed from this session — genuinely blocked, not yet resolved.
+- **⚠️ IMPORTANT — this machine is used for multiple clients.** StayWhile's Vercel account/project must remain strictly isolated from every other client's Vercel account/project.
+  - **Never inspect, link, modify, deploy, or access another client's Vercel project while working in this repo.**
+  - **Before using the Vercel CLI for anything**, verify (1) which account/team it's authenticated to, and (2) that the linked project is specifically `stayawhilewithus-website` — **in that order, before any other Vercel command runs.**
+  - Once (1) and (2) are both confirmed, only check environment variable **names** (never values) — never modify a variable, never deploy, as part of this check.
+
+## Second client meeting — priorities (preserved as explicit client requirements)
+
+- **Homepage**: August lock summary (connectivity + low battery front and center), thermostat status summary, daily check-ins/check-outs, Rescheduled Cleanings moved higher up alongside the morning operational items (already shipped, see commit `086c577`). **ADR and Revenue stay in the sidebar and OFF the homepage for now.**
+- **Fully connect OwnerRez** — real property portfolio → StayWhile database/dashboard (see plan below).
+- **Fully connect Notion**:
+  - Dashboard keyword search of authorized Notion content, real results only, no demo data.
+  - Surface/use Notion information through the dashboard (not just "Connected" status).
+  - Automated monthly Notion backup (currently done manually by the team) — needs design: what's backed up, where it's stored, timestamp/version naming, retention, failure reporting, how the schedule runs while n8n availability is unresolved.
+  - Notify/flag when relevant Notion pages are altered, archived, or deleted — **verify actual Notion API capability first**, don't promise real-time events the API doesn't support.
+
+## Pending provider/API blockers (external, not coding tasks)
+
+- **Honeywell/Resideo**: developer/API registration awaiting approval.
+- **Ecobee SmartBuildings**: registration/API process awaiting verification/approval (possibly payment).
+- **August**: account now exposes the expanded 44-lock inventory — no blocker, just more data to eventually map.
+- **n8n**: remains a separate background-automation issue (availability unresolved) — **must not block direct dashboard integrations** (OwnerRez, Notion) which don't depend on it.
+
+## Exact next priority order
+
+1. **Safely verify OwnerRez environment-variable presence in Vercel Production** — only after confirming the correct StayWhile account/team/project (see Vercel status above). Names only, no values, no changes.
+2. **Implement the approved OwnerRez property integration**: real provider data, explicit admin-reviewed mapping UI, no guessed matches, preserve existing `Property` IDs where a match is explicitly confirmed, prevent duplicates, surface unmatched properties (both directions) for admin review. Read-only against OwnerRez — never write back to it.
+3. **Fully connect Notion** per the second-meeting requirements above.
+4. **`ProviderDevice`/admin-mapping** for discovered devices (the 37 unmapped August locks, the 33 discovered Nest thermostats) and remaining smart-device work.
+5. Continue remaining second-meeting dashboard priorities afterward.
+
+## Uncommitted worktree state (as of 2026-08-21)
+
+Run `git status` to confirm current state before doing anything. As of this checkpoint:
+
+- **This session's own work**: `HANDOFF.md` (this checkpoint) — everything else this session touched (`ThermostatsList.tsx`, the Sync Now / data-loss / UNKNOWN-status / Thermostats-exposure work) is already committed and pushed (see commit table above).
+- **Pre-existing, NOT from this session, do not assume it's related to current work**: `.gitignore`, `apps/website/app/(dashboard)/layout.tsx`, `apps/website/app/(dashboard)/users/page.tsx`, `apps/website/src/domains/users/*` (README, actions, UserList, schema, service + test), `apps/website/src/platform/auth/get-current-user.{ts,test.ts}`, `apps/website/src/platform/identity/sync-clerk-user.{ts,test.ts}`, `apps/website/src/platform/errors.ts`, `apps/website/src/platform/layout/nav-config.ts`, `packages/integrations/src/notion/README.md`, `packages/integrations/src/ownerrez/README.md`, `packages/ui/src/components/Sidebar.tsx` — plus untracked new files: `apps/website/src/domains/users/components/{InviteTeamMemberForm,PendingInvitationsList,RolePermissionsList}.tsx`, `apps/website/src/platform/identity/invite-clerk-user.{ts,test.ts}`. This looks like in-progress team-invite/roles UI work from an earlier session — **do not commit, discard, or build on top of it without first asking the user what state it's in.**
+
+## Standing do-not-do rules (apply across every future session)
+
+- **No guessed property/device mappings, ever** — every mapping requires explicit admin confirmation, no name-based or address-based inference no matter how obvious it looks.
+- **No fake/demo data presented as production data** — if a field isn't available from a real provider, show a neutral placeholder ("—"), never invent a value.
+- **No hard-coding newly discovered devices** into any `*_PROPERTY_MAP`-style env var — that pattern is legacy/bootstrap only and must not be extended.
+- **No secret values in the repo or in HANDOFF.md** — env var names only, never values, never in any doc or commit.
+- **No production writes (database or provider) unless explicitly approved** — read-only by default for all new integration work.
+- **No cross-client account access** — this machine holds multiple clients' credentials/Vercel accounts; verify StayWhile identity before every Vercel action, never touch another client's project.
+- **No device-control actions** (lock/unlock, PIN management, thermostat setpoint/mode changes) **until the specific provider's write capability is independently verified and explicitly authorized** — read-only for all providers until further notice.
+
+---
+
 # Project Status
 
 ## Current Phase
@@ -467,6 +583,358 @@ User requested a dedicated Locks page for the client-testing/feedback phase, in 
 
 The dashboard still cannot be declared "Ready for Michelle and Kenny to test" — `admin@stayawhilewithus.com` hasn't completed its own invitation/login yet, and a full click-through (real email-code login + logout, both user-confirmed, not assumed) hasn't happened since the two bug fixes above landed. See Increment 23's full gate checklist — it still applies unchanged. Do not say the "ready" phrase until every item on it passes.
 
+**Update, same session**: the `/locks` page above was subsequently committed (`5110dfc`) and pushed to `main`, auto-deployed by Vercel, and re-verified — 7 real August locks, 0 demo, matching Supabase directly. No longer "pending approval."
+
+---
+
+## Increment 25 — 2026-08-18 (same day, continued): Integration Sync Controls — client requirement captured, architecture proposed, nothing implemented
+
+New client requirement, relayed by the user: Michelle/Kenny want dashboard data to stay updated automatically, plus a manual "Sync Now" they can trigger anytime, for August, Cielo, OwnerRez, and Notion. Explicitly investigation/planning only this pass — no code written.
+
+**Real discovery, not assumed**: manual sync already exists and works today for August/Cielo — `/integrations`'s `syncAugustDevicesAction()`/`syncCieloDevicesAction()` already call the real sync functions and log outcomes via `recordIntegrationSync()` (updates `IntegrationConnection.lastSyncedAt` on success, logs `IntegrationSyncLog` either way, already shows "Last synced {time}" in the UI). OwnerRez/Notion have no equivalent — both are pure live-read-on-page-render (`getOwnerRezHighlights()`/`getNotionHighlights()`) with no sync/log/button concept at all.
+
+**n8n status, re-checked this session**: MCP not connected (only IFTTT/Slack; n8n needs re-registration, same recurring pattern noted every session in this doc). Per `N8N_DISCOVERY.md` (last live-verified 2026-08-06, not re-confirmed live this pass) and this app's own code, n8n has zero real workflows and — critically — **zero August/Cielo/OwnerRez/Notion credentials**; those only exist in this app's own env vars. n8n cannot run these syncs itself today without credential duplication.
+
+**Two real, concrete gaps found in the existing manual-sync pattern** (relevant to any future implementation):
+
+1. No duplicate-sync prevention — `IntegrationSyncLog.status`'s schema already has a `RUNNING` value and defaults to it, but current code never actually writes a `RUNNING` row at sync start, only `SUCCEEDED`/`FAILED` after the fact. Two rapid clicks (or two people) can run the same sync concurrently today.
+2. `AuthContext` (`packages/auth/src/rbac.ts`) is strictly `{ userId: string }`, tied to a real signed-in `User` — there is no "system" actor. A scheduled/automatic sync (no human clicking) cannot call `assertPermission()` the way manual sync does; it needs a different trust model (recommended: HMAC-signature verification, mirroring the already-existing `/api/webhooks/n8n` inbound route, not an RBAC bypass).
+
+**Proposed architecture** (full detail + reasoning given to the user in chat, not duplicated in full here):
+
+- n8n as scheduler/clock only (native Schedule Trigger → calls a new authenticated inbound app endpoint); app does the actual sync with credentials it already has, reusing existing sync functions. **Flagged as a real open decision, not chosen unilaterally**: Vercel Cron could do the same job without n8n at all, since n8n is otherwise unused — user needs to pick.
+- New `IntegrationConnection` columns: `autoSyncEnabled Boolean @default(false)`, `syncFrequencyMinutes Int?` — additive migration, not yet written.
+- Duplicate-prevention: write `RUNNING` at sync start, check for an existing `RUNNING` row before starting another.
+- Failure handling: extend the existing August/Cielo failure pattern (log `FAILED`, don't touch `lastSyncedAt`, notify admins reusing the `triggerWorkflow()`-failure notification pattern) to OwnerRez/Notion and scheduled runs.
+- Permissions: **no new permission needed** — `integrations:update`/`smart_devices:update` already exist and already cover exactly this (confirmed both `admin` and `ops_manager` already hold them in `seed.ts`).
+- Rate limits/frequency choices: **not documented anywhere in this repo** (checked all 4 providers' READMEs) — genuine external research needed before picking any interval; explicitly not guessed at, per the user's own instruction.
+- UI: `/integrations` gains ON/OFF + frequency controls and Sync Now for OwnerRez/Notion; `/locks` gains a Sync Now button + Last synced line (wiring to the already-existing August sync action). A future Thermostats detail page is out of scope for now (only the homepage tile + `/locks`-equivalent don't exist yet for Cielo) — flagged, not built.
+
+**Explicitly not touched**: OwnerRez/Notion remain strictly read-only (no write path proposed or added), August/Cielo's write capability isn't expanded, no schema/permission change has actually been made yet (the migration above is proposed, not applied), current Michelle/Kenny acceptance-gate priorities are unaffected by this planning work.
+
+**Waiting on the user** to approve the proposed architecture (and decide the n8n-vs-Vercel-Cron scheduling question) before any implementation begins.
+
+### Update — same day: sync-control research finalized; Michelle's production-access blocker found and resolved
+
+Real research replaced the earlier placeholder intervals: **Notion** (official ~3 req/s, [developers.notion.com/reference/request-limits](https://developers.notion.com/reference/request-limits)), **OwnerRez** (official 300 req/5min, [ownerrez.com/support/articles/api-rate-limiting](https://www.ownerrez.com/support/articles/api-rate-limiting)), **Cielo** (no official limit; community reference integration defaults to ~120s), **August** (no official limit, real evidence of throttling under aggressive polling — [home-assistant/core#31472](https://github.com/home-assistant/core/issues/31472)). Proposed minimums: OwnerRez 5min < Cielo 10min < Notion 15min < August 30min (most-permissive to most-conservative, driven by the evidence above, not a single universal interval).
+
+**Vercel confirmed Hobby plan** — its Cron only supports once-per-day scheduling ([vercel.com/docs/cron-jobs/usage-and-pricing](https://vercel.com/docs/cron-jobs/usage-and-pricing)), ruling out Vercel Cron for this feature entirely. Architecture revised: **n8n is the scheduler instead**, via a fixed-cadence Schedule Trigger ("heartbeat") calling a new HMAC-signed inbound route (`/api/webhooks/n8n-sync`, reusing the existing `N8N_INBOUND_WEBHOOK_SHARED_SECRET`/`verifySignature()` — no new crypto), which itself decides which providers are actually due based on their stored `syncFrequencyMinutes`/`lastSyncedAt` — admin frequency changes take effect without touching n8n. **New unknown found, not yet resolved**: n8n Cloud plans have their own execution-count budgets (e.g. Starter ≈2,500/month) which could make a naive 5-minute heartbeat too expensive — **the actual n8n Cloud plan/quota for this account needs the user's confirmation** before the exact heartbeat interval is finalized, same diligence as the Vercel plan check.
+
+System-actor design (a real, dedicated `sync_service` User row + minimal role, never reachable via normal Clerk sign-in, tagged `actorType: "SYSTEM"` in audit logs) and the duplicate-run guard (partial unique index on `IntegrationSyncLog` limiting one `RUNNING` row per connection) carry forward unchanged from the Vercel-Cron version of the plan — only the trigger/authentication mechanism changed.
+
+**Separately, a real production blocker was found and fixed**: Michelle reported never receiving the `admin@stayawhilewithus.com` Clerk invitation and hit "New sign-ups are restricted" after trying to self-register directly (expected behavior for Restricted mode without an invitation link — not a bug). Investigated live before acting: no Clerk User existed yet for that email, the original invitation (`inv_3I3EEePCy8i4Yuvm8tKzMBUiEyp`) was still `pending`/not expired but evidently never delivered or found, and the Supabase row was confirmed fully intact (`ACTIVE`, global `admin`, no property restriction) throughout. Resolved via Clerk's own officially-documented resend pattern (revoke the stale invitation, create a fresh one — verified this is the documented mechanism before using it, per [createInvitation() — Clerk Docs](https://clerk.com/docs/reference/backend/invitations/create-invitation)'s `ignore_existing` behavior). New invitation `inv_3I3dZpH0IlKwlw0Av3W1qzJd5B2` is pending as of this note. Verified after: still zero Clerk users for this email, still exactly one pending invitation, sign-up mode still `restricted` — nothing else touched. **Michelle still needs to check her inbox (including spam) for the new email and use the link in it directly, not the sign-in page** — this is not yet fully resolved until she completes that step and a real login/logout/login round trip is verified.
+
+**This blocker is explicitly part of the Michelle/Kenny acceptance gate** — the gate cannot pass while `admin@stayawhilewithus.com` itself can't log in. Not resolved yet as of this note; check current state before assuming otherwise. **Update, same day**: the resend is complete (Clerk-side); **the gate stays open until Michelle confirms she received the new invitation and successfully activated/logged in** — do not assume this is done without that confirmation.
+
+**n8n scheduling explicitly paused**: n8n Cloud trial expired; Michelle/Kenny informed of the required $24/month upgrade. Do not build or activate production n8n scheduling until they confirm the upgrade — continue non-n8n-dependent work in the meantime (this is what the increment below does).
+
+---
+
+## Increment 26 — 2026-08-18 (same day, continued): Michelle's second feedback pass — two presentation fixes shipped, three investigations completed, nothing else implemented
+
+New feedback from Michelle after reviewing the live dashboard, five threads. n8n-dependent work (sync-control scheduling) stays paused per the upgrade-pending note above; everything below is explicitly non-n8n-dependent, per the user's own prioritization.
+
+### 1. "Departures" → "Check-outs" — shipped, presentation-only
+
+Confirmed presentation-only before touching anything: `departuresToday`/`summary.departuresToday` (variable names, `dashboard.service.ts` computation) are completely unchanged — only visible UI text changed, in `apps/website/src/domains/dashboard/components/DashboardSummary.tsx`: the "Departures today" metric tile → "Check-outs today", the "Today's Arrivals & Departures" section header → "Today's Check-ins & Check-outs", the "Departing today" column heading → "Checking out today", the "No departures today." empty state → "No check-outs today." (`/reservations`' own "Upcoming check-outs" section was already correctly worded — no change needed there). Full suite green (25/25).
+
+### 2. Rescheduled Cleanings — real bug found and fixed, not just cosmetic
+
+Investigated precisely rather than guessing: the section was **conditionally rendered** — `{summary.recentlyRescheduledCleanings.length > 0 && (...)}` wrapped the entire block including its own header, so at zero records the whole section (header included) simply didn't exist in the DOM. This exactly matches Michelle's report — not hidden, not broken data, just designed to disappear at zero, which is exactly what production's current state triggers (0 rescheduled cleanings migrated to Supabase — the one demo rescheduled-cleaning row from local dev was tied to `DEMO-001` and deliberately excluded from the production migration). Confirmed the underlying data source (`listRecentlyRescheduledCleanings(actor)`) is real, not fabricated, before changing anything. Fixed by always rendering the header, with a plain-text empty state ("No rescheduled cleanings.") when the list is empty — mirroring the exact same pattern this file already uses for "Important Tasks" right above it, for visual consistency. Full suite green (25/25).
+
+### 3. Thermostat provider expansion (Cielo + Nest + Honeywell + Ecobee) — investigated, not implemented
+
+**How provider-neutral the existing model already is**: quite neutral at the data/UI layer already — `SmartDeviceProvider` (Prisma enum) **already includes `HONEYWELL`** alongside `YALE`/`AUGUST`/`NEST`/`ECOBEE`/`CIELO` (schema was forward-designed for this), and the homepage's Thermostats tile groups by `deviceType === "THERMOSTAT"` — provider-agnostic by construction, already correctly summing across every connected thermostat provider without any dashboard code change needed once more providers sync real rows. The gap is entirely at the **integration** layer: `IntegrationProvider` enum has no `HONEYWELL` value at all, and there is no `packages/integrations/src/honeywell/` package (Nest and Ecobee already have structural stub packages; Honeywell has neither).
+
+**Per-provider access/API findings** (real research, not assumed):
+
+- **Nest**: official Google Smart Device Management (SDM) API exists, but requires a **mandatory one-time $5 paid registration** in Google's Device Access Console — a real-money action, not just a missing credential (documented in this package's own README from an earlier session).
+- **Ecobee**: official API exists, but auth is a **PIN-based OAuth2 flow** (authorize → PIN → poll for token → refresh) rather than a static key — needs a token-storage/refresh design decision before real code, same complexity class as Gmail (documented in this package's own README from an earlier session).
+- **Honeywell**: official API exists via Resideo's developer portal (`developer.honeywellhome.com`), OAuth2-based (authorization code + client credentials flows), but **developer access requires registration/vetting**, not an instant self-serve key — exact requirements/costs need direct confirmation on Resideo's site before implementation. [Resideo Developer Site](https://developer.honeywellhome.com/)
+
+No credentials requested, no new provider code written, no `IntegrationProvider` enum change made — investigation only, per instruction. A future `/thermostats` detail page (mirroring `/locks`) would trivially show provider per-row once any of these are real, since `SmartDevice.provider` already exists as a field.
+
+### 4. August lock completeness — answered with real, current evidence, not inference
+
+Ran the existing read-only `packages/integrations/src/august/scripts/check.ts` against the live, currently-valid August credentials (token still valid, confirmed working) rather than just describing the code. **Result: the connected August account has exactly 7 locks total, right now** — same 7 lock IDs and same 4 houseIds already present in `AUGUST_PROPERTY_MAP` (Island Tides, Bonjour AMI ×2, Miramar Bliss ×2, Aqua Palm). Zero additional locks, zero additional houseIds beyond what's already mapped and synced. Confirmed from the client code (`GET /users/locks/mine` — "every lock the account has access to," no additional server-side filtering) that this is genuinely the account's complete inventory as returned by August's own API, not a subset silently filtered by StayWhile's own mapping logic. **Conclusion for the client**: these 7 locks are everything currently accessible through the connected credentials — if more locks exist, they belong to a different August account/login not currently connected, and Kenny/Michelle would need to either add those locks to the same connected account, or provide separate credentials for whichever account holds them (the current integration supports exactly one account's credentials, no multi-account support exists).
+
+### 5. n8n
+
+Untouched, as instructed — still paused pending the $24/month upgrade decision.
+
+### Verification
+
+Full monorepo `lint typecheck test build --force` — **25/25 tasks, 0 errors**, both presentation fixes included. Committed (`086c577`, one file only) and pushed same day — see the update below.
+
+### Update — same day: deployed and verified; full status/architecture review completed; no other changes
+
+- **Departures → Check-outs and the Rescheduled Cleanings fix are live in production** — commit `086c577`, deployment `5951237249` succeeded, `/sign-in` and `/api/health` confirmed healthy post-deploy.
+- **Michelle will continue testing tomorrow** — current status, not yet re-confirmed as passing.
+- **August**: still exactly 7 locks on the connected account (re-confirmed unchanged) — waiting on Michelle to confirm whether they expect more; if so, a different August login holds them, not a mapping gap in this integration.
+- **Thermostat scope now explicitly includes Cielo + Nest + Honeywell + Ecobee** per Michelle. Only Cielo is connected/real (5 live rows). Nest/Honeywell/Ecobee are **not connected** — full requirements researched this pass (see below), nothing implemented, no credentials requested.
+- **n8n Cloud trial expired, workflows paused.** Client informed of the required $24/month upgrade. **All automatic-sync/scheduling implementation stays paused** until they confirm the upgrade — this applies to the entire Integration Sync Controls plan from earlier increments, not just new work.
+
+**Thermostat provider requirements researched** (real findings, sources cited in chat, not just repo inspection):
+
+- **Nest**: Google Smart Device Management API. Requires a **mandatory one-time $5** Device Access Console registration (a real-money decision, not just a credential). OAuth2, standard authorization-code flow. Data available: connectivity (online/offline), current temperature, humidity, HVAC mode, fan status. Supports **both** real-time push (Cloud Pub/Sub) and plain polling.
+- **Ecobee**: official API, but **PIN-based OAuth2** (app requests a PIN → owner enters it in their Ecobee account → app polls for the token) — not a standard redirect flow, no token-storage/refresh design exists yet (same complexity class as Gmail, already flagged in an earlier increment). Polling only. Data available: connected status, actual temperature, equipment running status, HVAC mode.
+- **Honeywell (Resideo)**: official OAuth2 API exists (`developer.honeywellhome.com`), but developer access is **vetted/reviewed**, not instant self-serve — exact criteria need direct confirmation during actual implementation. Polling only. Data available: same general shape (online/offline, temperature, mode).
+- All three need a **developer/project registration step**, not just an account password from Michelle/Kenny — worth deciding who registers (likely StayWhile's own side) before any credentials are requested from the client.
+
+**Full homepage architecture reviewed against the original client requirements, classified honestly** (production data re-checked fresh, not assumed):
+
+| Requirement           | Status                                                                                                                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| August lock summary   | 🟢 LIVE — 7 real rows                                                                                                                                                                      |
+| Thermostat summary    | 🟢 LIVE for Cielo (5 real rows) — 🔴 NOT CONNECTED for Nest/Honeywell/Ecobee (tile is already provider-neutral, will absorb them automatically once real rows exist)                       |
+| Today's check-ins     | 🟡 IMPLEMENTED, WAITING FOR DATA — production has **0 reservations** (confirmed fresh)                                                                                                     |
+| Today's check-outs    | 🟡 IMPLEMENTED, WAITING FOR DATA — same                                                                                                                                                    |
+| Rescheduled cleanings | 🟡 IMPLEMENTED, WAITING FOR DATA — production has **0 cleaning_schedules** (confirmed fresh) — this is _why_ Michelle couldn't find it before the visibility fix, not just a rendering bug |
+
+**Root cause of the "waiting for data" tier**: none of `reservations`/`guests`/`cleaning_schedules`/`tasks`/`maintenance_requests` were migrated to production (they were 100% demo-linked at migration time, correctly excluded per an earlier explicit decision) — and OwnerRez's client only fetches read-only display "highlights," it does not write into `Reservation`/`Guest` by original design (that mapping was deliberately deferred, pending exact-reads/mappings/writes approval per the standing OwnerRez safety rule). These sections will stay empty until real reservations/cleanings exist through the app itself, or a real OwnerRez→`Reservation` sync gets explicitly designed and approved.
+
+**OwnerRez/Notion**: re-confirmed strictly read-only at the code level, nothing added. **One unresolved unknown**: `OWNERREZ_USERNAME`/`OWNERREZ_API_TOKEN`/`NOTION_API_KEY` were verified working locally (Increment 22) but their presence in **Vercel's Production** env vars has never been directly confirmed (no Vercel dashboard access) — asked the user to check.
+
+Nothing committed this pass beyond what's noted above (the deploy was already covered by the prior increment's commit). No migration, credential, or configuration change. No new integration code.
+
+---
+
+## Increment 27 — 2026-08-18 (same day, continued): Thermostat provider expansion (Nest/Honeywell/Ecobee) — full architecture investigation, nothing implemented
+
+User asked for a deep investigation-only pass (explicitly: investigate first, do not implement) into adding Nest, Honeywell, and Ecobee thermostats alongside the already-live Cielo integration, ahead of a homepage unified-thermostat-summary redesign and a new `/thermostats` drill-down page. Supersedes Increment 26 §3's investigation with verified-current code state (via a dedicated read-only Explore pass) and fresh official-documentation research (not just carried-forward prior notes) — one real correction to Increment 26's Honeywell finding surfaced below.
+
+### Current architecture (verified directly against code, not assumed from prior notes)
+
+- **`SmartDeviceProvider` enum already has `HONEYWELL`** (alongside `YALE`/`AUGUST`/`NEST`/`ECOBEE`/`CIELO`) — no migration needed at the device-data layer for any of the three target providers.
+- **`IntegrationProvider` enum is missing `HONEYWELL`** (has `NEST`/`ECOBEE` already) — confirmed via direct read of `schema.prisma`. This is the one real schema gap.
+- `SmartDeviceType.THERMOSTAT` and the dashboard's Locks/Thermostats KPI tiles already group by `deviceType`, not `provider` — confirmed **fully provider-agnostic already**: a Nest/Honeywell/Ecobee row with `deviceType: "THERMOSTAT"` sums into the existing Thermostats tile with **zero dashboard code change**.
+- `packages/integrations/src/nest/` and `.../ecobee/` exist as structural stubs (every method throws `NotImplementedError`; `NestCredentials`/`EcobeeCredentials` are placeholder `{apiKey}` shapes that don't match either provider's real auth). `packages/integrations/src/honeywell/` **does not exist at all** — confirmed via repo-scoped grep, zero source hits for "honeywell"/"resideo" anywhere in `packages/` or `apps/` besides the schema enum value itself.
+- Every real/stub provider client implements the same `BaseIntegrationClient` (+ `SyncCapable`/`WebhookReceivable`) contract in `packages/integrations/src/core/types.ts` — a Honeywell client would follow this exact shape from scratch; Nest/Ecobee already have the file skeletons, just no real method bodies.
+- `smart-devices.service.ts` has `syncAugustDevices()`/`syncCieloDevices()` only — same upsert/`*_PROPERTY_MAP`/`pruneStaleDevices` pattern, gated on the already-existing `smart_devices:update` permission (RBAC needs no changes — `smart_devices:*`/`integrations:*` keys already exist for every resource by construction, `admin` and `ops_manager` already hold the relevant ones).
+- `/locks` (`app/(dashboard)/locks/page.tsx` + `LocksList.tsx`) is the exact template a `/thermostats` page would mirror — same `listSmartDevices()` call filtered by `deviceType`, same summary-tiles-plus-table shape. No `/thermostats` nav entry exists yet; `Sidebar.tsx`'s `NAV_ICONS` map has no `thermometer` key yet either (would need adding — `Thermometer` is already imported/used in `DashboardSummary.tsx` but not registered as a nav icon).
+- No provider credentials (including today's real Cielo/August ones) are declared in `env.ts`'s Zod schema — all read ad hoc via `process.env` in the relevant service function, documented only in `.env.example`. A new provider would follow this same convention unless deliberately changed.
+- No sync-frequency/schedule field exists anywhere in the schema (consistent with Increment 25's finding) — any auto-sync stays dependent on the still-paused n8n plan.
+
+### Per-provider requirements — refreshed from current official documentation (not just prior repo notes)
+
+**Nest** (Google Smart Device Management API):
+
+- **Mandatory one-time $5 fee**, non-refundable, per Device Access project — confirmed current. [Device Access Registration](https://developers.google.com/nest/device-access/registration)
+- Standard OAuth2 authorization-code flow. Requires: a Device Access **project** (UUID), OAuth Client ID + Secret (from a separate Google Cloud project), and the Nest/Google account must be a **consumer Google account** (`gmail.com`) — Google Workspace accounts aren't supported, and the linked account can't be changed after project creation. [Get Started](https://developers.google.com/nest/device-access/get-started)
+- Readable thermostat fields: ambient temperature, humidity, connectivity (online/offline), mode + available modes, heat/cool setpoints, HVAC running state, fan timer state, eco mode. [SDM API](https://developers.google.com/nest/device-access/api)
+- Rate limits (confirmed exact): reads (`devices.get`) 10 QPM per project/user; commands 10 QPM per project/user, 5 QPM per project/user/device (thermostats specifically: 5 QPM or 100 QPH at the device-instance level, shared across all projects touching that device). Reads are the only thing a dashboard sync needs — 10 QPM is generous for polling. [User and Rate Limits](https://developers.google.com/nest/device-access/project/limits)
+- **Requires a real Google-account authorization step from whoever owns the Nest devices** (Michelle/Kenny or whoever the Nest account belongs to) — the OAuth consent screen must be completed by that account's owner, same class of human-in-the-loop step August's 2FA code was.
+
+**Ecobee**:
+
+- No paid registration — sign in to the Ecobee developer portal, enable developer access, create an app with **"ecobee PIN"** as the authorization method to get an API key. [ecobee API docs](https://www.ecobee.com/home/developer/api/documentation/v1/auth/pin-api-authorization.shtml)
+- **PIN-based OAuth2**, not a redirect flow: app requests a PIN (`GET /authorize?response_type=ecobeePin`) → PIN shown to the user → **the Ecobee account owner logs into their own Ecobee web portal and enters the PIN** within its expiry window → app polls `/token` for `access_token`/`refresh_token`. Access tokens expire in ~1 hour (`expires_in: 3599`); refresh tokens must be stored and rotated — this is the token-storage/refresh design the existing stub README already flagged as unbuilt.
+- Readable fields (confirmed field-level): `runtime.actualTemperature`, `runtime.actualHumidity`, `runtime.desiredHeat`/`desiredCool` (target setpoints), `runtime.connected` (**explicit boolean online/offline field** — this exists, contrary to earlier uncertainty), `equipmentStatus` (CSV of running equipment: heat pump, compressor, aux heat, fan, humidifier, etc.), plus `modelNumber`/`brand`/`name`.
+- Rate limit: confirmed a limit exists (HTTP 429 on excess) but the exact requests/minute threshold is not published in the docs surfaced — worth a direct check with Ecobee support or conservative polling (e.g. 15 min, matching the interval already proposed in Increment 25's sync-controls plan) rather than guessing a number.
+- **Requires the Ecobee account owner to complete the PIN-entry step themselves** — same human-in-the-loop shape as Nest's OAuth consent and August's 2FA.
+
+**Honeywell (Resideo)**:
+
+- **Correction to Increment 26's note**: API key creation is **self-serve, not a vetted/reviewed application process** — sign up for an account, then create an API key directly at `developer.honeywellhome.com/user/me/apps/add`. No manual approval step is documented. [Resideo FAQ](https://developer.honeywellhome.com/faq-page)
+- OAuth2 — the portal documents both an Authorization Code flow (`/authorize` + `/token`) and a Client Credentials flow (`/accesstoken`); which one applies depends on the exact integration type (personal vs. third-party), not yet pinned down at the level of an implementation plan.
+- **A physical Honeywell/Resideo device is required to meaningfully use or even test the API** — there is no simulator. Model/region support beyond the base "Round" thermostat is **not publicly documented** — Resideo's own FAQ says as much and directs further questions to `developerinfo@resideo.com`. **This means Michelle/Kenny's exact Honeywell thermostat model needs confirming before assuming compatibility.**
+- Rate limit (confirmed exact): "poll device status every 5 minutes for up to 20 devices per hour" — a real, documented ceiling; higher limits require contacting `HoneywellAPISupport@honeywellhome.com` with expected volume/business justification.
+- Readable fields, per the listed endpoints (`GET /devices/thermostats/{deviceId}`, `.../fan`, `.../thermostatconfiguration`): the general shape is confirmed (temperature, setpoint, mode, fan) but the exact field-level JSON shape isn't published outside an authenticated account — would need to be confirmed once real credentials exist, not guessed at now.
+
+### What to ask Michelle/Kenny for (none of this was requested yet — investigation only)
+
+1. **Nest**: whose Google account the Nest thermostats are registered under, and that person's willingness to (a) approve the one-time $5 charge and (b) complete the OAuth consent screen once StayWhile's side is built.
+2. **Ecobee**: whose Ecobee account the thermostats are on, and that person's willingness to complete the PIN-entry step in their own Ecobee portal when prompted.
+3. **Honeywell**: the exact thermostat model(s) in use (Resideo's public docs only confirm the base "Round" model; anything else needs direct confirmation from Resideo) and account credentials once StayWhile's own developer API key exists.
+4. For all three, same standing rule as August/Cielo/OwnerRez/Notion: **no device↔property mapping will be inferred from names** — discovered devices and proposed mappings will be shown for explicit confirmation before any `SmartDevice` row is written.
+
+### Costs/approval requirements summary
+
+| Provider  | Cost                        | Approval gate                                                                                                                          |
+| --------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Nest      | $5 one-time, non-refundable | Google Device Access Terms + Nest-account-owner OAuth consent                                                                          |
+| Ecobee    | None                        | Ecobee-account-owner PIN entry (self-serve developer portal, no vetting)                                                               |
+| Honeywell | None (self-serve key)       | None for the API key itself; device/model compatibility unconfirmed publicly — needs direct Resideo contact or a real device to verify |
+
+### Exact code/schema changes recommended (not yet made)
+
+1. Add `HONEYWELL` to the `IntegrationProvider` enum (additive migration) — `SmartDeviceProvider` already has it.
+2. Add a `HONEYWELL` entry to `PROVIDER_DEFAULTS`/`PROVIDER_CLIENT_STATUS` in `apps/website/src/domains/integrations/services/integrations.service.ts`.
+3. Create `packages/integrations/src/honeywell/` (client.ts/types.ts/README.md) as a structural stub first, matching the existing `BaseIntegrationClient` shape — mirrors how Nest/Ecobee already look before real implementation.
+4. Real implementation per provider (only once credentials + the relevant human-in-the-loop step are available), each producing a `sync<Provider>Devices()` in `smart-devices.service.ts` following the August/Cielo upsert + `pruneStaleDevices` pattern for the device data itself — **but NOT the `*_PROPERTY_MAP` env-var mapping pattern.** **STALE as of 2026-08-19 — see the standing "Dynamic, Dashboard-Configurable Integrations" requirement near the top of this file.** Device↔property mapping for Nest/Honeywell/Ecobee (and any future provider) must be database-backed and dashboard-managed, not a new `*_PROPERTY_MAP` env var. This item's original wording (copy the exact August/Cielo pattern including mapping) is superseded; only the sync/upsert mechanics still apply.
+5. New `/thermostats` page (`app/(dashboard)/thermostats/page.tsx` + a new `ThermostatsList.tsx` component) mirroring `/locks`/`LocksList.tsx` exactly — see design below.
+6. New `thermometer` nav-icon key in `packages/ui/src/components/Sidebar.tsx`'s `NAV_ICONS`, plus a `/thermostats` entry in `nav-config.ts`.
+7. Homepage (`DashboardSummary.tsx`/`dashboard.service.ts`): **no change needed** — already provider-agnostic. Optional-but-recommended: the "Needs Attention" list's icon logic (`d.deviceType === "LOCK" ? Lock : Thermometer`) already handles thermostats generically; if a per-provider label becomes desirable later, that's additive, not required for correctness.
+
+### Proposed `/thermostats` page design (not built)
+
+Mirrors `/locks` exactly: `PageHeader` + `MetricStrip` (Total, Online, Offline, Low battery-or-N/A) + a `Table` with columns **Property, Thermostat name, Provider, Status, Current temp, Target temp, Mode, Humidity, Last synced** — populated per-row only with fields the row's specific provider actually supports (Cielo today: name/status only, no temp/mode/humidity; Nest: temp/humidity/mode/connectivity; Ecobee: temp/humidity/mode/connectivity/equipment; Honeywell: temp/mode/connectivity at minimum, humidity unconfirmed) — blank/`—` for anything a given provider doesn't report, never a fabricated value. Provider column would need a display-name mapping (today's `LocksList.tsx` only special-cases `AUGUST`→"August" and prints the raw enum otherwise — worth fixing generically, e.g. `{CIELO:"Cielo",NEST:"Nest",ECOBEE:"Ecobee",HONEYWELL:"Honeywell"}`, when building this).
+
+### Safe implementation order (recommended, not started)
+
+1. Confirm the human-side facts above with Michelle/Kenny (account ownership, $5 approval, Honeywell model) — no code needed yet.
+2. `IntegrationProvider` migration + `PROVIDER_DEFAULTS` entry for Honeywell (small, additive, safe to do independent of any credential).
+3. Build `/thermostats` page + nav entry now, since it needs no new provider code — it would show Cielo's 5 real live thermostats today (proving the drill-down page works) while Nest/Honeywell/Ecobee stay absent until connected, same "don't pretend unconnected providers are live" honesty rule already used everywhere else in this app.
+4. Real provider implementation one at a time, in whichever order credentials/approvals actually land (no dependency between the three) — each following the August/Cielo precedent: build the real client and stub-to-real service wiring first, verify with a read-only check script, only then request the property-mapping confirmation and run a real sync.
+
+**Nothing implemented this pass** — no schema migration, no credential requested, no new integration code, no dashboard/nav change. Investigation and architecture proposal only, per explicit instruction. **Waiting for user approval before any implementation begins.**
+
+---
+
+## Increment 28 — 2026-08-18 (same day, continued): `/thermostats` page shipped — credential-independent dashboard UI only, real provider work still gated
+
+User approved Increment 27's proposal for the dashboard UI slice only (explicitly not the real Nest/Honeywell/Ecobee provider work). Built exactly what was approved, nothing more.
+
+### What was built
+
+- **`apps/website/app/(dashboard)/thermostats/page.tsx`** (new) — near-identical to `/locks/page.tsx`: `getCurrentUser()` → `listSmartDevices(actor)` (same call, same `smart_devices:read` gate, **no second data source**) → filters `deviceType === "THERMOSTAT"` → renders `ThermostatsList`.
+- **`apps/website/src/domains/smart-devices/components/ThermostatsList.tsx`** (new) — mirrors `LocksList.tsx`'s structure: `MetricStrip` (Total / Online / Offline only, per the approved spec — no battery tile, since thermostats don't report one) + a `Table` with exactly the approved columns: Property, Thermostat, Provider, Status, Current temp, Target temp, Mode, Humidity, Last synced. Every reading field renders `—` when the device's `metadata` doesn't carry it — never fabricated.
+- **`smart-devices.service.ts`** gained 5 small additive exports: `getCurrentTemperature`/`getTargetTemperature`/`getMode`/`getHumidity` (read from `SmartDevice.metadata`, same pattern as the existing `getBatteryLevel` — all currently return `null` for every real row, since no sync function writes these fields yet; this is honest, not a bug) and `getProviderDisplayName` (a small `provider → display name` map covering all 6 `SmartDeviceProvider` values, falling back to the raw enum string for anything unmapped — used only by the new `ThermostatsList`, `LocksList.tsx`'s existing inline August-only ternary was left untouched, out of scope).
+- **Nav**: `packages/ui/src/components/Sidebar.tsx` gained a `thermometer` key in `NAV_ICONS` (imports `Thermometer` from `lucide-react`); `nav-config.ts` gained `{ href: "/thermostats", label: "Thermostats", icon: "thermometer" }` in the Operations section, directly after Locks.
+- **Homepage confirmed untouched**: `git status` shows zero modifications to `dashboard.service.ts` or `DashboardSummary.tsx` — the homepage Thermostats tile stays exactly as it was (provider-agnostic by construction already, per Increment 27's finding).
+
+### Verification
+
+- Full monorepo `pnpm turbo run lint typecheck test build --force` — **25/25 tasks, 0 errors**. Production build includes `/thermostats` in the route manifest with the same size profile as every other dashboard route (`2.32 kB`, matching `/locks` exactly).
+- **Real data confirmed** via a throwaway read-only script (run against the local dev database — production Supabase wasn't reachable from this network this session, the same documented Wi-Fi-blocks-outbound-Postgres limitation from Increment 23; not a new issue, not code-related) — script created, run, deleted immediately, not committed: exactly **5 `THERMOSTAT` rows, all `CIELO`, all `demo=false`**, `groupBy` confirms the full table is `7 AUGUST/LOCK + 5 CIELO/THERMOSTAT` with **zero `NEST`/`HONEYWELL`/`ECOBEE`/`YALE` rows** — nothing shows as connected for the three unimplemented providers, matching the explicit requirement.
+- Local dev server started on port 3001 (port 3000 confirmed still a different client's process, left untouched, same as every prior session's note), `curl /api/health` → `200`; `curl /thermostats` → `404`, **identical to `curl /locks` → `404`** — both hit the same pre-existing Clerk dev-browser-handshake limitation documented since Increment 22 (not a regression, not thermostats-specific). Dev server stopped after the check.
+
+### Exact diff
+
+Modified: `apps/website/src/domains/smart-devices/services/smart-devices.service.ts` (+52 lines, additive only), `apps/website/src/platform/layout/nav-config.ts` (+1 line), `packages/ui/src/components/Sidebar.tsx` (+2 lines). New: `apps/website/app/(dashboard)/thermostats/page.tsx` (21 lines), `apps/website/src/domains/smart-devices/components/ThermostatsList.tsx` (122 lines). Full diff shown to the user in chat this session, not duplicated here.
+
+**Not committed or pushed — waiting for user approval**, per explicit instruction. No schema migration, no credential requested, no `IntegrationProvider` enum change, no Supabase/Vercel/Clerk/n8n change, no real Nest/Honeywell/Ecobee code.
+
+### Standing note carried forward, unchanged
+
+Nest, Honeywell, and Ecobee still require client-side account-owner authorization steps before any real integration, regardless of credential availability on the assistant's/user's side — see Increment 27's full findings and the dedicated cross-session memory (`project_thermostat_provider_expansion`). This increment did not touch that gate.
+
+---
+
+## Increment 29 — 2026-08-18 (same day, continued): Ecobee is BLOCKED (real external finding, not a coding issue) — correction to Increments 26/27; Honeywell/Resideo investigated fresh
+
+User has StayWhile's own live login access to both the Ecobee and Honeywell/Resideo accounts (their access, their StayWhile-owned credentials — no other client's anything was touched). Worked Ecobee first per the user's instruction, hit a real external blocker, then moved to Honeywell per the user's redirection. **Nothing was implemented in the repo this increment** — investigation and one external-only action (a public, non-secret PIN-flow research check) only.
+
+### Ecobee — CORRECTION: developer registration is closed, not self-serve
+
+**Increments 26 and 27 were wrong on this point** — both stated Ecobee's developer access was "no fee, self-serve, no vetting." That was accurate historically but is **stale**: confirmed via fresh official-page checks today that **Ecobee stopped accepting new third-party developer registrations on 2024-03-28**, and it is still closed as of this session (2026-08-18). Ecobee's own developer page states directly: _"Sorry, we are not currently accepting new developer registrations at this time"_ ([ecobee.com/en-us/developers](https://www.ecobee.com/en-us/developers/)). Multiple independent sources (Home Assistant GitHub issues, Home Assistant Community threads) confirm this has been the case continuously since the 2024 cutoff, with no reopening announced.
+
+This was verified against the live StayWhile Ecobee account itself, not just docs: the account's own menu has **no "Developer" option at all** (only My Account / Add Thermostat / Subscriptions / Donate Your Data / My Apps / Logout / Support), and "My Apps → Add Application" is the **PIN-linking** screen for an app that already has a Client ID from before the 2024 cutoff — not an app-creation form. There is no live path today from a fresh account to a new Ecobee API key.
+
+**Status: Ecobee is BLOCKED — external provider policy, not a StayWhile coding gap or a missed step.** Per explicit user instruction:
+
+- No workaround will be built. HomeKit-bridge or any other unofficial/reverse-engineered method is explicitly ruled out — official API access only.
+- Ecobee **stays included** in the unified Thermostats architecture (`SmartDeviceProvider.ECOBEE` already exists in the schema, `ThermostatsList.tsx`/`getProviderDisplayName()` already handle it) so it can be added later with zero dashboard redesign, the moment official access becomes available.
+- No credential was requested or stored. `.env.local`/`.env.example` still have no real Ecobee value — confirmed via direct inspection before any of this (no secret was ever at risk of exposure).
+
+### Update, same day: two concrete Ecobee paths identified — legacy check in progress, SmartBuildings is the user's chosen preferred path
+
+User is personally checking the StayWhile Ecobee account for **legacy developer access** using the exact documented mechanism (distinct from "My Apps," which only lists apps _authorized to_ the account, not apps _created by_ it): after logging in, a **☰ hamburger icon** (separate from the account/profile dropdown) reveals a **"Developer"** option; if an application already exists on this account from before the 2024-03-28 closure, its Name/Summary/API Key show there directly. **Result not yet reported** — do not assume either outcome.
+
+In parallel, the user has decided: **Ecobee's SmartBuildings API is the preferred long-term integration path for StayWhile**, regardless of the legacy check's outcome — it's a structurally better fit for a multi-property dashboard than the legacy consumer flow ever was:
+
+- **Separate, current, actively-marketed program** (materials dated as recently as Nov 2025) explicitly for multifamily/property-management operators, not individual consumer accounts.
+- **Explicitly free** per ecobee's own materials ("ecobee is happy to provide free access to our API").
+- **Access is requested via `smartbuildings@ecobee.com` or 1-833-285-1119** — manually provisioned by ecobee, not instant self-serve, but a real current business channel.
+- **Auth**: `client_credentials` machine-to-machine OAuth2 — `POST` to their `/token` endpoint (`audience: https://api.sb.ecobee.com`, `client_id`/`client_secret`) — bearer tokens valid ~2 hours (subject to change per their own docs). Fixed scopes include `read:thermostat` (also `create:building`/`write:thermostat`, which StayWhile would not request — read-only fits the standing dashboard philosophy).
+- **No per-property PIN-entry step** — this is the structural advantage over the legacy flow: one portfolio-wide grant instead of authorizing one thermostat account at a time, which is why the user chose it as the preferred path for a multi-property dashboard specifically.
+
+**Update: the SmartBuildings outreach email has been sent by the user to `smartbuildings@ecobee.com`.** Requested read-only portfolio-wide access (device status, current temperature, setpoints, mode, humidity if available) for a short-term-rental/property-management dashboard. **Status: WAITING FOR ECOBEE'S RESPONSE** — check current state next session, don't assume a reply has arrived. The legacy-developer-app check (☰ → Developer, above) is still separately in progress, not yet reported either.
+
+**Both paths stay non-competing** with the schema/dashboard work already done: `SmartDeviceProvider.ECOBEE` already exists, `ThermostatsList.tsx`/`getProviderDisplayName()` already handle it — whichever path (legacy key, if one turns up, or SmartBuildings once provisioned) ends up real, `smart-devices.service.ts` would gain one new `syncEcobeeDevices()` function following the same _device-upsert_ pattern as August/Cielo, no dashboard redesign either way. **Its device↔property mapping must NOT reuse the `*_PROPERTY_MAP` env-var pattern** — see the standing "Dynamic, Dashboard-Configurable Integrations" requirement near the top of this file (set 2026-08-19, after this note was originally written). **Do not build the legacy consumer PIN integration** — explicit user instruction, since SmartBuildings is preferred regardless of what the legacy check finds.
+
+**Nothing built, no credential requested/stored, no email sent, no repo/schema change.**
+
+### Honeywell/Resideo — investigated fresh (re-verified today, not just carried forward)
+
+Re-checked live rather than trusting Increment 26/27's notes, given the Ecobee surprise above — **Honeywell/Resideo's self-serve registration is confirmed still genuinely open today**, unlike Ecobee:
+
+- **Registration page live and accepting signups**: `https://developer.honeywellhome.com/user/register` — a normal signup form (First/Last name, Username, Email, Password, Business-or-Personal-Use radio, API Use Case text field, optional Company Name, agree to the Resideo Developer License Agreement + Terms of Service, CAPTCHA, "Create new account"). No closure/approval-gate message present.
+- **After account creation**: an application (Client ID / API Key + Secret) is created separately, at `developer.honeywellhome.com/user/me/apps/add` (per Increment 26's original FAQ finding, re-confirmed self-serve, no manual review step documented).
+- **Connecting the app to a specific account's real devices still needs a human authorization step** — same class as Nest/Ecobee, just via a different mechanism. Resideo documents two flows and its own "Getting Started" guide is honest that it doesn't clearly say which applies when: **OAuth2 Authorization Code flow** (the account owner logs in and grants consent via a redirect — the standard, fully-documented path) vs. **OAuth2 Client Credentials flow** (app-level token via `POST /oauth2/accesstoken`, but still requires the target user to have been separately "authorized to your API Key" and identified via a `UserRefID` header — the exact linking mechanism for that isn't clearly documented either). **Recommendation: use the Authorization Code flow** when actually implementing, since it's the one with a complete, unambiguous documented procedure — Client Credentials has a real, acknowledged documentation gap around how `UserRefID` linking actually happens.
+- **Confirmed prerequisite, unchanged from Increment 27**: "A Honeywell Home account with a connected/installed device" is explicitly required before the API is useful — no simulator exists.
+- **Confirmed prerequisite, unchanged from Increment 27**: exact thermostat model/field support beyond the base "Round" model is still not publicly documented — needs checking directly against the account's real device list.
+- Rate limit (unchanged, re-confirmed applicable): poll every 5 minutes, ≤20 devices/hour.
+
+**Exact next action for the user, given they already have live Honeywell/Resideo account access** (told to the user directly in chat, not repeated here in full — short version): (1) go to `developer.honeywellhome.com/user/register` and create a developer account (self-serve, expect the form described above); (2) create an application to get a Client ID/API Key + Secret; (3) register an OAuth redirect URI for that application; (4) complete the Authorization Code consent flow using the actual account that holds the real thermostats (a live, one-time step only that account's owner can do); (5) separately, check the Honeywell Home account/app's device list for the exact thermostat model name(s) in use, since only the "Round" model's fields are publicly documented.
+
+**Nothing implemented, no credential requested/stored, no repo/schema/production change.** Waiting for the user to complete step 1 (or report what they find) before any code is written.
+
+### Nest — unchanged, still pending
+
+Per explicit instruction, Nest stays separate and pending until it's confirmed whether existing access is a completed OAuth token (testable immediately) or only app-level credentials (still needs the account owner's one-time consent step). No action taken this increment.
+
+---
+
+## Increment 30 — 2026-08-19: Kenny's dynamic-mapping architecture requirement recorded; per-provider status updates; stale-statement correction pass
+
+New session. User relayed a hard architecture requirement from Kenny and gave status updates on all three pending thermostat providers. **No application code, schema, integration, credential, production data, or deployment was touched this increment — documentation only**, per explicit instruction. `git status` reconfirmed at the start: identical working-tree state to where Increment 28 left it (the uncommitted `/thermostats` page + smart-devices.service.ts additions + nav wiring, plus the large pre-existing uncommitted body from Increments 1–24) — nothing new landed or was lost.
+
+### Kenny's requirement: dynamic, dashboard-configurable integrations
+
+Recorded in full as a new standing section near the top of this file (**"⚠️ Standing Architecture Requirement — Dynamic, Dashboard-Configurable Integrations"**, right after Workspace Isolation) so it can't be missed by a future session skimming increments. Short version: no more hard-coded `*_PROPERTY_MAP` env vars for new providers; existing `AUGUST_PROPERTY_MAP`/`CIELO_PROPERTY_MAP` are legacy/bootstrap, not the target end state; the real architecture is provider API authorization → dynamic device discovery → admin-confirmed mapping stored in the database → dashboard-managed from then on (enable/disable, remap, sync frequency, sync/error status) — RBAC-controlled and audited, never name-matched automatically. Applies to August, Cielo, Nest, Honeywell, Ecobee, and (flagged, not yet actioned) OwnerRez/Notion property associations. **Not yet designed or built** — this increment only records the requirement, it doesn't design the schema/UI for it.
+
+**Corrected two now-stale forward-looking recommendations** that predate this requirement (both amended in place with a pointer back to the new standing section, not deleted, so the historical reasoning stays visible): Increment 27's "Exact code/schema changes recommended" item 4, and Increment 29's same-day Ecobee update — both had suggested extending the `*_PROPERTY_MAP` pattern to new providers. Neither has been acted on (no `NEST_PROPERTY_MAP`/`HONEYWELL_PROPERTY_MAP`/`ECOBEE_PROPERTY_MAP` exists anywhere), so this is a documentation correction, not a code rollback.
+
+### Ecobee — SmartBuildings docs received, access not yet confirmed complete
+
+Ecobee Support replied to the outreach email sent at the end of the prior session (Increment 29's same-day update) with the official SmartBuildings API documentation, the API-access request form, and the SmartBuildings account creation path. **Status: in progress, not complete** — the user has the documentation/form/path in hand but completing the access-request form and account setup has not been confirmed as done. Do not assume this is finished in a future session; check current status directly. SmartBuildings remains the selected official integration route per the user's explicit decision (Increment 29) — **the legacy consumer/PIN integration must not be built**, regardless of whether the separate legacy-developer-app check (☰ → Developer menu, Increment 29) ever gets reported back.
+
+### Honeywell/Resideo — developer registration submitted, waiting for approval
+
+Following the step-by-step walkthrough started in the prior session (Increment 29: `developer.honeywellhome.com/user/register`), the user submitted the developer account registration. **Status: WAITING FOR DEVELOPER ACCOUNT APPROVAL** — this is a real state change from Increment 29's finding that registration appeared to be instant self-serve with "no manual review step documented"; live behavior for this specific submission showed an approval step. **Do not implement or configure any Honeywell credentials until approval is received and confirmed** — no application/Client-ID creation step has happened yet (that was going to be the next step after registration, per Increment 29's walkthrough, but it's now blocked on approval first). Check current approval status before proceeding in a future session; do not assume either outcome.
+
+### Nest — unchanged, still pending
+
+No new information this increment. Still unconfirmed whether existing access is a completed OAuth token or only app-level credentials — do not assume either. No Google/Nest account/login/access information has been provided or acted on.
+
+### Existing live integrations — status unchanged, but now explicitly in scope for the dynamic-mapping migration
+
+**Cielo** (5 real thermostats) and **August locks** (7 real locks) both remain fully live exactly as documented in Increments 19–21/26 — nothing about their current runtime behavior changed this increment. Both are now explicitly flagged as needing to eventually conform to the dynamic-mapping requirement above (their current `*_PROPERTY_MAP` env-var approach is legacy/bootstrap, not being removed today, not blocking anything currently working).
+
+### Preserved, unchanged, re-confirmed accurate as of this increment (no new verification performed — restated so nothing is lost between sessions)
+
+- **`/locks` page + the "Check-outs"/"Rescheduled Cleanings" homepage wording fixes are deployed to production** — commits `5110dfc` (Locks page) and `086c577` (Check-outs rename + Rescheduled Cleanings always-visible fix), per Increments 24/26. Not re-verified live this increment; no reason to believe this has changed.
+- **`/thermostats` page (Increment 28)**: still built, verified, **uncommitted**, waiting on the user's approval to commit/push — unchanged this increment.
+- **Integration Sync Controls** (manual sync, automatic sync, on/off, configurable frequency): still exactly the state Increment 25 left it in — manual "Sync now" already works for August/Cielo today; automatic/scheduled sync, on/off toggles, and frequency controls are **proposed architecture only, not built**, and depend on the n8n-vs-alternative scheduling decision. **n8n Cloud trial is still expired**; the client was informed of the required $24/month upgrade and this has **not been confirmed as resolved** — do not assume the upgrade happened. This whole area will also need to route through the new dynamic-configuration requirement above once built (sync on/off + frequency belongs in the same dashboard-managed config, not a separate mechanism) — noted for whoever designs it, not decided here.
+- **Michelle/Kenny acceptance gate** (Increment 23's full checklist): **still not confirmed cleared** as of the last direct update (Increment 24) — `admin@stayawhilewithus.com`'s own invitation/login was not yet confirmed accepted, and a full email-code-login + logout click-through had not been re-confirmed since the two production bug fixes landed. **Nothing in Increments 25–30 touched or re-verified this gate** — its status is exactly as unresolved as Increment 24 left it. Do not say "Ready for Michelle and Kenny to test" until it's actually re-checked and every item passes, per the standing gate rules (Increment 23).
+- **Production infrastructure** (Supabase migration, Vercel env vars including the required `?pgbouncer=true&connection_limit=1` on `DATABASE_URL`, Clerk testing-phase checklist): unchanged, not touched or re-verified this increment. See Increments 23–24 for full detail.
+
+**Nothing implemented, no credentials touched, no schema/production/deployment change this increment.**
+
+---
+
+## Increment 31 — 2026-08-19 (same day, continued): Nest connected — $5 registration, Google Cloud/OAuth setup, and read-only SDM discovery all complete; database-backed device-mapping architecture proposed, nothing implemented yet
+
+User obtained live access to the Google account managing StayWhile's Nest thermostats and walked through the full Device Access / Smart Device Management (SDM) API setup, screen by screen, with each step verified against current official Google documentation before proceeding (not from memory/prior increments' notes). All of the following is now **complete and verified**:
+
+- **Google Nest Device Access registration**: the one-time US$5, non-refundable fee — **paid successfully**, tied permanently to the Google account used (per Google's own policy, confirmed via live docs fetch, cannot be changed later).
+- **Google Cloud project**: created (`StayWhile Nest Integ` Device Access project name, per the user's own naming).
+- **Smart Device Management API**: enabled on the Google Cloud project.
+- **OAuth 2.0 Client ID**: created (Web application type).
+- **OAuth consent screen**: configured with the `sdm.service` restricted scope; the Nest-owning account was added under **Test users** (required since the SDM scope makes any app "unverified" without full OAuth API Verification — not required for personal/single-account use, confirmed via live docs fetch).
+- **Device Access project**: created in the Device Access Console, linked to the OAuth Client ID.
+- **Partner Connections Manager (PCM) authorization**: the Nest-owning account completed the consent flow — **succeeded**.
+- **Read-only SDM device discovery**: performed via a temporary, uncommitted, self-deleting script (`apps/website/_tmp-nest-oauth-discover.mjs` — written, run once by the user in their own terminal, verified deleted afterward). Did the OAuth authorization-code → token exchange, then exactly one `GET .../enterprises/{project-id}/devices` call.
+  - **Result: 33 real Nest thermostat devices returned by Google.**
+  - Real `NEST_CLIENT_ID`, `NEST_CLIENT_SECRET`, `NEST_PROJECT_ID`, `NEST_REFRESH_TOKEN` written to `apps/website/.env.local` (gitignored, confirmed via `git check-ignore`/`git ls-files` before and after — never committed, never pasted into chat, never printed by the script itself).
+  - **Zero database writes, zero `SmartDevice` rows, zero property mappings** — this was discovery-only, verified independently (not just trusted from the user's report): confirmed the script file no longer exists and confirmed all 4 env var names are present via direct, read-only checks.
+
+**No production Nest data exists anywhere in the database as of this note.** The 33 devices are known only via the one-time discovery call's terminal output — nothing durable persists them yet (see architecture proposal below for why, and what fixes that).
+
+### Database-backed device-mapping architecture — proposed, not built
+
+Per the standing "Dynamic, Dashboard-Configurable Integrations" requirement (Kenny, set earlier 2026-08-19, see the top of this file) and this session's explicit instruction, a full architecture was proposed in chat (not yet implemented) before any Nest device touches production:
+
+- **New Prisma model `ProviderDevice`** (additive-only, no changes to `SmartDevice`/`Property`/any live table): a staging layer holding every device a provider's API reports, independent of whether it's mapped. Fields: `provider` (existing `IntegrationProvider` enum), `externalDeviceId`, `deviceType`, `discoveredName`, `connectivityStatus`, `rawMetadata`, `firstDiscoveredAt`/`lastSeenAt` (sync-owned), plus admin-owned mapping state: nullable `propertyId`, `enabled` (default `false`), `mappedAt`, `mappedByUserId`, and a nullable link to the eventual `SmartDevice` row once mapped+enabled.
+- **Why a new table instead of making `SmartDevice.propertyId` nullable**: confirmed via direct schema read that `SmartDevice.propertyId` is a required, non-nullable FK today, and every live dashboard/`/locks`/`/thermostats` query already assumes every row has a property. A separate staging table means **zero changes** to any of that already-verified, client-facing code.
+- **Four new service functions** (not yet written): `listDiscoveredDevices`, `mapProviderDeviceToProperty`, `unmapProviderDevice`, `setProviderDeviceEnabled` — all reuse the existing `smart_devices:read`/`smart_devices:update` permissions (no new RBAC grant needed) and call the existing `recordAudit()` helper on every mutation.
+- **Discovery sync** would upsert into `ProviderDevice` only — it would never touch `propertyId`/`enabled`/`mappedAt`, which are exclusively admin-controlled fields, written only via an explicit dashboard action (dropdown pick of a real `Property`, never inferred from device name).
+- **Provider-agnostic by construction**: the same table/functions are intended to serve Honeywell/Ecobee once connected, and eventually August/Cielo per the standing note — Nest is just the first to use it. August/Cielo are untouched by this proposal, no regression.
+- **Flagged, not resolved**: 33 discovered Nest devices against 7 known StayWhile properties is a lot — plausibly multi-zone systems, or some devices outside StayWhile's managed portfolio. Needs Michelle/Kenny's input once mapping actually starts, not decided here.
+
+**Nothing was implemented as a result of this proposal** — no migration, no service code, no admin UI, per the explicit instruction to stop after the proposal and wait for approval before writing any Nest device to production.
+
 ---
 
 # What Has Been Completed
@@ -700,9 +1168,274 @@ Both August and Cielo are now fully live. Nothing is blocked. Exact order of wor
 - **Two real bugs fixed this session** — full detail in Increment 24: (1) Prisma query engine wasn't bundled into the Vercel serverless function (fixed via `@prisma/nextjs-monorepo-workaround-plugin`, committed as `e23bcd0`, already deployed and confirmed working by a real sign-in); (2) Prisma + Supabase transaction-pooler prepared-statement conflict (`42P05`), fixed by appending `?pgbouncer=true&connection_limit=1` to Vercel's Production `DATABASE_URL` only — **do not remove this query string**, it's required, not optional.
 - **`admin@stayawhilewithus.com`**: invited via Clerk, **not yet confirmed accepted/signed-in as of this note** — check current state, don't assume either way.
 - **`ryskris0@gmail.com`**: fully working — real Clerk sign-in, one clean Supabase row, global `admin` role granted and verified. This is the user's own personal testing account, kept deliberately separate from `admin@stayawhilewithus.com`.
-- **`/locks` page**: implemented and verified against real production data (7 real August locks, 0 demo), full suite green (25/25) — **not committed/pushed yet**, waiting for user approval. Files: `apps/website/app/(dashboard)/locks/page.tsx`, `apps/website/src/domains/smart-devices/components/LocksList.tsx`, plus small additive changes to `packages/ui/src/components/Sidebar.tsx` and `apps/website/src/platform/layout/nav-config.ts`. Homepage (`DashboardSummary.tsx`/`dashboard.service.ts`) deliberately untouched.
+- **`/locks` page**: implemented and verified against real production data (7 real August locks, 0 demo), full suite green (25/25). **Correction: this WAS subsequently committed (`5110dfc`) and pushed later in the same 2026-08-18 session** (see Increment 24's "Update, same session" note) — the "not committed/pushed yet" wording directly above is stale, kept only for historical accuracy of what was true earlier in that session.
 - **Standing acceptance gate unchanged** (Increment 23's full checklist still applies): do not say **"Ready for Michelle and Kenny to test"** until every item passes, with email-code login and logout confirmed by the user directly. Not cleared as of this note — `admin@stayawhilewithus.com`'s own login is still outstanding, and a full click-through hasn't happened since the bug fixes landed.
-- The large body of previously-uncommitted work (Increments 1–22) is still uncommitted, plus now the `/locks` feature is also uncommitted pending approval. Still lower priority than clearing the acceptance gate.
+- The large body of previously-uncommitted work (Increments 1–22) is still uncommitted. Still lower priority than clearing the acceptance gate.
+
+### Update — 2026-08-19 session (supersedes all steps above — see Increments 25–30 for full detail)
+
+**Current status: still PRODUCTION CUTOVER / ACCEPTANCE GATE track, unresolved — plus a new parallel thread (thermostat provider expansion) that is now itself gated on a fresh, hard architecture requirement.** Nothing below has been implemented in code; this is all research, external provider registration, and documentation.
+
+1. Start in this same project directory. Run `git status` for the real current state — same working tree as Increment 28 left it (large pre-existing uncommitted body from Increments 1–24, plus the uncommitted `/thermostats` page + `smart-devices.service.ts` additions + nav wiring from Increment 28). Nothing new was added or removed this session.
+2. **Read the new "⚠️ Standing Architecture Requirement — Dynamic, Dashboard-Configurable Integrations" section near the top of this file before writing any new integration code** — it changes the target design for Nest/Honeywell/Ecobee (and eventually August/Cielo/OwnerRez/Notion) away from hard-coded `*_PROPERTY_MAP` env vars toward database-backed, dashboard-managed mapping. Not designed or built yet.
+3. **Ecobee**: check whether the SmartBuildings access-request form / account setup (docs received from Ecobee Support, per Increment 30) has been completed. Do not assume either way. Do not build the legacy consumer/PIN integration regardless.
+4. **Honeywell/Resideo**: check whether the developer account registration (submitted, per Increment 30) has been approved yet. Do not implement/configure any Honeywell credentials or start the application-creation step until approval is confirmed.
+5. **Nest**: ~~still fully pending~~ — **superseded, see Increment 31**. Google Cloud/OAuth/Device Access setup is complete, PCM authorization succeeded, real credentials are in `apps/website/.env.local` (`NEST_CLIENT_ID`/`NEST_CLIENT_SECRET`/`NEST_PROJECT_ID`/`NEST_REFRESH_TOKEN`), and a one-time read-only discovery call confirmed **33 real Nest thermostats**. A `ProviderDevice` database-backed mapping architecture was proposed in Increment 31 but **not implemented** — no migration, no real `NestClient`, no admin mapping page, zero `SmartDevice` rows or property mappings exist for Nest. Do not write any Nest device to production until the user explicitly approves the Increment 31 proposal.
+6. **Michelle/Kenny acceptance gate** (Increment 23's checklist): still not confirmed cleared as of Increment 24, and nothing since has re-verified it. If resuming production-readiness work rather than the thermostat thread, this is still the higher-priority open item — check `admin@stayawhilewithus.com`'s invitation/login status directly before assuming anything.
+7. **n8n**: still paused, Cloud trial expired, $24/month upgrade not confirmed as resolved — re-check before assuming Integration Sync Controls (Increment 25) can move forward.
+8. Do not commit or push anything related to the `/thermostats` page (Increment 28) until the user explicitly approves — still outstanding as of this note.
+9. **Nest next step, if approved**: implement the Increment 31 `ProviderDevice` proposal (migration → real `NestClient.listDevices()` wired to the SDM API using the stored credentials, with hourly access-token refresh → `discoverNestDevices()` writing all 33 into `ProviderDevice` → admin mapping page) — in that order, stopping for a checkpoint before any `SmartDevice` row is created.
+
+---
+
+## Increment 32 — 2026-08-19 (same day, continued): SECOND CLIENT MEETING — new priority scope, recorded before any implementation starts
+
+User relayed a second client meeting (Michelle, Kenny, and now **April** joining as a tester). This supersedes prior "wait for approval" pacing on the `ProviderDevice` architecture discussion (Increments 31 + the refined pass right before this one) — **the refined design from those two passes is the one being implemented**, just not all at once. Recording the full scope here first, per explicit instruction, "so a new terminal cannot lose these requirements."
+
+### Priority order, as given
+
+1. **Fix production Sync Now** for August/Cielo now, Nest once staged. Kenny reports it currently returns a failure/zero-record error in production. Required behavior: independent of automatic sync, shows "Syncing…", prevents duplicate concurrent syncs, shows success/failure clearly, preserves last-good data on a failed sync, updates "Last synced", never performs device-control commands. Must not wait on n8n — n8n stays a separate, still-externally-blocked thread (Cloud trial expired, $24/month upgrade unconfirmed) for _automatic_ background sync only.
+2. **Move "Rescheduled Cleanings" higher on the homepage** — Michelle wants it grouped with Check-ins/Check-outs/Due-upcoming-cleanings as the ops team's first-thing-in-the-morning check. Stays visible at zero records (existing "No rescheduled cleanings." empty state, from Increment 26 — don't invent data). Preserve every other original homepage priority unchanged: August lock summary (esp. offline/low-battery), Thermostat status (esp. offline), daily check-ins, daily check-outs. ADR/Revenue stay off the homepage — unchanged standing rule.
+3. **Build the dynamic provider-device mapping foundation** (`ProviderDevice`) — the refined design from the two design passes immediately before this message. Full spec: additive `ProviderDevice` table scoped to `IntegrationConnection` (not just `IntegrationProvider`), no denormalized `provider` column (derive via the relation), `onDelete: Restrict` (not `Cascade`) on the connection FK, new `SmartDevice.deactivatedAt` (soft-deactivate, never hard-delete — also fixes the real existing `pruneStaleDevices()` history-loss bug found during that design pass), transactional map/unmap via `prisma.$transaction` keyed on `SmartDevice`'s existing `[provider, externalDeviceId]` unique constraint for idempotency, full audit trail via the existing `recordAudit()` helper. Applies to August, Cielo, Nest, Honeywell, Ecobee eventually — August/Cielo's current `*_PROPERTY_MAP` env-var behavior is explicitly legacy/bootstrap, migrated later (two options were laid out — backfill-only vs. backfill-and-refactor-sync-together — **not yet decided by the user**, check before assuming either).
+4. **Stage the 33 discovered Nest thermostats** into `ProviderDevice` (discovery/staging only) once the foundation exists — zero `SmartDevice` rows, zero mappings, no `NEST_PROPERTY_MAP`, no name-based guessing. Once an admin explicitly maps+enables any, the unified Thermostats view should include Cielo + Nest together (already provider-agnostic at the dashboard layer per Increment 27's finding — no dashboard code change expected here).
+5. **Make additional August locks dynamically discoverable** — Michelle will grant access to more locks; the system must support new discovery/mapping without any developer touching env vars or code (same `ProviderDevice` foundation, just applied to August's existing connection).
+6. **OwnerRez → StayWhile property sync (read-only)** — Michelle/Kenny confirmed OwnerRez holds StayWhile's real property portfolio (~38 properties; production currently has 7) and they do not want properties entered manually. Requirements: OwnerRez stays strictly read-only (standing rule, unchanged, see `feedback_notion_ownerrez_read_only_safety`), no write-back, **do not delete current production properties until matching/backfill logic is proven**, prevent duplicate properties, preserve stable StayWhile `Property.id` UUIDs wherever a current property can be safely matched to an OwnerRez record, and **matching rules must be shown to the user before any production backfill runs** — same "show reads/mappings/writes before syncing" standing rule already applied to every other integration in this project. Only use OwnerRez fields the API actually returns (name, bedrooms, bathrooms, beds, guest capacity, etc.) — never guess/invent a field the API doesn't provide.
+7. **Dashboard-managed property regions/categories** — Kenny wants admins to assign/change a property's region from the dashboard, not hard-coded. The client's current operational groupings (relayed, not yet confirmed final by Michelle): SPI; SRQ (Bradenton/Sarasota); Largo; St. Augustine; Destin (Destin/Destin Beach/Santa Rosa Beach grouped together per their team); Panhandle (Navarre Beach/Pensacola Beach). **Do not infer final region assignments from property names** — Michelle said she'll provide the exact property-to-region list; wait for it rather than guessing from naming patterns. Needs: assign/change a property's region, create/rename a region (permission-gated), filter properties by region — all without code changes or redeploys.
+8. **Team test admin account** — Kenny wants a separate test/admin account for the ops team instead of everyone sharing the original `admin@stayawhilewithus.com` login. **The exact email must be confirmed from the existing StayWhile account/inventory before creating or inviting anything — do not guess from the meeting transcript.** Once confirmed: invite via the existing Clerk + StayWhile flow (mirrors the Team/Users domain built in Increment 22), grant the existing global `admin` role (**do not create a new RBAC role** — explicit instruction), then verify email-code login, global admin access, logout, and login-again — same manual-confirmation standard as the Michelle/Kenny acceptance gate (Increment 23), not something to claim passed without the user's direct confirmation.
+9. **Notion monthly backup** — Michelle wants an automatic end-of-month preserved copy of Notion's latest content. Notion stays strictly read-only from the dashboard (standing rule, unchanged) — a backup reads and stores a copy elsewhere, it does not edit/delete/write back to Notion itself. **Design first, before implementing**: what exactly gets backed up, where it's stored, timestamp/version naming, retention policy, failure notification, and how scheduled execution works while n8n is still inactive (prepare the implementation, but scheduling itself stays explicitly blocked/marked-pending until n8n's upgrade is confirmed — same pattern as automatic sync in Priority 1).
+
+### Explicitly not blocking this work
+
+**Honeywell** (developer/API application submitted, waiting on Resideo approval) and **Ecobee** (SmartBuildings is the chosen official path, account/API onboarding still being completed externally) — neither blocks any of the 9 priorities above. Check their status opportunistically, don't let either gate other work.
+
+### Documented for later, explicitly not prioritized yet
+
+Captured from the second meeting, **not to be worked ahead of priorities 1–9 above**: email inbox integration, Google Voice, Asana, Slack, cleaning photos, pool reports, file reports, possible Airbnb integration/booking-request visibility. **Airbnb specifically needs careful investigation before any second write path is built** — OwnerRez already has its own Airbnb integration/sync, and the interaction/conflict risk between that and any StayWhile-side Airbnb integration isn't understood yet. Nothing here is scoped, designed, or started.
+
+### Deployment expectation, per feature, standing for this entire scope
+
+For each of the 9 priorities (worked in the stated order, not batched): inspect first → implement → `lint`/`typecheck`/`test`/`build` → show the exact diff → keep unrelated uncommitted work out of the commit → commit/push only once verified safe → deploy to production → **provide a simple, plain-language testing checklist for Michelle/Kenny/April** covering exactly what changed and what to click. This cadence applies to every priority in this list — no exceptions, no batching multiple priorities into one commit/deploy.
+
+### Status as of this note
+
+**Nothing from this increment's 9 priorities has been implemented yet.** This increment is the scope-recording step, done first per explicit instruction. Work begins with Priority 1 (Sync Now) immediately after this entry, in the order listed above.
+
+---
+
+## Increment 33 — 2026-08-19/20: Priority 1 (Sync Now) shipped and deployed; Cielo device-count discrepancy investigated (real, external, not a StayWhile bug — but surfaced a real data-loss risk); new "Full Smart Device Management" client requirement recorded
+
+### Priority 1 — Sync Now — done, committed (`52890d9`), pushed, deployed, live-verified
+
+Root cause of Kenny's original "0 synced" report: `AUGUST_PROPERTY_MAP`/`CIELO_PROPERTY_MAP` were missing from Vercel **Production** env vars — confirmed directly by the user checking Vercel's dashboard, not assumed. Restored from the trusted local `apps/website/.env.local` values (same ones proven live in Increments 20-21), copied by the user directly — never printed or handled by the assistant.
+
+Code-side reliability/UX rebuild, in `apps/website/src/domains/integrations/{actions.ts, services/integrations.service.ts, services/integrations.service.test.ts, components/IntegrationConnectionList.tsx, components/SyncNowButton.tsx (new)}` — exactly these 5 files, nothing else, verified via `git diff --stat` before committing:
+
+- Sync actions are `IntegrationConnection.id`-scoped, not provider-name-scoped (multi-account-safe, though multi-account itself isn't built).
+- Duplicate-concurrent-sync guard: a **namespaced, two-key** Postgres advisory lock (`pg_try_advisory_xact_lock(hashtext('integration_sync'), hashtext(connectionId))`), wrapping the RUNNING-row check-and-create in one transaction — no schema change, no TOCTOU race window. Lock is transaction-scoped (releases in milliseconds); the slow external API call happens _after_ commit, outside the transaction, deliberately — production's `DATABASE_URL` uses Supabase's transaction-mode pooler (`?pgbouncer=true&connection_limit=1`), so holding a lock across a slow external call would have been risky.
+- Stale-RUNNING self-heal: a `RUNNING` row older than **10 minutes** is closed out as `FAILED` before a new sync proceeds. No real historical duration sample was available (local dev DB's sync-log history had been reset; production Supabase was unreachable both times it was tried this session — the same recurring flaky-Wi-Fi issue, not new). Threshold instead derived from `packages/integrations/src/core/http-client.ts`'s own retry/timeout code: 10s timeout × 3 attempts + backoff ≈ 30.75s worst case per HTTP call; August's 8-call sync ≈ 246s worst case today, Cielo's 2-call sync ≈ 62s. 10 minutes leaves margin for both today's worst case and Priority 7's expected additional August locks.
+- The action can never throw: `beginDeviceSync` itself is wrapped in try/catch, and the failure-path `finishDeviceSync` call has its own nested try/catch — a second, independent failure while trying to log the first no longer crashes the action to the page-level error boundary.
+- `lastSyncedAt` only ever updates inside the `SUCCEEDED` branch — confirmed unchanged/correct. A distinct "Last attempt failed {time}" line was added so a failure is visible after a page reload, not just in the ephemeral inline button state.
+- Zero-synced results are never shown as a generic "success" — three distinct, differently-colored outcomes: real count (green), zero-with-skipped (amber, names the mapping gap), zero-with-zero-skipped (amber, "provider returned 0 devices"), versus a thrown failure (red, separate branch entirely).
+- Confirmed via direct code read (not assumed): neither `AugustClient` nor `CieloClient` exposes any lock/unlock or temperature-set method at all — both remain 100% read-only by construction, unchanged by this work.
+
+**Verified, fresh, before commit**: typecheck 0 errors, lint 0 errors (pre-existing warning classes only), **241/241 tests pass**, production build succeeds. Committed as exactly the 5 files above (`git add` by explicit path list, not `-A`), pushed, Vercel deployed (`/api/health`/`/sign-in` both 200 post-deploy).
+
+**Live production test results, from the user directly**:
+
+- **August: full pass.** CONNECTED, SUCCEEDED, **7 records synced**, UI showed "Synced 7 devices.", Last synced updated. Matches expected exactly.
+- **Cielo: partial — 3 synced, 1 skipped, not 5.** CONNECTED, SUCCEEDED, UI showed "Synced 3 devices (1 more discovered but skipped — no property mapping)." Investigated below.
+
+### Cielo device-count investigation — real, external cause found; a real data-loss risk surfaced
+
+Ran the existing `packages/integrations/src/cielo/scripts/check.ts` (real, read-only, no code changes) against the live account. **Result: Cielo's API currently returns only 4 devices, not 5 or 6**:
+
+| Device                  | MAC          | Status  |
+| ----------------------- | ------------ | ------- |
+| Island Tides - Man cave | D8BFC0FE8756 | ONLINE  |
+| Bahamas - Living Room   | D0EF7624CCD4 | OFFLINE |
+| 7206 - Office           | C45BBEC42260 | ONLINE  |
+| Sandy Nudes - Garage    | 781C3CB9ED6C | ONLINE  |
+
+- **The 1 "skipped" device is "7206 - Office" (`C45BBEC42260`)** — correct, by design. Kenny confirmed in Increment 21 this is his and Jenny's personal residence and must never be mapped. Not a bug.
+- **The real gap**: two of the five originally-mapped devices — **"Ocean Pearl - SPA Room" (`B48A0AF68C2A`)** and **"Miramar Blis - MIL" (`781C3CBADB1C`)** — are missing from the live API response entirely (not skipped — simply absent). `CIELO_PROPERTY_MAP` itself is confirmed intact and working correctly (proof: every device that _was_ returned and _is_ in the map synced successfully). This is an external, provider-account-side change, not a StayWhile config/mapping problem — same class of finding as Increment 26's "August's 7 locks are the account's complete inventory." **Cause not assumed** — needs confirming with Michelle/Kenny (device removed from the account, physically disconnected, renamed, moved to a different login — unknown from here).
+
+**Urgent, unresolved as of this note**: `pruneStaleDevices()` (`smart-devices.service.ts:92-100` — the same hard-delete function flagged as a real existing bug during the `ProviderDevice` architecture discussion, fix deferred to Priority 3, never implemented) runs on every Cielo sync and deletes any `SmartDevice` row not in the current result. Since Ocean Pearl and Miramar Bliss's Cielo devices weren't in this run's 4-device result, **this live sync almost certainly already deleted their `SmartDevice` rows from production**. **Not yet confirmed** — production Supabase was unreachable both times this was checked this session. **Verify this the moment Supabase is reachable, before assuming either outcome.** If confirmed, this is real evidence for prioritizing the `ProviderDevice`/soft-deactivate fix sooner rather than treating it as purely deferred — noted, not decided, not actioned.
+
+**Nothing hardcoded, no guessed mapping, no code changed as part of this investigation.**
+
+### New client requirement — Full Smart Device Management (Locks + Thermostats control) — recorded, NOT started
+
+Second-meeting follow-up from the user: the client wants the dashboard to eventually provide **operational control**, not just read-only monitoring, for both Locks and Thermostats. Recorded here in full so it isn't lost; **nothing below has been designed in detail or implemented**.
+
+**Locks section, expanded scope** (beyond current read-only monitoring): keep existing Online/Offline + Battery/Low-Battery, add — Locked/Unlocked status, Lock door, Unlock door, view property/device link (already exists), generate guest access codes, set access-code start/expiration date-time, view active access codes where the provider permits, revoke/delete access codes where supported, reservation-linked guest code generation where supported, clear success/failure feedback per command, audit/history record for control actions.
+
+**Thermostats section — needs its own dedicated page**, not just the homepage summary tile (today's `/thermostats` page is read-only/monitoring only — see Increment 28). Per-thermostat: Property, Provider, device name, Online/Offline, current temperature, current setpoint, current mode (Heat/Cool/Auto/Off) where available, heating/cooling state where available, last synced. Write access where supported: change setpoint, change HVAC mode, on/off via provider-supported modes, command success/failure feedback, audit/history log.
+
+**Homepage stays exactly as-is** — the client's original four requirements (August lock problems esp. offline/low-battery, Thermostat problems esp. offline, Today's check-ins, Today's check-outs, due/upcoming cleanings, Rescheduled Cleanings) remain the homepage's scope. Detailed controls belong only in the dedicated Locks/Thermostats sections, never the homepage.
+
+**Explicit standing safety/rollout rule**: current read-only behavior is intentional while integrations are still being completed/verified — **do not remove read-only restrictions globally**. Control must be enabled **provider by provider and capability by capability**, only after confirming, per capability: (1) the provider API officially supports the operation, (2) the credentials/scopes actually authorize it, (3) the device is correctly mapped to the property, (4) RBAC restricts the control to the right StayWhile users, (5) commands have clear confirmation/error handling, (6) the action is auditable. **Never expose a control button for a capability that isn't verified-supported and implemented** — never fake a successful command. Different providers will expose different real capabilities; the UI must reflect that honestly, not assume uniform capability across Nest/Cielo/August/Honeywell/Ecobee.
+
+**Current control-capability status, per connected provider — direct, no research performed beyond what's already true in this repo today**:
+
+| Provider         | Read (implemented)                                              | Write/control (implemented)                                                                                                                             |
+| ---------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| August           | ✅ list locks, battery, online/offline                          | ❌ **zero** — `AugustClient` has no lock/unlock method at all today, deliberately (Increment 19: "read-only, intentionally")                            |
+| Cielo            | ✅ list devices, online/offline                                 | ❌ **zero** — `CieloClient` has no setpoint/mode method at all today                                                                                    |
+| Nest             | ✅ discovery proven (33 devices, staging-only per Increment 31) | ❌ not attempted; the OAuth scope granted (`sdm.service`) has not been checked against Google's read-vs-write scope boundaries — unconfirmed either way |
+| Honeywell/Ecobee | ❌ not connected at all yet                                     | ❌ not connected at all yet                                                                                                                             |
+
+**Every provider's control capability is genuinely unresearched beyond this table** — whether August's real API (via the `yalexs` reference library) or Cielo's real API support lock/unlock or setpoint commands at all hasn't been verified in this engagement. That research is real, separate, future work — not done as part of recording this requirement, and explicitly not started per the user's instruction to finish the Cielo investigation first and not begin control implementation this increment.
+
+**Status**: requirement recorded only. No design, no schema, no code, no capability research beyond the table above. Waiting on the user before any of this becomes active work — and still gated behind the `ProviderDevice` dynamic-mapping foundation (Priority 3) landing first, since exposing device _control_ before device _mapping_ is dashboard-managed would compound the exact hard-coding problem Kenny's standing requirement already rules out.
+
+---
+
+## Increment 34 — 2026-08-20: Michelle's clarification on the August offline-lock report and lock/thermostat scope — recorded before investigation
+
+User relayed a direct clarification from Michelle after the assistant's read-only investigation of "only 3 of 7 August locks visible" (Increment 33) found all 7 rows genuinely present — the real question was never a missing-record problem.
+
+### 1. All 7 August locks are expected to be ONLINE — investigation reopened, not closed
+
+Production actually shows **7 Total, 3 Online, 4 Offline, 0 Low Battery** — all 7 rows exist (confirmed in Increment 33), so the earlier "3 of 7 visible" framing was answered, but **Michelle has now clarified all 7 locks should show Online**, which reopens the real question: why are 4 genuinely showing Offline. To investigate, not assume:
+
+- Whether August is really reporting those 4 as offline right now (live check).
+- Whether StayWhile is reading the wrong August field (bridge/connectivity mapping logic).
+- Whether the sync isn't refreshing those 4 specific devices.
+- Whether the dashboard is showing stale status from an earlier sync.
+- Any other verified cause.
+- **Also**: why the same 4 Offline rows' "Last synced" timestamps behave differently from the 3 Online rows' — verify status and timestamp behavior together, end to end.
+
+**Explicit standing instruction**: do not change `OFFLINE` to `ONLINE` in the database or UI to resolve this. The dashboard must show the provider's real state — whatever that state turns out to be.
+
+### 2. August lock **code management** — new client requirement, investigation-only for now
+
+Michelle clarified the StayWhile team will actively manage guest/access codes through the dashboard — the Locks section can't stay monitoring-only long term. Wanted, where the provider API actually supports it: view existing access codes/PINs; generate/create a new guest code; assign a code to the correct lock/property; set start/activation date-time; set expiration/end date-time; modify an existing code if supported; revoke/delete a code; show code status (active/scheduled/expired); show which reservation/guest a generated code belongs to, when that relationship exists.
+
+**Explicit standing instruction**: do not guess API capabilities, do not build fake controls. Inspect the real August/Yale client and provider API behavior first, report exactly what's supported before any code is written. Since creating/deleting codes is a real device/security action: needs authorization, validation, confirmation, audit logging, and clear success/failure feedback — never exposed to every dashboard user automatically.
+
+### 3. Keep monitoring separate from controls
+
+The existing lock summary (Total/Online/Offline/Low battery, Property, Lock name, Provider, Battery, Last seen) stays as-is. A distinct **Access Codes / Code Management** area is wanted for the operational code work — not merged into the monitoring table.
+
+### 4. Thermostats — get the existing read-only page live and verified now; controls are a later, separate stage
+
+Standing instruction reaffirmed: Thermostats belongs directly under Locks in the sidebar. **Immediate ask**: get the already-built read-only `/thermostats` page (Increment 28) actually live, visible, and verified — it was built but left uncommitted, status not reconfirmed since. Full thermostat write/control functionality is explicitly a separate, later stage — same standing rule as locks: no write/control capability gets enabled for any provider until that provider's real API permissions and behavior are verified first.
+
+### Priority order for this pass, as given
+
+1. Record this clarification in HANDOFF (this entry).
+2. Investigate why 4/7 August locks show Offline when Michelle expects all 7 Online.
+3. Investigate the August/Yale API's real access-code capabilities — report exactly what's safely exposable, nothing guessed.
+4. Verify and expose the existing `/thermostats` page + nav entry.
+
+**Standing rule restated**: no hard-coded device states, lock codes, thermostat values, or property mappings to make the UI look complete — everything shown or controlled must come from the real provider/integration or an explicitly dashboard-managed configuration.
+
+**Status as of this note**: recorded only — investigation begins immediately after this entry, in the order above.
+
+---
+
+## Increment 35 — 2026-08-19/20: closed the August UNKNOWN-status bug (deployed, awaiting production test); Michelle plans to add more August locks to surface other hardware/connectivity architectures
+
+### August UNKNOWN-status fix — implemented, committed, deployed
+
+Full investigation (Increments 33-34 above) found `bridgeIsOnline()` collapsed "no `Bridge` object in the API response" into `OFFLINE` — a real bug, not a hardware problem. A live field-by-field audit of the real 7-lock fleet found three genuinely different hardware/firmware generations: `Type 15` locks return a `Bridge` object + real-time push data (reliable ONLINE/OFFLINE, unchanged by this fix); `Type 21`/`1005` locks never return `Bridge` at all, while three of the four still sent battery telemetry as fresh as the "online" locks — they were working, just unreadable through the field this integration checked. The fourth (`Type 1005`, Island Tides - Man Cave) had genuinely stale telemetry (~46h vs. the ~2-4h normal range).
+
+Shipped: `UNKNOWN` added to `SmartDeviceStatus` (additive migration, single `ALTER TYPE ... ADD VALUE`, confirmed no existing rows touched). Bridge-absent locks now classify as `UNKNOWN`, never `OFFLINE`. `/locks` and the homepage both stop counting `UNKNOWN` as `OFFLINE` or auto-flagging it as critical — a device only needs attention for an explicit `OFFLINE` report, low battery, or stale telemetry (24h threshold, derived from the real observed fleet data, documented in code, not guessed). `/locks` gained separate `Connectivity`/`Lock state`/`Last synced` (StayWhile's own `updatedAt`)/`Last telemetry` (the provider's own timestamp) columns — "Last synced" no longer shows `lastSeenAt`, which used to null out on every offline classification even when the row had, in fact, just synced. Only safe fields (`batteryLevel`, `telemetryUpdatedAt`, `lockState`) enter `SmartDevice.metadata` — verified by a dedicated test. No lock-control or access-code write capability added.
+
+**Committed (`13cea96`) and pushed** — 13 files, exactly the approved scope (schema + migration, August client/types, sync service, `/locks`, dashboard service + homepage component, plus matching tests at unit/e2e/dashboard level). Verified before commit: migration validated, lint/typecheck clean on both affected packages, 258 website + 61 integrations tests pass, production build succeeds. **Deployed, `/api/health` and `/sign-in` both confirmed 200 post-deploy.**
+
+**Not yet done — waiting on the user's live production test** (checklist already given in chat): all 7 locks visible, expected 3 Online / 0 Offline / 4 Unknown split, Island Tides - Man Cave's distinct "telemetry stale" badge, Last synced vs. Last telemetry values, no false Offline badges anywhere. **Do not consider this bug closed until that test passes** — see "Current work order" below.
+
+### New client note — Michelle plans to add more August locks specifically to surface other hardware architectures
+
+Michelle, relayed by the user, in direct response to the UNKNOWN-status finding: _"If that's the case with the August connectivity, different lock models might require different connectivity fields, then I'll add more locks to your August access, in case there are types of locks that might have the same issue."_ She's granting the already-authorized StayWhile August account access to additional real locks, deliberately to help find any other lock model/connectivity architecture beyond the three already found (Type 15 / Type 21 / Type 1005).
+
+**Standing protocol for when those locks appear — recorded now, not yet actioned:**
+
+1. **No automatic property mapping, ever.** Michelle adding a lock to the August account only makes it _discoverable_ — it does not tell StayWhile which `Property` row it belongs to. Never guess from the lock name. This is exactly the case the already-planned `ProviderDevice`/admin-mapping architecture exists for — newly discovered devices get reviewed and explicitly mapped through the dashboard, not hard-coded into an env var. Not built yet; this note is why it matters here specifically.
+2. **Discovery must be read-only**: run the existing `check.ts`-style live discovery, compare against the known 7-lock inventory, identify exactly what's new.
+3. **Per new device, inspect only verified non-sensitive fields**: device name, `Type`, SKU/model, `Bridge` presence/status, `module`/`hostLockInfo` presence, pubsub/connectivity structure, `LockStatus` structure, battery %, battery telemetry timestamp, and any other connectivity field confirmed safe the same way this increment's investigation confirmed the existing ones — never PIN values, guest names, tokens, credentials, or access-code contents, matching the exact discipline already used throughout Increments 33-35.
+4. **Connectivity classification stays conservative**: only classify ONLINE/OFFLINE when a verified signal supports it, exactly like the fix just shipped. A new/unrecognized hardware architecture defaults to `UNKNOWN` — never `OFFLINE`, never a guessed classification to make the UI look complete.
+5. **No hard-coded model numbers or property mappings** added just to make new locks display correctly.
+6. **Report before changing production logic** — new hardware/model groupings and a recommended connectivity-derivation approach get reported and approved first, same pattern as this entire investigation, before any code changes.
+
+### Current work order, as given
+
+1. **Do not interrupt** the user's live production test of the August UNKNOWN-status fix already deployed.
+2. Once it passes: close the August status bug (mark resolved in this doc), then expose the read-only `/thermostats` section under Locks in the sidebar (page already built in Increment 28, still uncommitted — nav placement already correct).
+3. When Michelle confirms the additional August locks have actually been added: run the expanded read-only discovery protocol above.
+4. Access-code write/control functionality stays separate and un-started until its API operations are independently verified (per the standing Increment 33/34 findings — read is confirmed, write is unverified).
+
+**Nothing implemented this entry — documentation only, per explicit instruction.**
+
+---
+
+## Increment 36 — 2026-08-20: 44-lock August discovery closes the connectivity-logic question and reopens the property-mapping priority — OwnerRez now comes before ProviderDevice mapping
+
+### August UNKNOWN-status fix — validated against the real, expanded fleet
+
+Michelle added more locks to the authorized August account specifically to stress-test the connectivity fix (Increment 35). Read-only discovery (no writes, no property mapping, no pins/guest data touched) found:
+
+- **44 total locks discovered** (7 original + **37 new**).
+- **A real correction to Increment 33/34's finding**: `Type` alone is _not_ a reliable connectivity discriminator — only 3 of 19 `Type 15` locks actually have a `Bridge` object; the other 16 don't. The true discriminator is the combination of `Bridge`/`pubsubChannel`/`LockStatus`-validity/`module`/`hostLockInfo` presence, which cuts across `Type` values.
+- **4 distinct connectivity capability patterns** across all 44:
+  - **Pattern 1 — full real-time signal** (Bridge + pubsubChannel + valid `LockStatus`): **3 locks** (Bonjour Front Door, Bonjour In Law, Aqua Palm Front Door — all original, all `Type 15`).
+  - **Patterns 2-4 — no verified real-time signal, `UNKNOWN` by design**: **41 locks**, spanning `Type` 15 (16 new), 21 (3 original + 9 new), 20 (2 new), 1005 (1 original + 4 new), 1001 (5 new), 1007 (1 new).
+- **Confirmed safe**: every one of the 41 `UNKNOWN` locks correctly avoids a false `OFFLINE` label under the already-shipped logic — this is the direct, empirical validation of the fix from Increment 35, now proven against 44 real devices instead of 7. **No further connectivity-logic refinement needed right now** — explicit user decision, not deferred by oversight.
+- **7 locks with stale telemetry (>24h), flagged for attention, never treated as Offline**: Island Tides - Man Cave (~46h, already known), Flor Sun - Front Door (~25h), Bahamas - Front Door (~28h), Palm Haven - Front Door (~2.5 days), Spa lock (~6 days), "Delete Door" (~6 months), Royal Eden - garage Door (~3 years — likely genuinely dead/decommissioned, not a classification bug).
+- **Explicit standing instruction**: do not remove, hide, or auto-classify suspicious-looking devices like "Delete Door" or "Royal Eden - garage Door" — surface them later as discovered devices for admin review, never assume based on their name or stale data alone.
+
+### Property-mapping gap found — reopens and reprioritizes the ProviderDevice work
+
+- **All 37 new locks are currently unmapped** — none of their house IDs are in `AUGUST_PROPERTY_MAP`. **Explicit instruction: do not add 37 new `AUGUST_PROPERTY_MAP` entries** — this is the real production case proving the standing `ProviderDevice`/admin-mapping architecture (Discovered → Unmapped → Admin maps to Property → Enabled/Operational) is needed now, not hypothetically.
+- **34 of the 37 new locks have no matching StayWhile `Property` row at all** (by name, purely an observation, not a mapping decision) — only 3 (Bahamas, Ocean Pearl, Sandy Nudes) share a name with an existing property (created earlier for Cielo), and even those aren't in `AUGUST_PROPERTY_MAP` yet.
+- **New priority decision**: because 34 of 37 locks have no property to map to at all, **OwnerRez's property sync (client's second-meeting requirement — "sync the full portfolio from OwnerRez, don't manually create properties one by one") must land _before_ building the `ProviderDevice` admin-mapping UI.** Building device-mapping UI against StayWhile's current 7-property inventory would be mapping most of these 37 locks to nothing. Revised implementation order below.
+
+### Revised implementation order
+
+1. Keep the 37 new locks read-only/discovered-only — **no `SmartDevice` rows created for unmapped locks**, no property mapping, no `AUGUST_PROPERTY_MAP` expansion.
+2. Expose the already-built read-only `/thermostats` page under Locks in the sidebar (next, this same session).
+3. **OwnerRez property sync/backfill** (read-only investigation → safe backfill design → implementation) — bring in the full real portfolio, preserve the existing 7 `Property` UUIDs where safely matchable, prevent duplicates. This is now the next real body of work, ahead of device mapping.
+4. Only after that: build the `ProviderDevice`/admin-mapping UI so the 37 discovered August locks (and future Cielo/Nest/Honeywell/Ecobee devices) can be explicitly mapped to real properties — no name-based auto-mapping, admin confirmation required for every mapping, same standing rule as everywhere else in this project.
+
+### What the user told Michelle (for continuity, not a new decision)
+
+The user sent Michelle a summary along these lines: August now returns 44 locks total (up from 7), only 3 expose a verified real-time connectivity signal so the rest correctly show as Unknown rather than a false Offline, several locks have older telemetry surfaced separately as an Attention Needed condition, and the 37 newly discovered locks confirm why the dynamic mapping setup is needed — once the property list is synced from OwnerRez, discovered devices will be reviewable and mappable directly from the dashboard.
+
+**Nothing implemented yet in this entry beyond documentation** — `/thermostats` exposure and OwnerRez work follow immediately after, per the order above.
+
+---
+
+## Increment 37 — 2026-08-20: `/thermostats` timestamp fix shipped; full OwnerRez audit completed (read-only, nothing implemented)
+
+### Thermostats timestamp fix (shipped)
+
+`ThermostatsList.tsx`'s "Last synced" column was reading `lastSeenAt` (nulls out whenever a device is offline) instead of `updatedAt` — the same bug class already fixed on `/locks`. Fixed to match Locks exactly: "Last synced" now reads `updatedAt`; a separate "Last telemetry" column reads `getTelemetryUpdatedAt()`, correctly rendering "—" for Cielo (which doesn't populate that metadata key) rather than inventing a value. Lint/typecheck/258 tests/build all passed. Committed `0f2ffc7`, pushed, production health-checked (`/api/health` and `/sign-in` both 200 post-deploy). Single-file change, no other Thermostats work done per explicit instruction not to re-polish this increment.
+
+### OwnerRez audit (read-only — no writes to OwnerRez, no writes to any database, two throwaway scripts used and deleted immediately after)
+
+1. **Vercel Production credentials**: **could not be verified this session** — the Vercel CLI here has no stored auth token and no linked `.vercel/project.json` exists in the repo, so `vercel whoami`/`vercel env ls` hang on an interactive login this session can't complete. Same unresolved-credential-location risk pattern as the original Sync Now bug (`AUGUST_PROPERTY_MAP` present locally, missing in Production). **Needs a safe, identity-verified check next session** — see "Next: Vercel Production verification" below.
+2. **Client code**: real, not stubbed. `connect`, `disconnect`, `authenticate`, `healthCheck`, `validateCredentials`, `listProperties`, `listBookings`, `getGuest`, `sync("INBOUND")` all make genuine HTTP calls. Only `receiveWebhook()` is a stub (undocumented payload shape, not a credential gap).
+3. **Endpoints implemented**: `GET /properties`, `GET /bookings` (+ `since_utc`), `GET /guests/{id}`.
+4. **Real property data reaching the dashboard**: no. Only `listBookings()` reaches the dashboard, as a 5-item read-only "upcoming bookings" preview. No OwnerRez data is ever written to the database — `sync("INBOUND")` deliberately only counts and returns.
+5. **`Property.ownerRezPropertyId` usage**: dormant. Repo-wide grep found exactly one hit — its own definition in `schema.prisma`. Never read or written anywhere.
+6. **Live property count** (checked live, read-only `GET /v2/properties`, 2026-08-20): **20 properties, all active, single page** — matches the 2026-08-15 verification, still accurate.
+7. **Real fields OwnerRez returns** (confirmed live, not just docs): `id`, `key`, `name`, `external_name`, `internal_code`, `active`, `is_snoozed`, `address` (street1/street2/city/state/postal_code/country), `property_type`, `bedrooms`, `bathrooms`/`bathrooms_full`/`bathrooms_half`, `max_guests`/`max_adults`/`max_children`/`max_pets`, `check_in`, `check_out`, `currency_code`, `latitude`, `longitude`, `owner_id`, `public_url`, `thumbnail_url*`. No `amenities` field. No incremental (`since_utc`) filter on this endpoint — any sync must be a full pull (cheap at 20 rows). OwnerRez has its own `internal_code` — a second matching key alongside `id`/`key`.
+8. **Matchability of existing StayWhile properties** (checked against the **local dev DB only** — no production DB connection available this session, production may differ and should be re-checked before real sync work): local dev has 9 non-deleted `Property` rows (2 are demo seed rows, `DEMO-001`/`DEMO-002`, expected to never match). Of the 7 real rows, name-based comparison against the live 20 found: **Ocean Pearl** and **Bonjour AMI** — exact name/internal_code match; **Miramar Bliss** — close but not exact ("Miramar-Bliss" / internal_code "Miramar Bliss 2") — flag for review, not auto-linked; **Aqua Palm, Bahamas, Island Tides, Sandy Nudes** — no OwnerRez counterpart found at all. So **17 of the 20 real OwnerRez properties have no matching StayWhile row in local dev.** No `ownerRezPropertyId` was written anywhere — these are candidates for human confirmation only.
+9. **Files that would need to change**: `packages/integrations/src/ownerrez/types.ts` (widen `OwnerrezProperty` to the real field set above), a new `ownerrez-sync` service function (matching + report logic, no auto-apply), a new admin-review UI for confirming proposed matches, and `HANDOFF.md`.
+10. **Schema/migration**: **none needed.** `Property.ownerRezPropertyId String? @unique` already exists and is unused — ready to hold confirmed mappings.
+
+### Approved plan (design only, not built yet)
+
+Full pull of `GET /v2/properties` (no incremental filter exists) → match in strict order (`ownerRezPropertyId` exact → `internalCode` exact, reported for confirmation, never auto-linked → unmatched either side reported, never created/deleted automatically) → writes are update-only for already-confirmed matches, never delete-on-missing (same lesson as the `pruneStaleDevices` data-loss incident) → nothing written back to OwnerRez → every run outputs a structured report (`alreadyLinked`/`proposedMatches`/`unmatchedOwnerRez`/`unmatchedStayWhile`), never a silent boolean.
+
+### Next: Vercel Production verification (client-isolation-critical — user has multiple client accounts)
+
+Before touching Vercel at all next session: verify which Vercel account/team the CLI is authenticated to, verify this repo is linked specifically to the StayWhile `stayawhilewithus-website` project, never inspect/modify/deploy any other client's project, never change env var values — only check whether `OWNERREZ_USERNAME`/`OWNERREZ_API_TOKEN` exist by name in Production. This session could not even reach the identity-verification step (CLI unauthenticated) — needs the user to authenticate the CLI (or confirm via the Vercel dashboard directly) before any check proceeds.
+
+### After OwnerRez: return to second-meeting priorities, Notion next
+
+Once Production credentials are confirmed and OwnerRez is implemented (read-only, admin-reviewed mappings, no guessing, no auto-overwrite of existing properties), the next approved priority is **full Notion connection** — dashboard search of authorized Notion content (no demo results), automated monthly Notion backup (what's backed up, where, naming/versioning, retention, failure reporting, how it runs while n8n is unresolved), and altered/deleted-page awareness (verify actual Notion API capability first, no promising real-time events it doesn't support). Full requirements already recorded from the second client meeting.
 
 ---
 
