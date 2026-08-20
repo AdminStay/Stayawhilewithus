@@ -22,7 +22,35 @@ import {
   type SmartDevice,
 } from "../services/smart-devices.service";
 
-type ThermostatWithProperty = SmartDevice & { property: { name: string } };
+import { NestThermostatControls } from "./NestThermostatControls";
+
+type ThermostatWithProperty = SmartDevice & {
+  property: { name: string };
+  providerDevice: {
+    enabled: boolean;
+    rawMetadata: unknown;
+  } | null;
+};
+
+/**
+ * providerDevice.rawMetadata is a generic Prisma Json value — this reads
+ * only the already-sanitized rawTraits key NestClient/parseNestDevice
+ * populated (see packages/integrations/src/nest/client.ts). Never used for
+ * any non-Nest provider (their providerDevice relation is always null).
+ */
+function getRawTraits(
+  thermostat: ThermostatWithProperty,
+): Record<string, Record<string, unknown>> | null {
+  if (thermostat.provider !== "NEST" || !thermostat.providerDevice?.enabled) {
+    return null;
+  }
+  const rawMetadata = thermostat.providerDevice.rawMetadata;
+  if (!rawMetadata || typeof rawMetadata !== "object") return null;
+  const rawTraits = (rawMetadata as { rawTraits?: unknown }).rawTraits;
+  return rawTraits && typeof rawTraits === "object"
+    ? (rawTraits as Record<string, Record<string, unknown>>)
+    : null;
+}
 
 function formatTimestamp(date: Date | null): string {
   return date ? new Date(date).toLocaleString() : "—";
@@ -76,12 +104,14 @@ export function ThermostatsList({
           <TableHeaderCell>Humidity</TableHeaderCell>
           <TableHeaderCell>Last synced</TableHeaderCell>
           <TableHeaderCell>Last telemetry</TableHeaderCell>
+          <TableHeaderCell>Controls</TableHeaderCell>
         </TableHead>
         <TableBody>
           {thermostats.map((thermostat) => {
             const mode = getMode(thermostat);
             const humidity = getHumidity(thermostat);
             const telemetryUpdatedAt = getTelemetryUpdatedAt(thermostat);
+            const rawTraits = getRawTraits(thermostat);
 
             return (
               <TableRow key={thermostat.id}>
@@ -119,6 +149,16 @@ export function ThermostatsList({
                 </TableCell>
                 <TableCell className="text-ink-muted">
                   {formatTimestamp(telemetryUpdatedAt)}
+                </TableCell>
+                <TableCell>
+                  {rawTraits ? (
+                    <NestThermostatControls
+                      smartDeviceId={thermostat.id}
+                      rawTraits={rawTraits}
+                    />
+                  ) : (
+                    <span className="text-ink-faint">—</span>
+                  )}
                 </TableCell>
               </TableRow>
             );

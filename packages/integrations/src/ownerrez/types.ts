@@ -13,7 +13,12 @@ export interface OwnerrezProperty {
   id: number;
   name: string;
   key: string;
-  is_active: boolean;
+  // Confirmed 2026-08-21 against real Production data: OwnerRez's actual
+  // field is `active`, not `is_active` (the latter was an unverified
+  // assumption that silently deserialized to `undefined` on every real
+  // property). Matches OwnerRez's own `active` query filter on this same
+  // endpoint and its `active` field on the sibling `listing_sites` resource.
+  active: boolean;
 }
 
 export interface OwnerrezBooking {

@@ -41,6 +41,7 @@ model User {
   notifications         Notification[]
   connectedIntegrations IntegrationConnection[]
   aiActionsReviewed     AiAction[]              @relation("AiActionReviewer")
+  mappedProviderDevices ProviderDevice[]        @relation("ProviderDeviceMappedBy")
 
   @@map("users")
 }
@@ -148,6 +149,7 @@ model Property {
   messageThreads      MessageThread[]
   smartDevices        SmartDevice[]
   aiConversations     AiConversation[]
+  providerDevices     ProviderDevice[]
 
   @@map("properties")
 }
@@ -270,22 +272,22 @@ model Task {
 }
 
 model CleaningSchedule {
-  id                 String         @id @default(uuid()) @db.Uuid
-  propertyId         String         @map("property_id") @db.Uuid
-  reservationId      String?        @map("reservation_id") @db.Uuid
-  taskId             String         @unique @map("task_id") @db.Uuid
-  scheduledDate      DateTime       @map("scheduled_date") @db.Date
+  id                    String         @id @default(uuid()) @db.Uuid
+  propertyId            String         @map("property_id") @db.Uuid
+  reservationId         String?        @map("reservation_id") @db.Uuid
+  taskId                String         @unique @map("task_id") @db.Uuid
+  scheduledDate         DateTime       @map("scheduled_date") @db.Date
   /// Set the first time this schedule's date is changed after creation, and
   /// left untouched on every reschedule after that — so it always holds the
   /// *original* date, not just "whatever it was before the most recent
   /// change." Null means never rescheduled.
-  originalScheduledDate DateTime?   @map("original_scheduled_date") @db.Date
-  scheduledStartTime String?        @map("scheduled_start_time")
-  scheduledEndTime   String?        @map("scheduled_end_time")
-  cleaningType       CleaningType   @map("cleaning_type")
-  status             CleaningStatus @default(SCHEDULED)
-  createdAt          DateTime       @default(now()) @map("created_at")
-  updatedAt          DateTime       @updatedAt @map("updated_at")
+  originalScheduledDate DateTime?      @map("original_scheduled_date") @db.Date
+  scheduledStartTime    String?        @map("scheduled_start_time")
+  scheduledEndTime      String?        @map("scheduled_end_time")
+  cleaningType          CleaningType   @map("cleaning_type")
+  status                CleaningStatus @default(SCHEDULED)
+  createdAt             DateTime       @default(now()) @map("created_at")
+  updatedAt             DateTime       @updatedAt @map("updated_at")
 
   property    Property     @relation(fields: [propertyId], references: [id], onDelete: Restrict)
   reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
@@ -398,20 +400,29 @@ model Notification {
 // ─────────────────────────────────────────────────────────────────────────
 
 model SmartDevice {
-  id               String              @id @default(uuid()) @db.Uuid
-  propertyId       String              @map("property_id") @db.Uuid
-  provider         SmartDeviceProvider
-  deviceType       SmartDeviceType     @map("device_type")
-  externalDeviceId String              @map("external_device_id")
-  name             String
-  status           SmartDeviceStatus   @default(ONLINE)
-  lastSeenAt       DateTime?           @map("last_seen_at")
-  metadata         Json                @default("{}")
-  createdAt        DateTime            @default(now()) @map("created_at")
-  updatedAt        DateTime            @updatedAt @map("updated_at")
+  id                  String              @id @default(uuid()) @db.Uuid
+  propertyId          String              @map("property_id") @db.Uuid
+  provider            SmartDeviceProvider
+  deviceType          SmartDeviceType     @map("device_type")
+  externalDeviceId    String              @map("external_device_id")
+  name                String
+  status              SmartDeviceStatus   @default(ONLINE)
+  lastSeenAt          DateTime?           @map("last_seen_at")
+  metadata            Json                @default("{}")
+  // Durable duplicate-command guard for real device write commands (set
+  // right after the advisory lock is acquired, cleared in a `finally` once
+  // the command settles either way). Needed because this is a serverless
+  // app — an in-memory lock wouldn't survive across concurrent invocations.
+  // Read the same way IntegrationSyncLog's RUNNING status is: a stale
+  // in-progress marker (older than a short threshold) self-heals rather
+  // than permanently locking a device out.
+  commandInProgressAt DateTime?           @map("command_in_progress_at")
+  createdAt           DateTime            @default(now()) @map("created_at")
+  updatedAt           DateTime            @updatedAt @map("updated_at")
 
-  property Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
-  events   SmartDeviceEvent[]
+  property       Property           @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  events         SmartDeviceEvent[]
+  providerDevice ProviderDevice?
 
   @@unique([provider, externalDeviceId])
   @@index([propertyId])
@@ -454,6 +465,7 @@ model IntegrationConnection {
 
   connectedByUser User?                @relation(fields: [connectedByUserId], references: [id], onDelete: SetNull)
   syncLogs        IntegrationSyncLog[]
+  providerDevices ProviderDevice[]
 
   @@map("integration_connections")
 }
@@ -475,6 +487,51 @@ model IntegrationSyncLog {
 
   @@index([integrationConnectionId, startedAt])
   @@map("integration_sync_logs")
+}
+
+/**
+ * Staging layer for every device a provider's API reports, independent of
+ * whether it's mapped to a Property. Discovery sync (provider-side, e.g.
+ * discoverNestDevices()) only ever upserts the provider-owned fields below
+ * (scoped to [integrationConnectionId, externalDeviceId]) — it never
+ * touches propertyId/enabled/mappedAt/mappedByUserId/smartDeviceId, which
+ * are exclusively admin-controlled, written only via an explicit dashboard
+ * mapping action (see ownerrez-property-matching-style "no automatic
+ * mapping, ever" rule — same standard applied to devices). Scoped to
+ * IntegrationConnection (not just the provider enum) so per-connection
+ * re-auth/rotation doesn't orphan discovered devices; onDelete: Restrict
+ * means a connection can't be deleted out from under devices that still
+ * reference it. Provider-agnostic by construction — intended to serve
+ * every device provider (August/Cielo eventually too), not Nest-only.
+ */
+model ProviderDevice {
+  id                      String            @id @default(uuid()) @db.Uuid
+  integrationConnectionId String            @map("integration_connection_id") @db.Uuid
+  externalDeviceId        String            @map("external_device_id")
+  deviceType              SmartDeviceType   @map("device_type")
+  discoveredName          String            @map("discovered_name")
+  connectivityStatus      SmartDeviceStatus @default(UNKNOWN) @map("connectivity_status")
+  // Only traits the provider's API actually returned for this device go
+  // here — never a fabricated/default value for a trait that was absent.
+  rawMetadata             Json              @default("{}") @map("raw_metadata")
+  firstDiscoveredAt       DateTime          @default(now()) @map("first_discovered_at")
+  lastSeenAt              DateTime          @default(now()) @map("last_seen_at")
+
+  // Admin-owned mapping state — never written by discovery sync.
+  propertyId     String?   @map("property_id") @db.Uuid
+  enabled        Boolean   @default(false)
+  mappedAt       DateTime? @map("mapped_at")
+  mappedByUserId String?   @map("mapped_by_user_id") @db.Uuid
+  smartDeviceId  String?   @unique @map("smart_device_id") @db.Uuid
+
+  integrationConnection IntegrationConnection @relation(fields: [integrationConnectionId], references: [id], onDelete: Restrict)
+  property              Property?             @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  mappedByUser          User?                 @relation("ProviderDeviceMappedBy", fields: [mappedByUserId], references: [id], onDelete: SetNull)
+  smartDevice           SmartDevice?          @relation(fields: [smartDeviceId], references: [id], onDelete: SetNull)
+
+  @@unique([integrationConnectionId, externalDeviceId])
+  @@index([propertyId])
+  @@map("provider_devices")
 }
 
 // ─────────────────────────────────────────────────────────────────────────

@@ -59,7 +59,7 @@ describe("listSmartDevices", () => {
     expect(assertPermission).toHaveBeenCalledWith(actor, "smart_devices:read");
     expect(prisma.smartDevice.findMany).toHaveBeenCalledWith({
       orderBy: [{ status: "desc" }, { name: "asc" }],
-      include: { property: true },
+      include: { property: true, providerDevice: true },
     });
     expect(result).toEqual([{ id: "d1" }]);
   });

@@ -44,6 +44,11 @@ export const NAV_SECTIONS: NavSection[] = [
     label: "System",
     items: [
       { href: "/integrations", label: "Integrations", icon: "plug" },
+      {
+        href: "/integrations/devices",
+        label: "Discovered Devices",
+        icon: "plug",
+      },
       { href: "/audit", label: "Audit", icon: "shield" },
       { href: "/users", label: "Users", icon: "userCog" },
     ],

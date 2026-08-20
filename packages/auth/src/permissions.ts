@@ -13,6 +13,14 @@ export const RESOURCES = [
   "messages",
   "notifications",
   "smart_devices",
+  // Deliberately separate from "smart_devices" — that resource covers
+  // read/mapping (sync, ProviderDevice mapping); this one is scoped
+  // specifically to live thermostat write commands, so granting mapping
+  // access never implicitly grants physical-device control, and future
+  // per-device-type command permissions (locks, access codes) each get
+  // their own resource too rather than a shared "smart_devices:manage"
+  // bucket. See nest-commands.service.ts.
+  "thermostats",
   "integrations",
   "ai_conversations",
   "ai_actions",

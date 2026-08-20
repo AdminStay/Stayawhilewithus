@@ -15,6 +15,9 @@ const RESOURCES = [
   "messages",
   "notifications",
   "smart_devices",
+  // See packages/auth/src/permissions.ts for why this is a separate
+  // resource from "smart_devices" (read/mapping) rather than folded in.
+  "thermostats",
   "integrations",
   "ai_conversations",
   "ai_actions",

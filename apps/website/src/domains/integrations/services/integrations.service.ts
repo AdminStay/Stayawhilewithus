@@ -62,7 +62,9 @@ export const PROVIDER_CLIENT_STATUS: Record<
   // are absent, so the two stay honest together.
   AUGUST: "real",
   CIELO: "real",
-  NEST: "stub",
+  // Flipped 2026-08-21 — NestClient now makes real SDM API calls
+  // (read-only: listDevices() only, no write/command path yet).
+  NEST: "real",
   ECOBEE: "stub",
 };
 
@@ -72,7 +74,7 @@ export const PROVIDER_CLIENT_STATUS: Record<
  * always shows the full catalog (most `DISCONNECTED`, since no credential
  * has been wired in yet) instead of only whatever happens to have a row.
  */
-async function ensureConnectionRows(): Promise<void> {
+export async function ensureConnectionRows(): Promise<void> {
   await Promise.all(
     (Object.keys(PROVIDER_DEFAULTS) as IntegrationProvider[]).map((provider) =>
       prisma.integrationConnection.upsert({

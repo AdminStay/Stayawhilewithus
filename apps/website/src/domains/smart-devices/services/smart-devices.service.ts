@@ -14,7 +14,10 @@ export async function listSmartDevices(actor: AuthContext) {
   await assertPermission(actor, "smart_devices:read");
   return prisma.smartDevice.findMany({
     orderBy: [{ status: "desc" }, { name: "asc" }],
-    include: { property: true },
+    // providerDevice included so /thermostats can compute real per-device
+    // Nest capabilities (see getSupportedNestControls) — null for every
+    // August/Cielo row, since only Nest currently populates this relation.
+    include: { property: true, providerDevice: true },
   });
 }
 

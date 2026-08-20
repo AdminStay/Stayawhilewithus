@@ -56,7 +56,7 @@ describe("OwnerrezClient", () => {
 
   it("listProperties() unwraps the paginated response", async () => {
     mockRequest.mockResolvedValueOnce({
-      items: [{ id: 1, name: "Cabin A", key: "cabin-a", is_active: true }],
+      items: [{ id: 1, name: "Cabin A", key: "cabin-a", active: true }],
     });
     const client = new OwnerrezClient(credentials);
 
@@ -64,7 +64,7 @@ describe("OwnerrezClient", () => {
 
     expect(mockRequest).toHaveBeenCalledWith("/properties");
     expect(properties).toEqual([
-      { id: 1, name: "Cabin A", key: "cabin-a", is_active: true },
+      { id: 1, name: "Cabin A", key: "cabin-a", active: true },
     ]);
   });
 

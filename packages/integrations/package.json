@@ -15,6 +15,7 @@
     "./yale": "./src/yale/client.ts",
     "./august": "./src/august/client.ts",
     "./nest": "./src/nest/client.ts",
+    "./nest/capabilities": "./src/nest/capabilities.ts",
     "./ecobee": "./src/ecobee/client.ts",
     "./cielo": "./src/cielo/client.ts"
   },
@@ -24,7 +25,8 @@
     "test": "vitest run --passWithNoTests",
     "august:login": "tsx src/august/scripts/login.ts",
     "august:check": "tsx src/august/scripts/check.ts",
-    "cielo:check": "tsx src/cielo/scripts/check.ts"
+    "cielo:check": "tsx src/cielo/scripts/check.ts",
+    "nest:discover": "tsx src/nest/scripts/discover.ts"
   },
   "dependencies": {
     "@stayw/database": "workspace:*"
@@ -34,6 +36,7 @@
     "vitest": "^2.1.8",
     "@stayw/eslint-config": "workspace:*",
     "@stayw/typescript-config": "workspace:*",
+    "@prisma/client": "^6.1.0",
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
