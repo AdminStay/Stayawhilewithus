@@ -1507,6 +1507,90 @@ Once Production credentials are confirmed and OwnerRez is implemented (read-only
 
 ---
 
+## Increment 38 — 2026-08-22: Nest production verification, RBAC fixes deployed, real permission discrepancy found — unresolved, resume here
+
+### Nest production status
+
+Production's Nest connection is real and working. A production discovery run returned 33 real Nest thermostats, all of which correctly stayed Discovered/Unmapped — discovery created zero `SmartDevice` rows automatically. Capability distribution: 32 devices report Heat/Cool/Fan, 1 reports Cool/Fan only. Discovery's `IntegrationConnection.lastSyncedAt` and the `ProviderDevice` timestamp range were cross-checked against each other and found internally consistent (same run wrote both).
+
+**Aqua Palm - Living room** was manually mapped to the Aqua Palm property and then Enabled — the only Nest device enabled so far, a deliberate single controlled test, not a bulk rollout. Enable itself is confirmed, from direct code inspection, to send zero Nest API/device commands — it's a pure local DB transaction that upserts a `SmartDevice` row from the already-stored discovery snapshot. `/thermostats` went from 3 thermostats (the 3 Cielo devices) to 4 immediately after Enable. Telemetry displayed successfully: 73°F current, 72°F target, mode COOL, 52% humidity, at the time of the verification screenshot.
+
+The telemetry-timestamp fix shipped this session is live: `toSmartDeviceMetadata()` now requires an explicit `observedAt`, and the Enable path passes the real `ProviderDevice.lastSeenAt` (the actual discovery time) instead of fabricating "now" — so "Last telemetry" on this row reflects when Nest was actually last polled, not when someone happened to click Enable.
+
+**Do not enable any of the remaining 32 discovered Nest devices yet.** No physical Nest command (Heat/Cool/Fan/Mode) has been sent or tested — that gate is still fully closed, independent of the RBAC issue below.
+
+### Production deployment
+
+Commit `3224dc5` was pushed to `main` this session. Contents: the thermostat telemetry-timestamp fix, the Nest ghost-row visibility fix (a Nest `SmartDevice` row is now hidden from `/thermostats` once its `ProviderDevice` is unmapped or disabled, instead of lingering with stale data), and the RBAC scope/expiry fixes (see below). `/api/health` returned `HTTP 200` (`{"status":"ok"}`) both immediately post-push and again later in the session, fresh (`x-vercel-cache: MISS`, `age: 0`), not a stale cached response.
+
+**Vercel CLI must NOT be authenticated from this Client C environment.** Confirmed again this session, matching the earlier documented finding above (Increment "Vercel Production verification"): a `vercel whoami` call with no stored credentials immediately starts an interactive OAuth device-login flow — this was deliberately killed, not completed, both times it's happened across sessions. Deployment verification must go through the user checking the Vercel dashboard directly, or the public `/api/health`/`/sign-in` endpoints — never through an authenticated CLI session from inside Claude Code here.
+
+### RBAC production state
+
+`thermostats:manage` now exists as a real `Permission` row in production. Granted roles: **`admin`, `ops_manager`** (deliberately, per explicit client-approved scope — not the other four roles). Confirmed NOT granted: `cleaner`, `front_desk`, `maintenance_tech`, `read_only`.
+
+Applied via a purpose-built minimal script (`grant-thermostats-manage.mjs` — see below), never via the full `prisma/seed.ts`, which was explicitly audited and rejected for production use this session (see "Local operational safety").
+
+A read-only production diagnostic (`diagnose-thermostat-permission-denial.mjs`) confirmed, directly against production data:
+
+- **`ryskris0@gmail.com`**: exactly one `User` row, Clerk-linked, `ACTIVE`, `admin` role at **Global** scope, `expiresAt = null`, admin role confirmed to have `thermostats:manage` via `RolePermission`, and the live replay of `getEffectivePermissions()`'s exact query resolves `thermostats:manage` as granted (effective = YES).
+- **`admin@stayawhilewithus.com`**: exactly one `User` row, `ACTIVE`, `admin` role at Global scope, `expiresAt = null`, same effective result (YES). **Its `clerkUserId` is still the seed placeholder `seed_pending_clerk_link`** — this account has apparently never completed a real Clerk sign-in linking of its own; this needs verification before relying on it for live device control, separate from the open issue below (Kenny/Michelle are currently signed in as this shared login for dashboard browsing only, not device control).
+
+### OPEN ISSUE — resume here next session
+
+While logged in as `ryskris0@gmail.com`, Aqua Palm's enabled Nest thermostat rendered:
+
+> View only — no permission to control this device
+
+This directly conflicts with the production RBAC diagnostic above, which shows this exact user has effective `thermostats:manage = YES`.
+
+**Do not modify `User`/`UserRole`/`RolePermission` data — production RBAC data has been verified correct**, not the suspect. A full code trace (`getCurrentUser()` → `AuthContext` → `getEffectivePermissions()` → `/thermostats/page.tsx`'s per-property `hasPermission()` calls → `canManageByPropertyId` → `ThermostatsList.tsx` → `canRenderNestControls()`) found no bug in any hop, cross-checked against every plausible category (wrong Map/Set key, UUID mismatch, Promise-ordering, inverted boolean, bad `??` fallback default, propertyId lost across the server/client boundary, stale prop name, and a stale-compiled-`@stayw/auth`-package hypothesis — `packages/auth` has no build step and no `dist/`, ruled out empirically). A new regression test, `apps/website/src/domains/smart-devices/services/thermostat-permission-gating.test.ts`, wires the **real** `hasPermission()` and `canRenderNestControls()` together (not reimplementations) against a fixture reproducing this exact confirmed production data shape, and it **passes** — the application code, as committed in `3224dc5`, correctly grants controls for this scenario in isolation.
+
+**Therefore the next investigation must focus on the actual production runtime/request — deployment timing, browser/session cache state, and the resolved `actor` for that specific request — not more speculative RBAC changes.** Ruled out so far, with evidence: server-side static/ISR caching (route is fully dynamic — Clerk's `auth()` forces this, confirmed via `grep` finding zero `dynamic`/`revalidate` overrides anywhere in the route or its layouts) and edge/CDN caching (checked live: `x-vercel-cache: MISS`, `age: 0`). **Not ruled out**: the Next.js App Router client-side Router Cache serving an already-open, not-yet-refreshed browser tab a stale render, or the screenshot having been taken during Vercel's build window before the `3224dc5` deployment actually went live — neither is verifiable from outside without either a hard refresh or dashboard deployment timestamps.
+
+**First next-session step**: have Kris hard-refresh (or open a fresh incognito window and sign in fresh) on `/thermostats` and check whether Aqua Palm still renders "View only."
+
+**If still reproducible**, the next step is a minimal, temporary, server-log-only production diagnostic — already designed, not yet implemented or deployed, pending explicit approval:
+
+- One small, clearly-labeled, easily-`git revert`-able insert into `/thermostats/page.tsx` only.
+- Logs one line to Vercel's server-side Function Logs (never rendered to the browser): the resolved `actor.userId`, the full `canManageByPropertyId` map (property-id → boolean, includes Aqua Palm's `propertyId` and the live `hasPermission()` result for it), and `process.env.VERCEL_GIT_COMMIT_SHA` (a Vercel-injected env var, no new setup needed) to definitively answer whether `3224dc5` is actually what's live.
+- Explicitly excludes: email, Clerk ID, tokens, credentials, full permission-key lists, any other user's data — nothing new is exposed in the browser UI at all.
+- No DB writes, no Nest commands, during this diagnostic step or its removal.
+
+### Other smart-device integrations
+
+**Cielo**: production currently shows 3 Cielo thermostats (Bahamas Living Room, Island Tides Man cave, Sandy Nudes Garage). Detailed temperature/mode/humidity telemetry is currently blank for all three — this is a real, separate, not-yet-investigated gap (consistent with the already-known fact that `CieloClient.listDevices()` only ever returns name/online status, never temperature/mode/humidity — see `smart-devices.service.ts`'s own comment).
+
+**August locks**: the integration/code exists but has **not** yet received the same end-to-end production verification Nest just got this session. Do not describe August as fully production-tested — that work hasn't happened yet.
+
+**Priority order after the Nest permission discrepancy is resolved and one controlled Nest command is deliberately, explicitly tested**: August production verification next, then Cielo telemetry/inventory investigation.
+
+### Testing users
+
+Kenny and Michelle are currently using the shared global-admin login `admin@stayawhilewithus.com` for testing. They may browse/test the dashboard now. **Do not have them issue any Nest thermostat command or real lock command** until the permission/runtime issue above is resolved and controlled-command testing is explicitly approved.
+
+### Local operational safety
+
+- Before any production database write, always run `diagnose-db-target.mjs` first and confirm it reports the StayWhile Supabase project `bsyjuufnwjyzfchmxgiv` — both `DATABASE_URL` and `DIRECT_URL` should resolve to host `db.bsyjuufnwjyzfchmxgiv.supabase.co`, port `5432`, database `postgres`.
+- Shell cleanup after any production command: `unset DATABASE_URL DIRECT_URL`.
+- **Do not run the full production seed (`prisma/seed.ts` / `pnpm db:seed`) for RBAC-only changes.** Audited this session and confirmed unsafe: `seedDemoData()` unconditionally writes fake `Property` (`DEMO-001`/`DEMO-002`), `Guest`, `Reservation`, `CleaningSchedule`, `MaintenanceRequest`, `Task`, `Notification`, `MessageThread`, `AiConversation`, and `AuditLog` rows with no env-var gate protecting any of it — and would also create 6 fake demo `SmartDevice` rows whenever `AUGUST_ACCESS_TOKEN`/`CIELO_USERNAME`/`CIELO_PASSWORD` aren't set inline (confirmed true for a plain `DATABASE_URL`+`DIRECT_URL` shell invocation, since `packages/database/.env` holds neither key). Use the narrow `grant-thermostats-manage.mjs` script instead for any future RBAC-only production change.
+
+### Diagnostic/read-only scripts created this session — local operational tooling, currently untracked (not committed)
+
+All in `packages/database/`, all syntax-checked via `node --check`, all safe by construction (read-only ones make zero write calls; the two RBAC scripts below are narrowly-scoped by design):
+
+- `diagnose-db-target.mjs` — read-only; prints which DB host/project `DATABASE_URL`/`DIRECT_URL` would actually resolve to, without ever connecting. Run before any production write, always.
+- `check-nest-discovery.mjs` / `verify-nest-discovery-result.mjs` — read-only; verify Nest discovery ran and produced the expected Discovered/Unmapped invariants.
+- `list-nest-mapping-candidates.mjs` — read-only; lists discovered Nest devices alongside active properties (with existing-thermostat and today's-occupancy flags) to support a human, non-automatic mapping decision.
+- `check-thermostats-permission.mjs` — read-only; reports `thermostats:manage`'s existence, granted roles, a specific user's effective grant (GLOBAL vs. property-scoped), and which roles can see `/thermostats` controls but lack the permission to use them.
+- `grant-thermostats-manage.mjs` — the approved minimal RBAC-only production script. Writes exactly `permission.upsert` for `thermostats:manage` plus `rolePermission.upsert` for `admin` and `ops_manager` only; nothing else. Has a `DRY_RUN=1` mode. Already used against production this session.
+- `rollback-thermostats-manage.mjs` — pairs with the above; one `permission.delete`, cascading (via the schema's `onDelete: Cascade`) to remove exactly the two `RolePermission` rows the grant script creates. Has a `DRY_RUN=1` mode. Not needed/used — kept in reserve.
+- `diagnose-thermostat-permission-denial.mjs` — read-only; the tool that produced the RBAC diagnostic findings in the Open Issue above. Takes `TARGET_USER_EMAILS` (comma-separated) and an optional `TARGET_PROPERTY_ID`, reports `User`/`UserRole` state per email side by side, and live-replays `getEffectivePermissions()`'s exact query.
+
+None of these are wired into the app; none run automatically. Consider committing them as dedicated ops tooling in a future session if they keep proving useful, or deleting them once the open issue above is resolved — not decided yet.
+
+---
+
 # Notes
 
 - Package manager: pnpm 9.15.0 (installed via `npm install -g pnpm` this session, wasn't preinstalled). Node: v26.5.0 present; `.nvmrc` pins `20.11.0` as the project's nominal target.
