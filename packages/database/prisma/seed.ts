@@ -59,6 +59,13 @@ const SYSTEM_ROLES: Array<{
       "ai_actions:update",
       "smart_devices:read",
       "smart_devices:update",
+      // Live thermostat write commands (see the "thermostats" resource's
+      // own comment in packages/auth/src/permissions.ts) — deliberately
+      // added alone, not bundled with the smart_devices grant above, so
+      // this is a conscious, reviewable addition rather than inherited
+      // implicitly. cleaner/front_desk/maintenance_tech/read_only
+      // intentionally do NOT get this yet.
+      "thermostats:manage",
       "integrations:read",
       "integrations:update",
     ],

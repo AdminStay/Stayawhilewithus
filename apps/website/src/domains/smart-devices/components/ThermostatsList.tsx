@@ -13,6 +13,7 @@ import {
 import { Thermometer, WifiOff } from "lucide-react";
 
 import {
+  canRenderNestControls,
   getCurrentTemperature,
   getHumidity,
   getMode,
@@ -62,8 +63,11 @@ function formatTemperature(value: number | null): string {
 
 export function ThermostatsList({
   thermostats,
+  canManageByPropertyId,
 }: {
   thermostats: ThermostatWithProperty[];
+  /** Resolved server-side per property — see /thermostats/page.tsx. */
+  canManageByPropertyId: Record<string, boolean>;
 }) {
   const total = thermostats.length;
   const online = thermostats.filter((t) => t.status === "ONLINE").length;
@@ -112,6 +116,8 @@ export function ThermostatsList({
             const humidity = getHumidity(thermostat);
             const telemetryUpdatedAt = getTelemetryUpdatedAt(thermostat);
             const rawTraits = getRawTraits(thermostat);
+            const canManage =
+              canManageByPropertyId[thermostat.propertyId] ?? false;
 
             return (
               <TableRow key={thermostat.id}>
@@ -151,11 +157,16 @@ export function ThermostatsList({
                   {formatTimestamp(telemetryUpdatedAt)}
                 </TableCell>
                 <TableCell>
-                  {rawTraits ? (
+                  {rawTraits &&
+                  canRenderNestControls({ hasRawTraits: true, canManage }) ? (
                     <NestThermostatControls
                       smartDeviceId={thermostat.id}
                       rawTraits={rawTraits}
                     />
+                  ) : rawTraits ? (
+                    <span className="text-ink-faint">
+                      View only — no permission to control this device
+                    </span>
                   ) : (
                     <span className="text-ink-faint">—</span>
                   )}

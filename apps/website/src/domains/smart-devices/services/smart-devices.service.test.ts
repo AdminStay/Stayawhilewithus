@@ -36,10 +36,12 @@ import { prisma } from "@stayw/database";
 import {
   getBatteryLevel,
   getLockState,
+  canRenderNestControls,
   getTelemetryUpdatedAt,
   isDemoSmartDevice,
   isLowBattery,
   isTelemetryStale,
+  isThermostatVisible,
   listSmartDevices,
   syncAugustDevices,
   syncCieloDevices,
@@ -131,6 +133,63 @@ describe("getLockState / getTelemetryUpdatedAt / isTelemetryStale", () => {
 
   it("does not flag a device with no telemetry timestamp at all as stale", () => {
     expect(isTelemetryStale({ metadata: {} })).toBe(false);
+  });
+});
+
+describe("isThermostatVisible", () => {
+  // Properly typed against isThermostatVisible's own parameter type (no
+  // `as never`) — a wrong `provider` string or a `providerDevice` shape
+  // that doesn't match `{ enabled: boolean } | null` would fail to
+  // compile, not just fail at runtime.
+  type ThermostatVisibilityInput = Parameters<typeof isThermostatVisible>[0];
+
+  function device(
+    provider: ThermostatVisibilityInput["provider"],
+    providerDevice: ThermostatVisibilityInput["providerDevice"],
+  ): ThermostatVisibilityInput {
+    return { provider, providerDevice };
+  }
+
+  it("shows an enabled, mapped Nest thermostat", () => {
+    expect(isThermostatVisible(device("NEST", { enabled: true }))).toBe(true);
+  });
+
+  it("hides a Nest thermostat after Disable (ProviderDevice exists but enabled=false)", () => {
+    expect(isThermostatVisible(device("NEST", { enabled: false }))).toBe(false);
+  });
+
+  it("hides an orphaned Nest thermostat after Unmap (SmartDevice preserved, providerDevice relation null)", () => {
+    expect(isThermostatVisible(device("NEST", null))).toBe(false);
+  });
+
+  it("never hides a non-Nest thermostat — Cielo has no providerDevice relation at all, unaffected by this rule", () => {
+    expect(isThermostatVisible(device("CIELO", null))).toBe(true);
+  });
+});
+
+describe("canRenderNestControls", () => {
+  it("renders when the device has real trait data AND the actor has thermostats:manage for its property", () => {
+    expect(canRenderNestControls({ hasRawTraits: true, canManage: true })).toBe(
+      true,
+    );
+  });
+
+  it("does not render when the actor lacks thermostats:manage, even if the device has trait data", () => {
+    expect(
+      canRenderNestControls({ hasRawTraits: true, canManage: false }),
+    ).toBe(false);
+  });
+
+  it("does not render when there's no trait data, even if the actor has thermostats:manage", () => {
+    expect(
+      canRenderNestControls({ hasRawTraits: false, canManage: true }),
+    ).toBe(false);
+  });
+
+  it("does not render when neither condition holds", () => {
+    expect(
+      canRenderNestControls({ hasRawTraits: false, canManage: false }),
+    ).toBe(false);
   });
 });
 

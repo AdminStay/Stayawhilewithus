@@ -282,16 +282,19 @@ describe("setProviderDeviceEnabled", () => {
       connectivityStatus: "ONLINE",
       deviceType: "THERMOSTAT",
       rawMetadata: { ambientTemperatureCelsius: 21 },
+      // Deliberately far in the past relative to "now" at test-run time —
+      // this is what proves the regression test below is real: if Enable
+      // ever regresses to stamping Date.now() again, this old value would
+      // be silently ignored and the assertion would fail.
+      lastSeenAt: new Date("2026-08-20T12:00:00.000Z"),
       integrationConnection: { provider: "NEST" },
     } as never);
 
     const mockUpsert = vi.fn().mockResolvedValue({ id: "sd-1" });
-    const mockUpdate = vi
-      .fn()
-      .mockResolvedValue({
-        id: "11111111-1111-1111-1111-111111111111",
-        enabled: true,
-      });
+    const mockUpdate = vi.fn().mockResolvedValue({
+      id: "11111111-1111-1111-1111-111111111111",
+      enabled: true,
+    });
     mockTransaction.mockImplementationOnce(async (fn) =>
       fn({
         smartDevice: { upsert: mockUpsert },
@@ -316,6 +319,13 @@ describe("setProviderDeviceEnabled", () => {
     );
     const upsertArgs = mockUpsert.mock.calls[0]![0];
     expect(upsertArgs.create.metadata.currentTemperature).toBeCloseTo(70, 0); // 21C -> ~70F
+    // Regression test: enabling copies an existing discovery snapshot, it
+    // never makes a fresh Nest read — telemetryUpdatedAt must reflect the
+    // snapshot's own lastSeenAt, not the moment Enable happened to be
+    // clicked. See toSmartDeviceMetadata()'s doc comment.
+    expect(upsertArgs.create.metadata.telemetryUpdatedAt).toBe(
+      "2026-08-20T12:00:00.000Z",
+    );
     expect(mockUpdate).toHaveBeenCalledWith({
       where: { id: "11111111-1111-1111-1111-111111111111" },
       data: { enabled: true, smartDeviceId: "sd-1" },
@@ -333,12 +343,10 @@ describe("setProviderDeviceEnabled", () => {
       integrationConnection: { provider: "NEST" },
     } as never);
 
-    const mockUpdate = vi
-      .fn()
-      .mockResolvedValue({
-        id: "11111111-1111-1111-1111-111111111111",
-        enabled: false,
-      });
+    const mockUpdate = vi.fn().mockResolvedValue({
+      id: "11111111-1111-1111-1111-111111111111",
+      enabled: false,
+    });
     mockTransaction.mockImplementationOnce(async (fn) =>
       fn({
         smartDevice: { upsert: vi.fn() },

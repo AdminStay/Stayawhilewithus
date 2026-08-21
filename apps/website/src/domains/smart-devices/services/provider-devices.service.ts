@@ -60,9 +60,21 @@ const SMART_DEVICE_PROVIDERS: Partial<
  * Exported for reuse by nest-commands.service.ts, which applies this same
  * mapping to a post-command *confirmed* device read — never to a guessed
  * value (see that file's module doc comment).
+ *
+ * `observedAt` must be the real moment this specific `device` snapshot was
+ * actually obtained from Nest — never defaulted to "now" internally. The
+ * SDM API itself doesn't expose a per-device telemetry timestamp (see
+ * RawSdmDevice in packages/integrations/src/nest/types.ts — no updateTime
+ * field), so callers pass the best honest proxy they have: a fresh
+ * post-command client.getDevice() read can honestly pass `new Date()`
+ * (it just happened); a discovery snapshot being copied out later (e.g.
+ * setProviderDeviceEnabled(), below) must pass that snapshot's own
+ * ProviderDevice.lastSeenAt instead — otherwise enabling a device would
+ * silently claim an old reading is fresh.
  */
 export function toSmartDeviceMetadata(
   device: NestDevice,
+  observedAt: Date,
 ): Record<string, unknown> {
   const targetCelsius = device.heatCelsius ?? device.coolCelsius;
 
@@ -77,7 +89,7 @@ export function toSmartDeviceMetadata(
     ...(device.ambientHumidityPercent != null && {
       humidity: device.ambientHumidityPercent,
     }),
-    telemetryUpdatedAt: new Date().toISOString(),
+    telemetryUpdatedAt: observedAt.toISOString(),
   };
 }
 
@@ -291,7 +303,15 @@ export async function setProviderDeviceEnabled(
         propertyId: providerDevice.propertyId,
         name: providerDevice.discoveredName,
         status: providerDevice.connectivityStatus,
-        metadata: toSmartDeviceMetadata(rawMetadata) as Prisma.InputJsonValue,
+        // lastSeenAt, not "now" — this metadata is copied from an existing
+        // discovery snapshot, not a fresh read (enabling makes zero Nest
+        // API calls). Passing the real snapshot time keeps /thermostats'
+        // "Last telemetry" column honest instead of claiming a reading
+        // taken at discovery time is fresh at enable time.
+        metadata: toSmartDeviceMetadata(
+          rawMetadata,
+          providerDevice.lastSeenAt,
+        ) as Prisma.InputJsonValue,
       };
 
       const smartDevice = await tx.smartDevice.upsert({

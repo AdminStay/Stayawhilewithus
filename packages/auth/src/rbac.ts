@@ -16,7 +16,19 @@ export interface PermissionCheckOptions {
  * Gathers the union of permission keys granted to a user: every permission
  * attached to a role assigned globally (propertyId = null), plus every
  * permission attached to a role assigned specifically to opts.propertyId
- * (if provided).
+ * (if provided). Excludes any UserRole whose expiresAt has already passed
+ * — `null` means "never expires." This was a real gap until now: a role
+ * assignment past its expiry was still silently counted as granted,
+ * because nothing in this query ever checked expiresAt at all.
+ *
+ * When opts.propertyId is omitted, only global roles match — deliberately
+ * built as a conditionally-*present* OR branch (spread into the array only
+ * when opts.propertyId is set), not a conditionally-empty-object branch.
+ * An empty object (`{}`) inside a Prisma OR array matches unconditionally
+ * (no constraints = always true), so the previous `opts.propertyId ? {...}
+ * : {}` form silently made a "no propertyId" call also match every
+ * property-scoped role the user held, for any property — the opposite of
+ * this function's own documented behavior. Fixed here.
  */
 export async function getEffectivePermissions(
   actor: AuthContext,
@@ -25,9 +37,14 @@ export async function getEffectivePermissions(
   const userRoles = await prisma.userRole.findMany({
     where: {
       userId: actor.userId,
-      OR: [
-        { propertyId: null },
-        opts.propertyId ? { propertyId: opts.propertyId } : {},
+      AND: [
+        {
+          OR: [
+            { propertyId: null },
+            ...(opts.propertyId ? [{ propertyId: opts.propertyId }] : []),
+          ],
+        },
+        { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
       ],
     },
     include: {

@@ -39,6 +39,52 @@ export function isDemoSmartDevice(
   return device.externalDeviceId.startsWith("demo-");
 }
 
+/**
+ * A Nest SmartDevice row can outlive its live-control state without being
+ * deleted, by design: Disable (setProviderDeviceEnabled) flips
+ * ProviderDevice.enabled to false but leaves SmartDevice untouched, and
+ * Unmap (unmapProviderDevice) nulls ProviderDevice.smartDeviceId entirely
+ * — in both cases SmartDevice is deliberately preserved, never pruned (see
+ * provider-devices.service.ts's own comments on why: no automatic
+ * data loss). But it must stop rendering as a live, controllable
+ * thermostat once either happens — this is that single gate, used by
+ * /thermostats to decide what to show, never by anything that mutates
+ * data. Every non-Nest provider (Cielo, August, ...) never populates the
+ * providerDevice relation at all, so this rule is a no-op for them —
+ * their visibility is governed entirely by existing, unrelated rules.
+ */
+export function isThermostatVisible(
+  device: Pick<SmartDevice, "provider"> & {
+    providerDevice: { enabled: boolean } | null;
+  },
+): boolean {
+  if (device.provider !== "NEST") return true;
+  return device.providerDevice !== null && device.providerDevice.enabled;
+}
+
+/**
+ * Gates whether NestThermostatControls should render at all — separate
+ * from isThermostatVisible() above (that decides whether the row appears
+ * on /thermostats; this decides whether its controls do). Previously,
+ * ThermostatsList rendered controls purely from device capability data
+ * (rawTraits) — any user who could see the page at all (smart_devices:read)
+ * saw live-looking Heat/Cool/Fan/Mode buttons regardless of whether they
+ * actually held thermostats:manage, the permission the server would then
+ * enforce (see nest-commands.service.ts). `canManage` must be resolved
+ * server-side, per-property, via hasPermission(actor, "thermostats:manage",
+ * {propertyId}) — see /thermostats/page.tsx, which computes it once per
+ * distinct property and passes the result down. assertPermission() inside
+ * sendNestThermostatCommand remains the real, unchanged security boundary;
+ * this only controls what renders, so a denied user is no longer invited
+ * to click a button that was always going to be rejected.
+ */
+export function canRenderNestControls(input: {
+  hasRawTraits: boolean;
+  canManage: boolean;
+}): boolean {
+  return input.hasRawTraits && input.canManage;
+}
+
 export interface DeviceSyncResult {
   synced: number;
   /** External IDs (lock/device IDs) fetched from the provider but not written, because their house/MAC-address key wasn't in the property map. */

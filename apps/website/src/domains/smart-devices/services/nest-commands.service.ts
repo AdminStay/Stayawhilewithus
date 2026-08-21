@@ -215,9 +215,11 @@ export async function sendNestThermostatCommand(
     await executeNestThermostatCommand(client, externalDeviceId, input.command);
 
     // Confirmation — read what Nest actually reports now, never assume
-    // the command produced exactly the requested value.
+    // the command produced exactly the requested value. This read just
+    // happened, so — unlike setProviderDeviceEnabled()'s reuse of an old
+    // discovery snapshot — stamping "now" here is honest, not fabricated.
     const confirmed = await client.getDevice(externalDeviceId);
-    const confirmedMetadata = toSmartDeviceMetadata(confirmed);
+    const confirmedMetadata = toSmartDeviceMetadata(confirmed, new Date());
 
     await prisma.smartDevice.update({
       where: { id: smartDevice.id },

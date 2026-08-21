@@ -559,8 +559,17 @@ describe("sendNestThermostatCommand", () => {
       .mocked(prisma.smartDevice.update)
       .mock.calls.find((call) => "metadata" in (call[0]?.data ?? {}));
     const updatedMetadata = metadataUpdateCall?.[0].data.metadata as
-      { targetTemperature?: number } | undefined;
+      { targetTemperature?: number; telemetryUpdatedAt?: string } | undefined;
     expect(updatedMetadata?.targetTemperature).toBeCloseTo(67, 0); // 19.4C confirmed, not the requested 20C (~68F)
+
+    // Unlike setProviderDeviceEnabled() copying an old discovery snapshot,
+    // this metadata comes from a client.getDevice() call that just
+    // happened — a genuinely fresh timestamp here is honest, not
+    // fabricated. See toSmartDeviceMetadata()'s doc comment.
+    expect(updatedMetadata?.telemetryUpdatedAt).toBeDefined();
+    expect(
+      Date.now() - new Date(updatedMetadata!.telemetryUpdatedAt!).getTime(),
+    ).toBeLessThan(5_000);
   });
 
   it("successful command audit entry: records actor/property/device/provider/command/result, and the confirmed (not guessed) resulting state", async () => {
