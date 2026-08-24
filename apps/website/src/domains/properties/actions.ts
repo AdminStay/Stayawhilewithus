@@ -2,11 +2,16 @@
 
 import { revalidatePath } from "next/cache";
 
+import { confirmOwnerRezPropertyMatchSchema } from "./schemas/ownerrez-match.schema";
 import {
   createPropertySchema,
   updatePropertyOccupancySchema,
   updatePropertyStatusSchema,
 } from "./schemas/properties.schema";
+import {
+  confirmOwnerRezPropertyMatch,
+  syncLinkedOwnerRezProperties,
+} from "./services/ownerrez-sync.service";
 import {
   createProperty,
   deleteProperty,
@@ -15,6 +20,8 @@ import {
 } from "./services/properties.service";
 
 import { getCurrentUser } from "@/platform/auth/get-current-user";
+
+const OWNERREZ_SYNC_PAGE_PATH = "/properties/ownerrez";
 
 export async function createPropertyAction(formData: FormData) {
   const actor = await getCurrentUser();
@@ -67,5 +74,26 @@ export async function deletePropertyAction(formData: FormData) {
   const propertyId = formData.get("propertyId") as string;
 
   await deleteProperty(actor, propertyId);
+  revalidatePath("/properties");
+}
+
+export async function confirmOwnerRezPropertyMatchAction(formData: FormData) {
+  const actor = await getCurrentUser();
+
+  const input = confirmOwnerRezPropertyMatchSchema.parse({
+    propertyId: formData.get("propertyId"),
+    ownerRezPropertyId: formData.get("ownerRezPropertyId"),
+  });
+
+  await confirmOwnerRezPropertyMatch(actor, input);
+  revalidatePath(OWNERREZ_SYNC_PAGE_PATH);
+  revalidatePath("/properties");
+}
+
+export async function syncLinkedOwnerRezPropertiesAction() {
+  const actor = await getCurrentUser();
+
+  await syncLinkedOwnerRezProperties(actor);
+  revalidatePath(OWNERREZ_SYNC_PAGE_PATH);
   revalidatePath("/properties");
 }

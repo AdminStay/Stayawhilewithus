@@ -49,6 +49,11 @@ export const NAV_SECTIONS: NavSection[] = [
         label: "Discovered Devices",
         icon: "plug",
       },
+      {
+        href: "/properties/ownerrez",
+        label: "OwnerRez Sync",
+        icon: "plug",
+      },
       { href: "/audit", label: "Audit", icon: "shield" },
       { href: "/users", label: "Users", icon: "userCog" },
     ],

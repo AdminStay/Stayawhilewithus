@@ -108,6 +108,19 @@ export class OwnerrezClient
     return page.items;
   }
 
+  /**
+   * Detail endpoint (GET /properties/{id}, confirmed via OwnerRez's own
+   * docs) — the only way to get the full field set (address, bedrooms,
+   * bathrooms, max_guests, property_type, lat/long, etc.); listProperties()'s
+   * /properties endpoint only ever returns id/name/key/active/internal_code.
+   * Needed for continuously syncing an already-linked property's fields
+   * (see ownerrez-sync.service.ts) — never used for the initial match report,
+   * which stays on the cheap list endpoint.
+   */
+  async getProperty(id: number): Promise<OwnerrezProperty> {
+    return this.http.request<OwnerrezProperty>(`/properties/${id}`);
+  }
+
   async listBookings(params?: {
     sinceUtc?: string;
   }): Promise<OwnerrezBooking[]> {

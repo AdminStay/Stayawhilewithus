@@ -135,6 +135,13 @@ model Property {
   maxOccupancy       Int            @map("max_occupancy")
   timezone           String // IANA timezone, e.g. "America/Denver"
   ownerRezPropertyId String?        @unique @map("owner_rez_property_id")
+  // OwnerRez's own active/inactive signal for a linked property — kept
+  // deliberately separate from `status` (PropertyStatus). A sync run never
+  // writes `status` from this field; it exists so an admin can see "OwnerRez
+  // says this listing is inactive" without StayWhile silently deactivating
+  // the property itself. Null until the first successful sync after linking.
+  ownerRezActive     Boolean?       @map("owner_rez_active")
+  ownerRezLastSeenAt DateTime?      @map("owner_rez_last_seen_at")
   airbnbListingId    String?        @unique @map("airbnb_listing_id")
   notionPageId       String?        @map("notion_page_id")
   deletedAt          DateTime?      @map("deleted_at")

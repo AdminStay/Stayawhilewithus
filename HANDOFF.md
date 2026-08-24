@@ -28,7 +28,31 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 Continuation Checkpoint — 2026-08-21 (READ THIS FIRST)
+# 🔖 PRIORITY PIVOT — 2026-08-24 (READ THIS FIRST, supersedes the 2026-08-21 pivot below)
+
+**New active priority, set 2026-08-24 by the client, via the user.** OwnerRez + Notion must become genuinely production-verified BEFORE any further Nest/August/Cielo work resumes. This is a business-driven reordering, not a technical blocker on the device work — the device-control pivot below (2026-08-21) is paused, not abandoned.
+
+**Priority order from now on (expanded 2026-08-24, see `## Increment 39`'s "New standing priority order" for the full statement):**
+
+1. **OwnerRez property source of truth** — admin-review matching page + property-sync service. **Built 2026-08-24, see `## Increment 40`** — local dev only, not deployed, no real match confirmed yet. Resume at Increment 40's "Next step, in order."
+2. **OwnerRez reservations** — Guest/Reservation sync
+3. **Notion read/search** — query-capable search method + service + dashboard UI
+4. **Notion change/deletion notifications** — polling-based diff first; webhooks only after Notion API capability is confirmed
+5. **Nest** → finish verification/control
+6. **August** → finish verification/control/PIN capabilities
+7. **Cielo** → finish telemetry and control verification
+
+Full audit findings for all of the above are in `## Increment 39` below; the first piece of item 1 shipped in `## Increment 40`. Nothing has been deployed or run against Production for OwnerRez or Notion beyond what already existed before this pivot.
+
+**Device-work pendings, preserved exactly, resume in this order after OwnerRez+Notion reach production-verified status:**
+
+- **Nest**: Production reads working; 33 devices discovered, all correctly Unmapped except one. **Aqua Palm - Living room** is the only device mapped/enabled (deliberate single test), showing real telemetry. **Unresolved**: a real, reproduced-in-a-fresh-incognito-session permission discrepancy — RBAC data says `ryskris0@gmail.com` has effective `thermostats:manage = YES`, but the Production UI still renders "View only — no permission to control this device" for Aqua Palm. A minimal, server-log-only diagnostic (commit `da8ac61`) is deployed and awaiting a fresh test + Vercel Function Log check — see `## Increment 38`'s "OPEN ISSUE" for the full trace and exact log-reading instructions. **No physical Nest command has ever been sent.** Do not enable any of the other 32 devices.
+- **August**: Read-only monitoring is live and real (7 `SmartDevice` rows from genuine API syncs). Full capability audit complete this session (`## Increment 39`) — no lock/unlock/PIN code exists anywhere in the codebase (not stubbed, never written); PIN create/edit/delete isn't available at all in the reference library (`yalexs`) this integration is built from. The "44 locks" figure from Increment 36 was never persisted — confirmed to have come from a zero-write diagnostic script's terminal output; 37 of 44 are silently discarded on every sync because `AUGUST_PROPERTY_MAP` only lists 4 properties. No `ProviderDevice`-based discovery exists for August (unlike Nest's Phase A-D). Do not attempt any lock/unlock/PIN work until this gap is deliberately closed.
+- **Cielo**: 3 real devices visible in Production (Bahamas Living Room, Island Tides Man Cave, Sandy Nudes Garage), but temperature/mode/humidity are blank for all three — `CieloClient.listDevices()` only ever returns name/online status, this is a known real gap, not yet investigated. Control is architecturally blocked regardless (WebSocket-only, no REST path, incompatible with this serverless app) — see `## Increment 37`/checkpoint below for the original finding.
+
+---
+
+# 🔖 Continuation Checkpoint — 2026-08-21
 
 **Read this section before anything else in this file.** It is a self-contained snapshot of the current project state so a new session doesn't need to read all 37 increments below to continue safely. Full historical detail for anything summarized here is in `## Increment 33` through `## Increment 37`.
 
@@ -1588,6 +1612,124 @@ All in `packages/database/`, all syntax-checked via `node --check`, all safe by 
 - `diagnose-thermostat-permission-denial.mjs` — read-only; the tool that produced the RBAC diagnostic findings in the Open Issue above. Takes `TARGET_USER_EMAILS` (comma-separated) and an optional `TARGET_PROPERTY_ID`, reports `User`/`UserRole` state per email side by side, and live-replays `getEffectivePermissions()`'s exact query.
 
 None of these are wired into the app; none run automatically. Consider committing them as dedicated ops tooling in a future session if they keep proving useful, or deleting them once the open issue above is resolved — not decided yet.
+
+## Increment 39 — 2026-08-24: priority pivot to OwnerRez+Notion; deployed the Nest diagnostic; completed a full August capability audit; completed OwnerRez and Notion production-verification audits — all read-only, nothing implemented for OwnerRez/Notion beyond what already existed
+
+### Nest diagnostic deployed
+
+The server-log-only diagnostic designed in Increment 38 was implemented exactly as scoped (narrower than originally proposed, per explicit user direction: logs only `actorUserId`, `aquaPalmPropertyId`, `aquaPalmCanManage` — derived from the already-computed `canManageByPropertyId` map, no new permission query — and `commitSha`; never the full map). Typecheck/tests(304 passing)/build all green. Committed (`da8ac61`) and pushed to `main` after explicit approval. **Not yet acted on**: needs a fresh `/thermostats` request as `ryskris0@gmail.com` followed by a Vercel Function Logs check for the `[nest-diag]` line — see the priority-pivot banner at the top of this file for the exact resume state. A fresh-incognito re-test (before this diagnostic was deployed) already **confirmed the "View only" discrepancy is reproducible**, ruling out stale browser/router cache as the cause.
+
+### August capability audit — read-only, zero writes, zero commands, zero PIN changes
+
+Full findings, condensed (see the priority-pivot banner above for the top-line summary):
+
+- **Credentials**: `AUGUST_IDENTIFIER`/`AUGUST_INSTALL_ID`/`AUGUST_ACCESS_TOKEN`/`AUGUST_BRAND` (names only), via a one-time interactive 2FA login (`packages/integrations/src/august/scripts/login.ts`), not a static API key.
+- **Discovery/sync path**: `syncAugustDevices()` (`smart-devices.service.ts:140-250`) → `AugustClient.listLocks()` (returns everything the account has, live) → each lock's `houseId` checked against `AUGUST_PROPERTY_MAP` → no match → `skipped.push(...); continue` (line 174-177), **never written anywhere** → match → `getLockDetail()` + `prisma.smartDevice.upsert()`. `/locks/page.tsx` reads only from the DB, no live call at render time.
+- **Mapping mechanism**: hard-coded `AUGUST_PROPERTY_MAP` env var only — confirmed the sole mechanism. No `ProviderDevice`-based admin-mapping flow exists for August (that table's only writer in the whole repo is Nest's discovery script).
+- **Why 7 locks now vs. 44 previously discovered — definitive answer**: the 37 were never persisted anywhere. They were observed via the real, committed, genuinely read-only script `packages/integrations/src/august/scripts/check.ts` (zero DB import, zero write call) — its terminal output was hand-transcribed into Increment 36, never stored. `AUGUST_PROPERTY_MAP` still only lists the original 4 properties, so the sync loop silently discards the other 37 on every run. **Exact same pattern as the pre-Phase-A-D Nest "33 devices" figure** — except August never got a Phase-A-D equivalent built.
+- **Read capabilities implemented**: locked/unlocked state (only when provider confirms validity), tri-state connectivity, battery %, last-sync/last-telemetry timestamps. **Not captured anywhere**: lock model/Type/SKU — not even parsed from the raw API response.
+- **Write capabilities**: genuinely absent, not merely unused — grepped the full codebase, zero lock/unlock/PIN method exists anywhere. `AugustClient`'s own doc comment states outright: "Read-only: does not implement lock/unlock." `yale/client.ts` is a 100% stub. PIN create/edit/delete don't exist in the `yalexs` reference library at all, regardless of implementation effort.
+- **RBAC**: no dedicated `locks`/`access_codes` permission resource exists — lock read is gated by the existing `smart_devices:read` (same two roles as thermostats: `admin`, `ops_manager`). No lock-control permission key exists because no lock-control code exists to gate.
+- **Safest next single test (not yet run, awaiting approval)**: a read-only re-run of `check.ts` against the real Production August account, to confirm the current 7-lock data is still fresh — the August equivalent of what `check-nest-discovery.mjs` did for Nest.
+- **Safest lock for a first controlled write test, later**: Aqua Palm - Front Door (same property as the Nest test property; ONLINE, 99% battery, fully verified real-time connectivity signal per Increment 20's data) — not being tested now, flagged for a future explicitly-approved pass only.
+
+### OwnerRez production-verification audit — read-only, zero writes, zero live calls this pass
+
+- **Integration code**: `OwnerrezClient` (`packages/integrations/src/ownerrez/client.ts`) is real — `connect`/`listProperties`/`listBookings`/`getGuest`/`sync("INBOUND")` all genuine HTTP Basic-Auth calls to `api.ownerreservations.com/v2`. Only `receiveWebhook()` is unimplemented (undocumented payload shape). No `getProperty(id)` detail endpoint exists yet — only the list endpoint.
+- **Production credentials/authentication**: confirmed present and working — per the existing 2026-08-21 record in this file (`OWNERREZ_USERNAME`/`OWNERREZ_API_TOKEN` added to Vercel Production, a self-deleting diagnostic returned valid credentials + 20 real properties). **Not re-verified with a new live call this session** — this is a citation of prior work, not a fresh check.
+- **Real API read status**: properties — proven live in Production (above). Bookings — proven live in local dev only (19 active + 1 canceled), not re-checked in Production.
+- **Any OwnerRez data stored/synced in the DB today**: **no.** `sync("INBOUND")` deliberately only counts bookings and returns — writes nothing. `Property.ownerRezPropertyId` and `Guest.ownerRezGuestId` both exist in the schema but are grepped repo-wide as **written nowhere, read nowhere**, outside their own field definitions.
+- **Where the dashboard's current 7 real properties actually come from**: manually, through the app's own `createProperty()` action (`properties.service.ts:26`) — confirmed by elimination, since no OwnerRez call exists anywhere near property creation, and the seed script only ever creates 2 fake demo rows (`DEMO-001`/`DEMO-002`), never the real properties.
+- **What's missing for OwnerRez to become source of truth**: a property-sync service and an admin-review mapping UI — both fully designed (strict-order match: `ownerRezPropertyId` exact → `internalCode` exact → everything else reported for human review only, never auto-linked), zero code written. `OwnerrezProperty`'s type also doesn't model address/bedrooms/bathrooms/etc. yet — only `id/name/key/active`.
+- **Last known real match report** (local dev only, not re-run against Production): 2 exact matches, 1 close-not-exact, **17 of 20 real OwnerRez properties had no StayWhile counterpart at all**.
+- **Reservation sync**: only a live, ephemeral 5-item "upcoming bookings" dashboard tile (`getOwnerRezHighlights`, `integrations.service.ts:373-397`), fetched fresh every page load, never persisted to `Reservation`/`Guest`. No webhook, no polling job, no scheduled sync exists anywhere.
+- **Airbnb-alteration-notification feasibility**: genuinely unresearched at the API level — not a guess, just never investigated. `receiveWebhook()`'s payload shape is an explicitly open design question in its own code comment and README.
+- **n8n vs. direct-backend architecture**: confirmed direct-backend only, always has been — n8n has zero OwnerRez credentials (or any provider credentials) today; per this file's own n8n section, n8n "cannot run these syncs itself today without credential duplication."
+- **Safest next step (not yet run, awaiting approval)**: re-run the already-written, self-deleting `packages/integrations/scripts/ownerrez-property-inventory.ts` against Production (read-only, no writes) to produce the full field-level property dump and the real bucketed match report — this was already pending before this session and remains pending.
+
+### Notion production-verification audit — read-only, zero writes, zero live calls, zero interaction with Michelle's real workspace this pass
+
+- **Two separate Notion credentials exist — do not conflate them.** App-level `NOTION_API_KEY` (real Bearer token, `.env.example:39`, used in `integrations.service.ts:322`): proven live 2026-08-15 in **local dev only** (100+ pages/databases, 4 real database schemas retrieved) — Production presence is unconfirmed. n8n-level "Notion account" credential (`notionApi` type, owned personally by Kenny Pham per `N8N_DISCOVERY.md`): last confirmed present 2026-08-06, **not re-checked since — no n8n tool is available from inside Claude Code in this environment**, so this needs the user to check the n8n web UI directly.
+- **Workspace identity**: app-level, only recorded as "the real StayWhile workspace," no more specific name anywhere. n8n-level, explicitly Kenny's personal account per its own discovery doc.
+- **n8n workflow usage**: **the credential is completely unused** — exactly one workflow exists in the entire n8n instance, and it's n8n's own auto-generated default scaffold (inactive, an unconfigured HTTP Request node, no auth wired in). Zero real automation of any kind currently runs in n8n.
+- **App-side Notion code**: real but narrow — `packages/integrations/src/notion/client.ts` implements `validateCredentials`/`sync` (count-only, writes nothing)/`listRecentlyEdited` (titles/URLs/timestamps for the 5 most recent items only, never page content). Powers exactly one dashboard "Notion" tile, gated by the generic `integrations:read` permission (no Notion-specific RBAC resource exists).
+- **Dashboard keyword-search status**: **does not exist at all.** No query-string search method anywhere in the client — Notion's real `/search` endpoint accepts a `query` param, it's simply never used. No `search`/`knowledge` domain exists anywhere in the app. Would be built from scratch.
+- **Change/deletion-notification status**: **does not exist.** A generic `Notification` model exists in the schema (used elsewhere, zero Notion usage today) and existing webhook routes (`/api/webhooks/clerk`, `/api/webhooks/n8n`) establish a pattern a Notion route could follow — but there is no polling job, no diff logic, and no webhook receiver for Notion today. Whether Notion's real API even supports outbound webhooks for page changes has **never been confirmed against Notion's actual docs** — this file already flagged this exact gap back in the "Second client meeting" priorities section ("verify actual Notion API capability first, don't promise real-time events the API doesn't support"), and it's still unresolved.
+- **Only mechanism provably buildable today with zero new unknowns**: polling `listRecentlyEdited()` and diffing against a stored "last seen" timestamp/state. A webhook-based approach requires first confirming Notion's API actually supports it.
+- **Safest next step (not yet run, awaiting approval)**: confirm `NOTION_API_KEY` presence in Vercel Production (name-only, same pattern as the OwnerRez check) — plus ask the user to independently verify the n8n-side Notion credential is still valid via the n8n UI, since no tool here can reach it.
+
+### OwnerRez — expanded architecture detail (2026-08-24, design confirmed against real schema, still zero code written)
+
+Confirmed by direct `schema.prisma` inspection this session (not assumed): the schema is already meaningfully prepared for this work, more than previously credited.
+
+- **`Property.ownerRezPropertyId`** (`schema.prisma:137`) and **`PropertyStatus.ONBOARDING`** (`schema.prisma:692`) already exist — the property-matching plan's "no schema migration needed for this part" claim is now verified true, not just asserted.
+- **`Guest.ownerRezGuestId`** (`schema.prisma:167`, unique nullable) already exists — ready for OwnerRez guest sync with zero migration.
+- **`Reservation.source: ReservationSource`** already includes `OWNERREZ` (`schema.prisma:705`) and `Reservation` has a **compound unique constraint on `[source, externalReservationId]`** (`schema.prisma:213`) — the schema was already deliberately built to safely ingest reservations from multiple providers without ID collisions. This was not previously highlighted as clearly as it should have been.
+- **Still needed, additive/nullable, not yet migrated**: `Property.ownerRezActive: Boolean?` and `Property.ownerRezLastSeenAt: DateTime?` (OwnerRez's active/inactive signal must stay genuinely separate from `PropertyStatus`, never auto-triggering deactivation).
+- **`OwnerrezProperty` typed client** (`packages/integrations/src/ownerrez/types.ts:12-22`) only models `id`/`name`/`key`/`active` today — needs extending to the real detail-endpoint fields (address, `bedrooms`, `bathrooms_full`/`bathrooms_half`, `max_guests`, `property_type`, `time_zone`, lat/long) once `getProperty(id)` (`GET /properties/{id}`, not yet implemented in `client.ts` — only the list endpoint exists) is built.
+- **Field-ownership policy** (already designed, see the "OwnerRez — revised field-ownership policy" section above): OwnerRez-owned/continuously-synced/null-safe-per-field vs. StayWhile-owned/never-touched-by-sync — unchanged, now cross-checked against the real schema and confirmed consistent.
+- **Reservation/Guest persistence proposal (new this session, design only)**: sync writes a `Reservation` row only for a booking whose `propertyId` maps to an **already-confirmed-linked** property (never auto-creates a property from a booking); `Guest` is upserted by `ownerRezGuestId` (create if new, null-safe update if existing); a reservation is matched/updated by the existing `[source, externalReservationId]` unique key; cancellations/date-changes update the existing row's `status`/dates, never delete.
+- **Airbnb alteration-notification feasibility**: confirmed genuinely un-researched at the API level (not "designed, not built" — literally never investigated). `receiveWebhook()` (`client.ts:149-154`) is an explicit open design question in its own code comment and the package README. Next real step is reading OwnerRez's actual webhook/API docs, not proposing an architecture yet.
+
+### Notion — clarified verification-state distinction (2026-08-24)
+
+Explicitly separating four states that were previously at risk of being conflated:
+
+- **Known existing credential/configuration**: two separate credentials — app-level `NOTION_API_KEY` (`.env.example:39`) and an n8n-level "Notion account" credential (`notionApi` type, owned personally by Kenny Pham per `N8N_DISCOVERY.md`). Not necessarily the same token.
+- **Previously verified connection (real, evidence-backed)**: app-level, proven live 2026-08-15 in **local dev only** (100+ pages/databases, 4 real DB schemas). n8n-level, only confirmed to _exist_ as a credential object (2026-08-06) — never proven to still authenticate.
+- **Cannot be re-verified in this session**: the n8n-level credential's live validity — no n8n API/MCP tool is available from inside Claude Code in this environment. This is a session tooling gap, **not evidence of disconnection** — requires the user to check the n8n web UI directly.
+- **Genuinely never verified by anyone**: `NOTION_API_KEY` presence in Vercel **Production** (2026-08-15 check was dev-only); whether the app-level and n8n-level credentials are the same integration; whether Notion's API supports outbound webhooks for page changes at all.
+- **Read-only feasibility, both requested features**: keyword search is directly buildable — Notion's real `/search` endpoint already accepts a `query` param, simply unused today, fully non-destructive. Change/deletion detection: polling `listRecentlyEdited()` and diffing against a stored "last seen" state is the only mechanism provably buildable today with zero new unknowns; a webhook approach needs Notion API capability confirmed first. Neither feature touches or could touch Michelle's actual content — both are read-only by construction.
+
+### New standing priority order (see banner at top of this file for the full statement)
+
+1. **OwnerRez property source of truth** — admin-review matching page + property-sync service (design exists, zero code written)
+2. **OwnerRez reservations** — Guest/Reservation sync per the persistence proposal above
+3. **Notion read/search** — query-capable search method + service + dashboard UI
+4. **Notion change/deletion notifications** — polling-based diff first; webhooks only after Notion API capability is separately confirmed
+5. **Nest** → finish verification/control
+6. **August** → finish verification/control/PIN capabilities
+7. **Cielo** → finish telemetry and control verification
+
+Nothing has been implemented for OwnerRez or Notion this session — audits and architecture clarification only. No Production writes, no OwnerRez writes, no Notion writes (nothing in Michelle's real workspace was touched in any way), no bulk imports, no migrations, no deployment beyond the already-approved-and-pushed Nest diagnostic commit `da8ac61`, no Nest/August/Cielo commands, no RBAC changes, no credential values read or printed anywhere.
+
+---
+
+## Increment 40 — 2026-08-24: OwnerRez property-sync groundwork built (priority #1 from Increment 39) — local dev only, not deployed, no real matches confirmed
+
+Built the first piece of the new standing priority order: the admin-review matching page + property-sync service that Increment 39 flagged as "design exists, zero code written." Everything below ran and was verified against the **local dev DB only** (`staywhile_dev` on localhost) — nothing touched Production, no real OwnerRez write, no property was actually linked as part of building/testing this.
+
+### What shipped
+
+- **Schema** (migration `20260824050940_add_ownerrez_property_sync_fields`, applied to local dev only): `Property.ownerRezActive Boolean?` and `Property.ownerRezLastSeenAt DateTime?` — exactly the additive, nullable pair the Increment 39 architecture note called for. Not yet applied to Production.
+- **`OwnerrezProperty` type widened** (`packages/integrations/src/ownerrez/types.ts`) to the full field set already confirmed live against real OwnerRez data in Increment 37 (address, bedrooms, bathrooms_full/half, max_guests, property_type, lat/long, internal_code, etc.) — no new guessing, just modeling fields already proven real.
+- **`OwnerrezClient.getProperty(id)`** added (`GET /properties/{id}`) — the detail endpoint the continuous-sync design always required; `listProperties()` is untouched and still only used for the cheap match report.
+- **`ownerrez-sync.service.ts`** (new, `apps/website/src/domains/properties/services/`):
+  - `matchOwnerRezProperties(actor)` — read-only, live `listProperties()` call bucketed against StayWhile's `Property` rows. Strict order exactly as designed: `ownerRezPropertyId` exact → `alreadyLinked`; `internalCode` exact (only against a property not already linked to a different OwnerRez id) → `proposedMatches`; everything else → `unmatchedOwnerRez`/`unmatchedStayWhile`. **No name-based matching anywhere.** Returns `{ configured: false }` (not a thrown error) when `OWNERREZ_USERNAME`/`OWNERREZ_API_TOKEN` aren't set — matches the existing `IntegrationHighlights` convention in `integrations.service.ts` instead of crashing the page.
+  - `confirmOwnerRezPropertyMatch(actor, input)` — the only write path that ever sets `ownerRezPropertyId`. Explicit human action only, never called from the match report itself. Guards against relinking an already-linked property and against double-linking one OwnerRez property to two StayWhile rows. Audited (`property.ownerrez_matched`).
+  - `syncLinkedOwnerRezProperties(actor)` — one `getProperty(id)` call per already-linked property, null-safe per field exactly per the revised field-ownership policy (a field is only overwritten when this pull actually returned a non-null value; absence never nulls an existing value). `bathroomCount` derived as `bathrooms_full + bathrooms_half × 0.5`. `propertyType` deliberately **not** synced — no human-approved OwnerRez-type → `PropertyType` mapping exists yet, and this stays unguessed per the standing rule. `ownerRezActive`/`ownerRezLastSeenAt` always written on a successful pull; nothing here ever touches `status`. Audited per property (`property.ownerrez_synced`).
+- **UI**: new page `/properties/ownerrez` (`OwnerRezMatchReview` component) — four sections (proposed matches with a per-row "Confirm match" `ConfirmButton`, already-linked read-only list with OwnerRez active/inactive badge, unmatched-in-OwnerRez, unmatched-in-StayWhile), plus a "Sync linked properties" button wired to `syncLinkedOwnerRezPropertiesAction`. New nav entry under System → "OwnerRez Sync". RBAC: `properties:read` for the report, `properties:update` for confirm/sync — no new permission resource added, matching the existing catalog.
+- **Tests**: `client.test.ts` gained a `getProperty()` case; new `ownerrez-sync.service.test.ts` (13 cases) covers every match bucket, the double-link guards, the null-safe field-sync behavior (including a case proving an absent field is never written), the derived-bathroom-count math, and both failure paths (malformed id, live-call failure) degrading to `skipped` instead of throwing.
+
+### Verified this session (local dev only)
+
+Typecheck clean across `website`/`integrations`/`database`. Lint clean (only pre-existing repo-wide `import/order` warnings shared by every other test file — zero new errors). 108 integrations tests + 293 website tests pass. Production build (`next build`, with placeholder non-functional Clerk/n8n build-time env vars — no real credentials used) succeeds; `/properties/ownerrez` compiles as a dynamic route alongside every other page.
+
+### Explicitly NOT done this session
+
+- **Not applied to Production**: no migration run against Supabase, no deploy, no PR merged to `main`.
+- **No real property was linked.** `matchOwnerRezProperties()` has never been run against real data outside this session's own unit tests (which mock the OwnerRez client entirely) — the actual bucketed report against Production's real 20 OwnerRez properties vs. the real `Property` table still hasn't been produced (same still-open item from Increment 37/39).
+- **No `propertyType` mapping** — deliberately deferred, needs an explicit human-approved OwnerRez-type → `PropertyType` table, not guessed here.
+- **Reservations/Guest sync** (priority #2 from Increment 39) — untouched, not started.
+- This work happened in an isolated git worktree (`worktree-ownerrez-property-sync` branch) — merging to `main` and deciding when to run the migration/build/deploy against Production is the user's call, not done automatically here.
+
+### Next step, in order
+
+1. User reviews the branch/PR; merge when ready.
+2. Apply the `add_ownerrez_property_sync_fields` migration to Production (`prisma migrate deploy`, per the same `diagnose-db-target.mjs`-first discipline as every other production write in this file).
+3. Deploy, then visit `/properties/ownerrez` in Production and run the real match report for the first time — review `proposedMatches`/`unmatchedOwnerRez`/`unmatchedStayWhile` with the user/Michelle before confirming anything.
+4. Confirm real matches one at a time via the UI (never bulk, never automatic).
+5. Then move to priority #2 (OwnerRez reservations/Guest sync) per Increment 39's standing order.
 
 ---
 

@@ -68,6 +68,30 @@ describe("OwnerrezClient", () => {
     ]);
   });
 
+  it("getProperty() fetches the detail endpoint by id", async () => {
+    mockRequest.mockResolvedValueOnce({
+      id: 1,
+      name: "Cabin A",
+      key: "cabin-a",
+      active: true,
+      internal_code: "CABIN-A",
+      bedrooms: 3,
+    });
+    const client = new OwnerrezClient(credentials);
+
+    const property = await client.getProperty(1);
+
+    expect(mockRequest).toHaveBeenCalledWith("/properties/1");
+    expect(property).toEqual({
+      id: 1,
+      name: "Cabin A",
+      key: "cabin-a",
+      active: true,
+      internal_code: "CABIN-A",
+      bedrooms: 3,
+    });
+  });
+
   it("listBookings() passes since_utc as a query param when provided", async () => {
     mockRequest.mockResolvedValueOnce({ items: [] });
     const client = new OwnerrezClient(credentials);
