@@ -21,6 +21,8 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: "/locks", label: "Locks", icon: "lock" },
       { href: "/thermostats", label: "Thermostats", icon: "thermometer" },
       { href: "/reservations", label: "Reservations", icon: "calendar" },
+      { href: "/ownerrez", label: "OwnerRez", icon: "calendar" },
+      { href: "/notion", label: "Notion", icon: "plug" },
       { href: "/guests", label: "Guests", icon: "users" },
     ],
   },

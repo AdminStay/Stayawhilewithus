@@ -37,16 +37,20 @@ vi.mock("@/platform/audit/record-audit", () => ({
 }));
 
 const mockListRecentlyEdited = vi.fn();
+const mockQueryDataSource = vi.fn();
 vi.mock("@stayw/integrations/notion", () => ({
   NotionClient: vi.fn().mockImplementation(() => ({
     listRecentlyEdited: mockListRecentlyEdited,
+    queryDataSource: mockQueryDataSource,
   })),
 }));
 
 const mockListBookings = vi.fn();
+const mockListProperties = vi.fn();
 vi.mock("@stayw/integrations/ownerrez", () => ({
   OwnerrezClient: vi.fn().mockImplementation(() => ({
     listBookings: mockListBookings,
+    listProperties: mockListProperties,
   })),
 }));
 
@@ -58,7 +62,10 @@ import {
   disconnectIntegration,
   finishDeviceSync,
   getNotionHighlights,
+  getNotionIntegrationConfigStatus,
+  getNotionListingsAccessProof,
   getOwnerRezHighlights,
+  getOwnerRezProperties,
   listIntegrationConnections,
 } from "./integrations.service";
 
@@ -420,6 +427,139 @@ describe("getNotionHighlights", () => {
   });
 });
 
+describe("getNotionListingsAccessProof", () => {
+  const originalToken = process.env.NOTION_API_KEY;
+  const originalDataSourceId = process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+  afterEach(() => {
+    process.env.NOTION_API_KEY = originalToken;
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = originalDataSourceId;
+  });
+
+  it("reports not configured when NOTION_API_KEY is unset, without calling Notion", async () => {
+    delete process.env.NOTION_API_KEY;
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = "ds-123";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+
+    const result = await getNotionListingsAccessProof(actor);
+
+    expect(result).toEqual({ configured: false });
+    expect(mockQueryDataSource).not.toHaveBeenCalled();
+  });
+
+  it("reports not configured when NOTION_LISTINGS_DATA_SOURCE_ID is unset, without calling Notion", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    delete process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+
+    const result = await getNotionListingsAccessProof(actor);
+
+    expect(result).toEqual({ configured: false });
+    expect(mockQueryDataSource).not.toHaveBeenCalled();
+  });
+
+  it("returns the real result count and first title on a successful one-row read", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = "ds-123";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockQueryDataSource.mockResolvedValueOnce({
+      resultCount: 1,
+      firstTitle: "Aqua Palm",
+    });
+
+    const result = await getNotionListingsAccessProof(actor);
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "integrations:read");
+    expect(mockQueryDataSource).toHaveBeenCalledWith("ds-123", 1);
+    expect(result).toEqual({
+      configured: true,
+      ok: true,
+      resultCount: 1,
+      firstTitle: "Aqua Palm",
+    });
+  });
+
+  it("classifies a 401 as unauthorized", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = "ds-123";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockQueryDataSource.mockRejectedValueOnce(
+      new Error("Request to /data_sources/ds-123/query failed with 401"),
+    );
+
+    const result = await getNotionListingsAccessProof(actor);
+
+    expect(result).toEqual({
+      configured: true,
+      ok: false,
+      reason: "unauthorized",
+      error: "Request to /data_sources/ds-123/query failed with 401",
+    });
+  });
+
+  it("classifies a 404 as not_found_or_no_access (not shared, or an invalid data source ID)", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = "ds-123";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockQueryDataSource.mockRejectedValueOnce(
+      new Error("Request to /data_sources/ds-123/query failed with 404"),
+    );
+
+    const result = await getNotionListingsAccessProof(actor);
+
+    expect(result).toEqual({
+      configured: true,
+      ok: false,
+      reason: "not_found_or_no_access",
+      error: "Request to /data_sources/ds-123/query failed with 404",
+    });
+  });
+
+  it("classifies a 400 as version_or_validation_error", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = "ds-123";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockQueryDataSource.mockRejectedValueOnce(
+      new Error("Request to /data_sources/ds-123/query failed with 400"),
+    );
+
+    const result = await getNotionListingsAccessProof(actor);
+
+    expect(result).toEqual({
+      configured: true,
+      ok: false,
+      reason: "version_or_validation_error",
+      error: "Request to /data_sources/ds-123/query failed with 400",
+    });
+  });
+
+  it("classifies anything else (e.g. a network failure) as unexpected_error", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = "ds-123";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockQueryDataSource.mockRejectedValueOnce(new Error("network error"));
+
+    const result = await getNotionListingsAccessProof(actor);
+
+    expect(result).toEqual({
+      configured: true,
+      ok: false,
+      reason: "unexpected_error",
+      error: "network error",
+    });
+  });
+
+  it("propagates denial when the actor lacks integrations:read", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = "ds-123";
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(getNotionListingsAccessProof(actor)).rejects.toThrow();
+    expect(mockQueryDataSource).not.toHaveBeenCalled();
+  });
+});
+
 describe("getOwnerRezHighlights", () => {
   const originalUsername = process.env.OWNERREZ_USERNAME;
   const originalToken = process.env.OWNERREZ_API_TOKEN;
@@ -515,5 +655,106 @@ describe("getOwnerRezHighlights", () => {
 
     await expect(getOwnerRezHighlights(actor)).rejects.toThrow();
     expect(mockListBookings).not.toHaveBeenCalled();
+  });
+});
+
+describe("getOwnerRezProperties", () => {
+  const originalUsername = process.env.OWNERREZ_USERNAME;
+  const originalToken = process.env.OWNERREZ_API_TOKEN;
+  afterEach(() => {
+    process.env.OWNERREZ_USERNAME = originalUsername;
+    process.env.OWNERREZ_API_TOKEN = originalToken;
+  });
+
+  it("reports not configured when either credential is unset, without calling OwnerRez", async () => {
+    delete process.env.OWNERREZ_USERNAME;
+    delete process.env.OWNERREZ_API_TOKEN;
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+
+    const result = await getOwnerRezProperties(actor);
+
+    expect(result).toEqual({ configured: false });
+    expect(mockListProperties).not.toHaveBeenCalled();
+  });
+
+  it("returns real properties, uncapped, when configured and the call succeeds", async () => {
+    process.env.OWNERREZ_USERNAME = "demo-user";
+    process.env.OWNERREZ_API_TOKEN = "demo-token";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    const properties = [
+      { id: 1, name: "Cabin A", key: "cabin-a", active: true },
+      { id: 2, name: "Cabin B", key: "cabin-b", active: false },
+    ];
+    mockListProperties.mockResolvedValueOnce(properties);
+
+    const result = await getOwnerRezProperties(actor);
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "integrations:read");
+    expect(result).toEqual({ configured: true, ok: true, items: properties });
+  });
+
+  it("surfaces a real failure instead of swallowing it or inventing data", async () => {
+    process.env.OWNERREZ_USERNAME = "demo-user";
+    process.env.OWNERREZ_API_TOKEN = "demo-token";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListProperties.mockRejectedValueOnce(
+      new Error("Request failed with 401"),
+    );
+
+    const result = await getOwnerRezProperties(actor);
+
+    expect(result).toEqual({
+      configured: true,
+      ok: false,
+      error: "Request failed with 401",
+    });
+  });
+
+  it("propagates denial when the actor lacks integrations:read", async () => {
+    process.env.OWNERREZ_USERNAME = "demo-user";
+    process.env.OWNERREZ_API_TOKEN = "demo-token";
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(getOwnerRezProperties(actor)).rejects.toThrow();
+    expect(mockListProperties).not.toHaveBeenCalled();
+  });
+});
+
+describe("getNotionIntegrationConfigStatus", () => {
+  const originalToken = process.env.NOTION_API_KEY;
+  afterEach(() => {
+    process.env.NOTION_API_KEY = originalToken;
+  });
+
+  it("reports configured: false when NOTION_API_KEY is unset", async () => {
+    delete process.env.NOTION_API_KEY;
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+
+    const result = await getNotionIntegrationConfigStatus(actor);
+
+    expect(result).toEqual({ configured: false });
+  });
+
+  it("reports configured: true when NOTION_API_KEY is set, without making any network call", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+
+    const result = await getNotionIntegrationConfigStatus(actor);
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "integrations:read");
+    expect(result).toEqual({ configured: true });
+    expect(mockQueryDataSource).not.toHaveBeenCalled();
+    expect(mockListRecentlyEdited).not.toHaveBeenCalled();
+  });
+
+  it("propagates denial when the actor lacks integrations:read", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(getNotionIntegrationConfigStatus(actor)).rejects.toThrow();
   });
 });

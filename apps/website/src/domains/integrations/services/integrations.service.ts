@@ -10,6 +10,7 @@ import { NotionClient, type NotionHighlight } from "@stayw/integrations/notion";
 import {
   OwnerrezClient,
   type OwnerrezBooking,
+  type OwnerrezProperty,
 } from "@stayw/integrations/ownerrez";
 
 export type { IntegrationConnection };
@@ -336,6 +337,80 @@ export async function getNotionHighlights(
 }
 
 /**
+ * A specific, named reason the one-row proof read below failed, distinguished
+ * only as far as Notion's own API actually allows (see packages/integrations/
+ * src/notion/README.md and HANDOFF.md Increments 44/45): "unauthorized" (401,
+ * bad/revoked token) vs. "not_found_or_no_access" (404 — Notion deliberately
+ * returns the same status for "not shared with this integration" and "no such
+ * data source", to avoid leaking existence) vs. "version_or_validation_error"
+ * (400) vs. "unexpected_error" (anything else, e.g. a network failure).
+ */
+export type NotionListingsAccessProofFailureReason =
+  | "unauthorized"
+  | "not_found_or_no_access"
+  | "version_or_validation_error"
+  | "unexpected_error";
+
+export type NotionListingsAccessProof =
+  | { configured: false }
+  | {
+      configured: true;
+      ok: true;
+      resultCount: number;
+      firstTitle: string | null;
+    }
+  | {
+      configured: true;
+      ok: false;
+      reason: NotionListingsAccessProofFailureReason;
+      error: string;
+    };
+
+function classifyNotionProofFailure(
+  err: unknown,
+): NotionListingsAccessProofFailureReason {
+  const message = err instanceof Error ? err.message : "";
+  const status = /failed with (\d+)/.exec(message)?.[1];
+  if (status === "401") return "unauthorized";
+  if (status === "404") return "not_found_or_no_access";
+  if (status === "400") return "version_or_validation_error";
+  return "unexpected_error";
+}
+
+/**
+ * One-row, read-only proof that a specific Notion data source (e.g.
+ * Michelle's "View of Listings" property database) is shared with this
+ * integration and readable — never a full content dump, never a write.
+ * Requires both NOTION_API_KEY and NOTION_LISTINGS_DATA_SOURCE_ID to be set;
+ * neither value is ever logged or returned by this function.
+ */
+export async function getNotionListingsAccessProof(
+  actor: AuthContext,
+): Promise<NotionListingsAccessProof> {
+  await assertPermission(actor, "integrations:read");
+
+  const token = process.env.NOTION_API_KEY;
+  const dataSourceId = process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+  if (!token || !dataSourceId) return { configured: false };
+
+  try {
+    const client = new NotionClient({ token });
+    const { resultCount, firstTitle } = await client.queryDataSource(
+      dataSourceId,
+      1,
+    );
+    return { configured: true, ok: true, resultCount, firstTitle };
+  } catch (err) {
+    return {
+      configured: true,
+      ok: false,
+      reason: classifyNotionProofFailure(err),
+      error: err instanceof Error ? err.message : "Notion request failed.",
+    };
+  }
+}
+
+/**
  * Sorts already-fetched real bookings to surface upcoming ones first (soonest
  * arrival first), falling back to the most recently arrived past bookings if
  * there are no upcoming ones — client-side re-ordering of real data, not a
@@ -372,6 +447,7 @@ function pickRelevantBookings(
  */
 export async function getOwnerRezHighlights(
   actor: AuthContext,
+  limit = 5,
 ): Promise<IntegrationHighlights<OwnerrezBooking>> {
   await assertPermission(actor, "integrations:read");
 
@@ -385,7 +461,7 @@ export async function getOwnerRezHighlights(
     return {
       configured: true,
       ok: true,
-      items: pickRelevantBookings(bookings, 5),
+      items: pickRelevantBookings(bookings, limit),
     };
   } catch (err) {
     return {
@@ -394,4 +470,48 @@ export async function getOwnerRezHighlights(
       error: err instanceof Error ? err.message : "OwnerRez request failed.",
     };
   }
+}
+
+/**
+ * Real, read-only call to OwnerRez's /properties — no fabricated data, no
+ * cap (a property portfolio is small/finite, unlike a rolling booking
+ * window). OwnerRez remains the source of truth for the property
+ * portfolio: this never writes into StayWhile's Property table.
+ */
+export async function getOwnerRezProperties(
+  actor: AuthContext,
+): Promise<IntegrationHighlights<OwnerrezProperty>> {
+  await assertPermission(actor, "integrations:read");
+
+  const username = process.env.OWNERREZ_USERNAME;
+  const token = process.env.OWNERREZ_API_TOKEN;
+  if (!username || !token) return { configured: false };
+
+  try {
+    const client = new OwnerrezClient({ username, token });
+    const items = await client.listProperties();
+    return { configured: true, ok: true, items };
+  } catch (err) {
+    return {
+      configured: true,
+      ok: false,
+      error: err instanceof Error ? err.message : "OwnerRez request failed.",
+    };
+  }
+}
+
+/**
+ * Non-network, config-only status for the dedicated Notion page. Deliberately
+ * does NOT call the live queryDataSource() proof (getNotionListingsAccessProof
+ * above) on every render — that's a real Notion API call, and this status is
+ * meant to render instantly and safely on every page load. Only reports
+ * whether NOTION_API_KEY is set — never whether access to a specific data
+ * source has actually been granted, which requires a live call and stays a
+ * deliberate, manually-approved action (see HANDOFF.md Increments 44-46).
+ */
+export async function getNotionIntegrationConfigStatus(
+  actor: AuthContext,
+): Promise<{ configured: boolean }> {
+  await assertPermission(actor, "integrations:read");
+  return { configured: Boolean(process.env.NOTION_API_KEY) };
 }

@@ -587,7 +587,17 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
           </Link>
 
           <div>
-            <SectionHeader title="Notion" />
+            <SectionHeader
+              title="Notion"
+              action={
+                <Link
+                  href="/notion"
+                  className="text-xs font-medium text-forest-600 hover:underline"
+                >
+                  View all
+                </Link>
+              }
+            />
             {summary.notionHighlights.configured === false ? (
               <p className="text-sm text-ink-muted">
                 Not connected — set{" "}
@@ -603,7 +613,7 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
               </p>
             ) : (
               <ul className="divide-y divide-border border-t border-border">
-                {summary.notionHighlights.items.map((item) => (
+                {summary.notionHighlights.items.slice(0, 3).map((item) => (
                   <li key={item.id}>
                     {item.url ? (
                       <a
@@ -626,7 +636,17 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
           </div>
 
           <div>
-            <SectionHeader title="OwnerRez" />
+            <SectionHeader
+              title="OwnerRez"
+              action={
+                <Link
+                  href="/ownerrez"
+                  className="text-xs font-medium text-forest-600 hover:underline"
+                >
+                  View all
+                </Link>
+              }
+            />
             {summary.ownerRezHighlights.configured === false ? (
               <p className="text-sm text-ink-muted">
                 Not connected — set{" "}
@@ -641,7 +661,7 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
               <p className="text-sm text-ink-muted">No bookings found.</p>
             ) : (
               <ul className="divide-y divide-border border-t border-border text-sm">
-                {summary.ownerRezHighlights.items.map((b) => (
+                {summary.ownerRezHighlights.items.slice(0, 3).map((b) => (
                   <li key={b.id} className="py-2">
                     <div className="flex items-center justify-between">
                       <span className="text-ink">Booking #{b.id}</span>
