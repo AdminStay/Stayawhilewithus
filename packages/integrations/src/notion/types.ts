@@ -46,3 +46,9 @@ export interface NotionHighlight {
   url: string | null;
   lastEditedTime: string | null;
 }
+
+/** Result of a one-row proof read against a specific data source — never the row's full content. */
+export interface NotionDataSourceQueryResult {
+  resultCount: number;
+  firstTitle: string | null;
+}

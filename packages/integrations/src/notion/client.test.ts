@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
 const mockRequest = vi.fn();
+const mockHttpClientConstructor = vi.fn();
 
 vi.mock("../core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../core")>();
   return {
     ...actual,
     HttpClient: class MockHttpClient {
+      constructor(opts: unknown) {
+        mockHttpClientConstructor(opts);
+      }
       request = mockRequest;
     },
   };
@@ -22,6 +26,16 @@ describe("NotionClient", () => {
 
     expect(client.provider).toBe("NOTION");
     expect(client.capabilities).toEqual(["sync"]);
+  });
+
+  it("constructs its HttpClient with the stable default Notion-Version (2022-06-28) — queryDataSource()'s newer version is a per-call override only, never this default", () => {
+    new NotionClient(credentials);
+
+    expect(mockHttpClientConstructor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        headers: expect.objectContaining({ "Notion-Version": "2022-06-28" }),
+      }),
+    );
   });
 
   it("connect() calls /users/me and reports connected on success", async () => {
@@ -152,6 +166,95 @@ describe("NotionClient", () => {
           url: null,
           lastEditedTime: null,
         }),
+      );
+    });
+  });
+
+  describe("queryDataSource", () => {
+    it("queries the given data source with a per-request Notion-Version override, requesting only the given page size", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          {
+            id: "row1",
+            object: "page",
+            properties: {
+              Name: { type: "title", title: [{ plain_text: "Aqua Palm" }] },
+            },
+          },
+        ],
+        has_more: true,
+        next_cursor: "abc",
+      });
+      const client = new NotionClient(credentials);
+
+      const result = await client.queryDataSource("ds-123", 1);
+
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(mockRequest).toHaveBeenCalledWith("/data_sources/ds-123/query", {
+        method: "POST",
+        headers: { "Notion-Version": "2026-03-11" },
+        body: JSON.stringify({ page_size: 1 }),
+      });
+      expect(result).toEqual({ resultCount: 1, firstTitle: "Aqua Palm" });
+    });
+
+    it("makes exactly one request and never any create/update/delete/archive call — read-only by construction", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      await client.queryDataSource("ds-123", 1);
+
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      const [, init] = mockRequest.mock.calls[0] as [
+        string,
+        { method: string },
+      ];
+      expect(init.method).toBe("POST");
+      expect(init.method).not.toBe("PATCH");
+      expect(init.method).not.toBe("DELETE");
+    });
+
+    it("defaults to page_size 1 when not given", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      await client.queryDataSource("ds-123");
+
+      expect(mockRequest).toHaveBeenCalledWith(
+        "/data_sources/ds-123/query",
+        expect.objectContaining({ body: JSON.stringify({ page_size: 1 }) }),
+      );
+    });
+
+    it("reports zero results and a null title without throwing when the data source is empty", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const result = await client.queryDataSource("ds-123", 1);
+
+      expect(result).toEqual({ resultCount: 0, firstTitle: null });
+    });
+
+    it("propagates the request error untouched (e.g. 404 for not-shared-or-invalid, 401 for bad token, 400 for a version mismatch) rather than swallowing it", async () => {
+      mockRequest.mockRejectedValueOnce(
+        new Error("Request to /data_sources/ds-123/query failed with 404"),
+      );
+      const client = new NotionClient(credentials);
+
+      await expect(client.queryDataSource("ds-123", 1)).rejects.toThrow(
+        "failed with 404",
       );
     });
   });

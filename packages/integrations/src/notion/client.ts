@@ -9,13 +9,14 @@ import type {
 
 import type {
   NotionCredentials,
+  NotionDataSourceQueryResult,
   NotionHighlight,
   NotionSearchResponse,
   NotionSearchResult,
   NotionUser,
 } from "./types";
 
-export type { NotionHighlight } from "./types";
+export type { NotionHighlight, NotionDataSourceQueryResult } from "./types";
 
 /**
  * A page's title lives in whichever of its `properties` has type "title"
@@ -42,6 +43,17 @@ function extractTitle(result: NotionSearchResult): string {
 
 const BASE_URL = "https://api.notion.com/v1";
 const NOTION_VERSION = "2022-06-28";
+
+/**
+ * Notion's data-source query endpoint (POST /data_sources/{id}/query) did
+ * not exist before multi-source databases shipped, and requires this newer
+ * version specifically — confirmed live against Notion's current API
+ * reference (2026-08-25). Used only as a per-request header override in
+ * queryDataSource() below; NOTION_VERSION above stays the client's global
+ * default for every other method (/users/me, /search-based sync() and
+ * listRecentlyEdited()), which are unaffected.
+ */
+const NOTION_DATA_SOURCE_QUERY_VERSION = "2026-03-11";
 
 /**
  * Notion API client — real HTTP calls via HttpClient (Bearer integration
@@ -158,5 +170,35 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
       url: result.url ?? null,
       lastEditedTime: result.last_edited_time ?? null,
     }));
+  }
+
+  /**
+   * One-off, additive proof that a specific data source (e.g. a property
+   * database like "View of Listings") is shared with this integration and
+   * readable. Read-only: Notion's data-source query endpoint reads rows,
+   * never writes. Requests at most `pageSize` rows and returns only a count
+   * and the first row's title — never full row/page content. Uses a
+   * per-request Notion-Version override (see NOTION_DATA_SOURCE_QUERY_VERSION
+   * above) so the client's default NOTION_VERSION, and every other method,
+   * is unaffected.
+   */
+  async queryDataSource(
+    dataSourceId: string,
+    pageSize = 1,
+  ): Promise<NotionDataSourceQueryResult> {
+    const response = await this.http.request<NotionSearchResponse>(
+      `/data_sources/${dataSourceId}/query`,
+      {
+        method: "POST",
+        headers: { "Notion-Version": NOTION_DATA_SOURCE_QUERY_VERSION },
+        body: JSON.stringify({ page_size: pageSize }),
+      },
+    );
+
+    const first = response.results[0];
+    return {
+      resultCount: response.results.length,
+      firstTitle: first ? extractTitle(first) : null,
+    };
   }
 }
