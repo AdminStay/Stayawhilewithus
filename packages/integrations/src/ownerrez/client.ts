@@ -21,6 +21,25 @@ export type { OwnerrezBooking, OwnerrezProperty } from "./types";
 const BASE_URL = "https://api.ownerreservations.com/v2";
 
 /**
+ * OwnerRez's own API requires `since_utc` or `property_ids` on GET
+ * /bookings — confirmed against https://api.ownerreservations.com/help/v2/
+ * bookings/get-bookings, 2026-08-25: "Either property_ids or since_utc is
+ * required." A bare, unfiltered call 400s (this is what caused the real
+ * Production `/bookings` failure — see HANDOFF.md). Every real caller in
+ * this codebase calls listBookings() with no params, so this default is
+ * what actually makes those calls valid; property_ids isn't used since
+ * nothing here scopes bookings by property yet.
+ */
+const DEFAULT_BOOKINGS_LOOKBACK_DAYS = 90;
+
+function defaultSinceUtc(): string {
+  const cutoff = new Date(
+    Date.now() - DEFAULT_BOOKINGS_LOOKBACK_DAYS * 24 * 60 * 60 * 1000,
+  );
+  return cutoff.toISOString();
+}
+
+/**
  * OwnerRez integration client — real HTTP calls against the v2 API (Basic
  * Auth over HttpClient, StayWhile's shared retry/timeout fetch wrapper).
  * receiveWebhook() remains a stub: OwnerRez's webhook payload shape is an
@@ -111,11 +130,9 @@ export class OwnerrezClient
   async listBookings(params?: {
     sinceUtc?: string;
   }): Promise<OwnerrezBooking[]> {
-    const query = params?.sinceUtc
-      ? `?since_utc=${encodeURIComponent(params.sinceUtc)}`
-      : "";
+    const sinceUtc = params?.sinceUtc ?? defaultSinceUtc();
     const page = await this.http.request<OwnerrezPage<OwnerrezBooking>>(
-      `/bookings${query}`,
+      `/bookings?since_utc=${encodeURIComponent(sinceUtc)}`,
     );
     return page.items;
   }
@@ -132,6 +149,9 @@ export class OwnerrezClient
    * not just a token, so that stays a deliberately separate follow-up. Only
    * INBOUND is meaningful here — OwnerRez is the system of record for its
    * own bookings, StayWhile never pushes booking changes back to it.
+   * listBookings() below defaults to a rolling lookback window when called
+   * bare (as this does), so recordsProcessed reflects that window, not every
+   * booking OwnerRez has ever recorded.
    */
   async sync(
     direction: SyncDirection,
