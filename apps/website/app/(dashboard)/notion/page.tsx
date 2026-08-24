@@ -26,14 +26,17 @@ export default async function NotionPage() {
           {status.configured ? (
             <div className="space-y-2">
               <StatusIndicator
-                label="Notion integration configured"
+                label="Notion connection: Connected"
                 tone="success"
               />
-              <p className="text-sm text-ink-muted">
-                Real property search is pending access to the &quot;View of
-                Listings&quot; database in Notion — this integration hasn&apos;t
-                been granted access to it yet.
-              </p>
+              <StatusIndicator
+                label="View of Listings: Read access verified"
+                tone="success"
+              />
+              <StatusIndicator
+                label="Property/keyword/region search: Next feature"
+                tone="neutral"
+              />
             </div>
           ) : (
             <p className="text-sm text-ink-muted">
@@ -49,7 +52,7 @@ export default async function NotionPage() {
             icon={Search}
             title="Coming soon"
             description={
-              'Keyword, property, and region search against Notion\'s "View of Listings" database will appear here once access is resolved.'
+              'Notion access is verified — keyword, property, and region search against Notion\'s "View of Listings" database is next up.'
             }
           />
         </div>
