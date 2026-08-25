@@ -6,7 +6,11 @@ import type {
   IntegrationAuthType,
   IntegrationProvider,
 } from "@stayw/database/enums";
-import { NotionClient, type NotionHighlight } from "@stayw/integrations/notion";
+import {
+  NotionClient,
+  type NotionHighlight,
+  type NotionListingRecord,
+} from "@stayw/integrations/notion";
 import {
   OwnerrezClient,
   type OwnerrezBooking,
@@ -16,6 +20,7 @@ import {
 export type { IntegrationConnection };
 
 import type { DisconnectIntegrationInput } from "../schemas/integrations.schema";
+import { resolveRegion } from "./notion-region-matching";
 
 import { recordAudit } from "@/platform/audit/record-audit";
 
@@ -405,6 +410,46 @@ export async function getNotionListingsAccessProof(
       configured: true,
       ok: false,
       reason: classifyNotionProofFailure(err),
+      error: err instanceof Error ? err.message : "Notion request failed.",
+    };
+  }
+}
+
+/** A "View of Listings" row plus its app-side-resolved region — never a raw Notion property object. */
+export type NotionListingWithRegion = NotionListingRecord & { region: string };
+
+/**
+ * Real, read-only, fully paginated read of every row in "View of Listings" —
+ * the data source this dashboard's search/listing display is built on. Not
+ * a proof read (unlike getNotionListingsAccessProof above): this returns
+ * every real row, each with an app-side-resolved `region` attached (see
+ * notion-region-matching.ts) — never inferred from Notion content, and
+ * "Unknown / Unassigned" whenever a listing's name isn't in the known
+ * 38-property reference. This drives the live connection/read-access status
+ * shown on the /notion page — a failed call here must not be masked by a
+ * stale "verified" message.
+ */
+export async function listNotionListings(
+  actor: AuthContext,
+): Promise<IntegrationHighlights<NotionListingWithRegion>> {
+  await assertPermission(actor, "integrations:read");
+
+  const token = process.env.NOTION_API_KEY;
+  const dataSourceId = process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+  if (!token || !dataSourceId) return { configured: false };
+
+  try {
+    const client = new NotionClient({ token });
+    const records = await client.listDataSourceRecords(dataSourceId);
+    const items = records.map((record) => ({
+      ...record,
+      region: resolveRegion(record.name),
+    }));
+    return { configured: true, ok: true, items };
+  } catch (err) {
+    return {
+      configured: true,
+      ok: false,
       error: err instanceof Error ? err.message : "Notion request failed.",
     };
   }

@@ -9,14 +9,21 @@ import type {
 
 import type {
   NotionCredentials,
+  NotionDataSourceQueryPage,
   NotionDataSourceQueryResult,
+  NotionDataSourceRow,
   NotionHighlight,
+  NotionListingRecord,
   NotionSearchResponse,
   NotionSearchResult,
   NotionUser,
 } from "./types";
 
-export type { NotionHighlight, NotionDataSourceQueryResult } from "./types";
+export type {
+  NotionHighlight,
+  NotionDataSourceQueryResult,
+  NotionListingRecord,
+} from "./types";
 
 /**
  * A page's title lives in whichever of its `properties` has type "title"
@@ -54,6 +61,109 @@ const NOTION_VERSION = "2022-06-28";
  * listRecentlyEdited()), which are unaffected.
  */
 const NOTION_DATA_SOURCE_QUERY_VERSION = "2026-03-11";
+
+// Hard cap independent of cycle detection below — belt-and-suspenders, not a
+// substitute for it. StayWhile's real portfolio is on the order of dozens of
+// listings; 50 pages at page_size 100 is generously above any realistic size.
+const MAX_DATA_SOURCE_PAGES = 50;
+
+// "View of Listings"'s real property names, confirmed live 2026-08-26 via
+// GET /v1/data_sources/{id} (see HANDOFF.md). Hardcoded rather than
+// re-discovered per request — this schema is stable metadata, not runtime
+// data, and re-fetching it on every listing read would be a wasted call.
+const LISTING_PROPERTY = {
+  name: "Name",
+  address: "Address",
+  guests: "Number of Guests",
+  bathrooms: "Bathrooms",
+  bedrooms: "Bedrooms",
+  directBooking: "Direct booking",
+  airbnbLink: "Airbnb Link",
+  vrboLink: "VRBO Link",
+  googleDrivePhotosUrl: "Google Drive Photos",
+  guidebookUrl: "Guidebook",
+} as const;
+
+/**
+ * A network response is never actually guaranteed to match the
+ * `NotionPropertyValue` type we declare for it — Notion could add a new
+ * property type, change a data source's schema, or return a genuinely
+ * malformed entry. Every extractor below treats a raw property value as
+ * `unknown` and checks its real runtime shape rather than trusting the
+ * static type, so one unexpected or malformed column can never crash row
+ * parsing (and, in turn, the whole listing page) — it just resolves that
+ * one field to null, the same as if the property were absent entirely.
+ */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function extractRichTextRuns(value: unknown): unknown[] | null {
+  if (!isPlainObject(value)) return null;
+  if (value.type === "title" && Array.isArray(value.title)) return value.title;
+  if (value.type === "rich_text" && Array.isArray(value.rich_text)) {
+    return value.rich_text;
+  }
+  return null;
+}
+
+function extractRichTextValue(value: unknown): string | null {
+  const runs = extractRichTextRuns(value);
+  if (!runs) return null;
+  const text = runs
+    .map((run) =>
+      isPlainObject(run) && typeof run.plain_text === "string"
+        ? run.plain_text
+        : "",
+    )
+    .join("");
+  return text.length > 0 ? text : null;
+}
+
+function extractNumberValue(value: unknown): number | null {
+  if (!isPlainObject(value) || value.type !== "number") return null;
+  return typeof value.number === "number" ? value.number : null;
+}
+
+function extractUrlValue(value: unknown): string | null {
+  if (!isPlainObject(value) || value.type !== "url") return null;
+  return typeof value.url === "string" ? value.url : null;
+}
+
+/**
+ * Maps one raw "View of Listings" row to the narrow, UI-facing
+ * NotionListingRecord shape — never exposes the raw Notion properties map
+ * beyond this function. Only the 10 known field names in LISTING_PROPERTY
+ * are ever read; any other (unmodeled) property present on the row — a
+ * future new column, for instance — is never looked up and so can never
+ * affect parsing or reach the UI. A missing, malformed, or unexpectedly
+ * typed value for any of the 10 known fields resolves to null rather than
+ * throwing — a row is never dropped, and one bad column never takes down
+ * the whole listing page, just that one field.
+ */
+function mapListingRecord(row: NotionDataSourceRow): NotionListingRecord {
+  const props: Record<string, unknown> = isPlainObject(row.properties)
+    ? row.properties
+    : {};
+  return {
+    id: row.id,
+    url: row.url ?? null,
+    name:
+      extractRichTextValue(props[LISTING_PROPERTY.name]) ??
+      "(untitled listing)",
+    address: extractRichTextValue(props[LISTING_PROPERTY.address]),
+    bedrooms: extractNumberValue(props[LISTING_PROPERTY.bedrooms]),
+    bathrooms: extractNumberValue(props[LISTING_PROPERTY.bathrooms]),
+    guests: extractNumberValue(props[LISTING_PROPERTY.guests]),
+    directBooking: extractRichTextValue(props[LISTING_PROPERTY.directBooking]),
+    airbnbLink: extractRichTextValue(props[LISTING_PROPERTY.airbnbLink]),
+    vrboLink: extractRichTextValue(props[LISTING_PROPERTY.vrboLink]),
+    googleDrivePhotosUrl: extractUrlValue(
+      props[LISTING_PROPERTY.googleDrivePhotosUrl],
+    ),
+    guidebookUrl: extractUrlValue(props[LISTING_PROPERTY.guidebookUrl]),
+  };
+}
 
 /**
  * Notion API client — real HTTP calls via HttpClient (Bearer integration
@@ -200,5 +310,67 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
       resultCount: response.results.length,
       firstTitle: first ? extractTitle(first) : null,
     };
+  }
+
+  /**
+   * Full, read-only retrieval of every row in a data source (e.g. "View of
+   * Listings"), fully paginated — never just the first page. Two
+   * independent safeguards against a runaway loop, mirroring the discipline
+   * applied to OwnerRez's pagination fix: a hard page cap, and rejection of
+   * a `next_cursor` value already seen in this same call. Also refuses to
+   * silently truncate if Notion ever reports `has_more: true` without a
+   * usable `next_cursor` — that would otherwise look like a normal
+   * completion. Returns the narrow NotionListingRecord shape only; the raw
+   * Notion properties map never leaves this function.
+   */
+  async listDataSourceRecords(
+    dataSourceId: string,
+  ): Promise<NotionListingRecord[]> {
+    const rows: NotionDataSourceRow[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    let pageCount = 0;
+
+    for (;;) {
+      if (pageCount >= MAX_DATA_SOURCE_PAGES) {
+        throw new Error(
+          `Notion data source query exceeded the maximum of ${MAX_DATA_SOURCE_PAGES} pages — refusing to continue.`,
+        );
+      }
+      pageCount++;
+
+      const page: NotionDataSourceQueryPage =
+        await this.http.request<NotionDataSourceQueryPage>(
+          `/data_sources/${dataSourceId}/query`,
+          {
+            method: "POST",
+            headers: { "Notion-Version": NOTION_DATA_SOURCE_QUERY_VERSION },
+            body: JSON.stringify(
+              cursor
+                ? { page_size: 100, start_cursor: cursor }
+                : { page_size: 100 },
+            ),
+          },
+        );
+
+      rows.push(...page.results);
+
+      if (!page.has_more) break;
+
+      if (!page.next_cursor) {
+        throw new Error(
+          "Notion reported more results (has_more: true) but returned no next_cursor — refusing to silently truncate.",
+        );
+      }
+      if (seenCursors.has(page.next_cursor)) {
+        throw new Error(
+          "Notion returned a repeated pagination cursor — refusing to loop.",
+        );
+      }
+      seenCursors.add(page.next_cursor);
+      cursor = page.next_cursor;
+    }
+
+    return rows.map(mapListingRecord);
   }
 }

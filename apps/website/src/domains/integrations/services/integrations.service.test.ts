@@ -38,10 +38,12 @@ vi.mock("@/platform/audit/record-audit", () => ({
 
 const mockListRecentlyEdited = vi.fn();
 const mockQueryDataSource = vi.fn();
+const mockListDataSourceRecords = vi.fn();
 vi.mock("@stayw/integrations/notion", () => ({
   NotionClient: vi.fn().mockImplementation(() => ({
     listRecentlyEdited: mockListRecentlyEdited,
     queryDataSource: mockQueryDataSource,
+    listDataSourceRecords: mockListDataSourceRecords,
   })),
 }));
 
@@ -67,6 +69,7 @@ import {
   getOwnerRezHighlights,
   getOwnerRezProperties,
   listIntegrationConnections,
+  listNotionListings,
 } from "./integrations.service";
 
 import { recordAudit } from "@/platform/audit/record-audit";
@@ -557,6 +560,126 @@ describe("getNotionListingsAccessProof", () => {
 
     await expect(getNotionListingsAccessProof(actor)).rejects.toThrow();
     expect(mockQueryDataSource).not.toHaveBeenCalled();
+  });
+});
+
+describe("listNotionListings", () => {
+  const originalToken = process.env.NOTION_API_KEY;
+  const originalDataSourceId = process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+  afterEach(() => {
+    process.env.NOTION_API_KEY = originalToken;
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = originalDataSourceId;
+  });
+
+  it("reports not configured when NOTION_API_KEY is unset, without calling Notion", async () => {
+    delete process.env.NOTION_API_KEY;
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = "ds-123";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+
+    const result = await listNotionListings(actor);
+
+    expect(result).toEqual({ configured: false });
+    expect(mockListDataSourceRecords).not.toHaveBeenCalled();
+  });
+
+  it("reports not configured when NOTION_LISTINGS_DATA_SOURCE_ID is unset, without calling Notion", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    delete process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+
+    const result = await listNotionListings(actor);
+
+    expect(result).toEqual({ configured: false });
+    expect(mockListDataSourceRecords).not.toHaveBeenCalled();
+  });
+
+  it("attaches a resolved region to every returned record", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = "ds-123";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListDataSourceRecords.mockResolvedValueOnce([
+      {
+        id: "1",
+        url: "https://notion.so/1",
+        name: "Moonlit Cove",
+        address: "123 Main St",
+        bedrooms: 3,
+        bathrooms: 2,
+        guests: 6,
+        directBooking: null,
+        airbnbLink: null,
+        vrboLink: null,
+        googleDrivePhotosUrl: null,
+        guidebookUrl: null,
+      },
+      {
+        id: "2",
+        url: "https://notion.so/2",
+        name: "Some Unmapped Property",
+        address: null,
+        bedrooms: null,
+        bathrooms: null,
+        guests: null,
+        directBooking: null,
+        airbnbLink: null,
+        vrboLink: null,
+        googleDrivePhotosUrl: null,
+        guidebookUrl: null,
+      },
+    ]);
+
+    const result = await listNotionListings(actor);
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "integrations:read");
+    expect(mockListDataSourceRecords).toHaveBeenCalledWith("ds-123");
+    expect(result).toEqual({
+      configured: true,
+      ok: true,
+      items: [
+        expect.objectContaining({ name: "Moonlit Cove", region: "SRQ" }),
+        expect.objectContaining({
+          name: "Some Unmapped Property",
+          region: "Unknown / Unassigned",
+        }),
+      ],
+    });
+  });
+
+  it("returns zero listings without error when the data source is empty", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = "ds-123";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListDataSourceRecords.mockResolvedValueOnce([]);
+
+    const result = await listNotionListings(actor);
+
+    expect(result).toEqual({ configured: true, ok: true, items: [] });
+  });
+
+  it("surfaces a live API failure as ok: false rather than swallowing it", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = "ds-123";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListDataSourceRecords.mockRejectedValueOnce(new Error("network error"));
+
+    const result = await listNotionListings(actor);
+
+    expect(result).toEqual({
+      configured: true,
+      ok: false,
+      error: "network error",
+    });
+  });
+
+  it("propagates denial when the actor lacks integrations:read", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = "ds-123";
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(listNotionListings(actor)).rejects.toThrow();
+    expect(mockListDataSourceRecords).not.toHaveBeenCalled();
   });
 });
 

@@ -258,4 +258,408 @@ describe("NotionClient", () => {
       );
     });
   });
+
+  describe("listDataSourceRecords", () => {
+    function row(id: string, overrides: Record<string, unknown> = {}) {
+      return {
+        id,
+        url: `https://notion.so/${id}`,
+        properties: {
+          Name: { type: "title", title: [{ plain_text: `Listing ${id}` }] },
+          Address: {
+            type: "rich_text",
+            rich_text: [{ plain_text: "123 Main St" }],
+          },
+          "Number of Guests": { type: "number", number: 4 },
+          Bathrooms: { type: "number", number: 2 },
+          Bedrooms: { type: "number", number: 3 },
+          "Direct booking": {
+            type: "rich_text",
+            rich_text: [{ plain_text: "Book direct" }],
+          },
+          "Airbnb Link": {
+            type: "rich_text",
+            rich_text: [{ plain_text: "https://airbnb.com/x" }],
+          },
+          "VRBO Link": {
+            type: "rich_text",
+            rich_text: [{ plain_text: "https://vrbo.com/x" }],
+          },
+          "Google Drive Photos": {
+            type: "url",
+            url: "https://drive.google.com/x",
+          },
+          Guidebook: { type: "url", url: "https://guidebook.example/x" },
+          ...overrides,
+        },
+      };
+    }
+
+    it("retrieves a single page in one request", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [row("1")],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const records = await client.listDataSourceRecords("ds-123");
+
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(mockRequest).toHaveBeenCalledWith("/data_sources/ds-123/query", {
+        method: "POST",
+        headers: { "Notion-Version": "2026-03-11" },
+        body: JSON.stringify({ page_size: 100 }),
+      });
+      expect(records).toHaveLength(1);
+      expect(records[0]).toEqual({
+        id: "1",
+        url: "https://notion.so/1",
+        name: "Listing 1",
+        address: "123 Main St",
+        bedrooms: 3,
+        bathrooms: 2,
+        guests: 4,
+        directBooking: "Book direct",
+        airbnbLink: "https://airbnb.com/x",
+        vrboLink: "https://vrbo.com/x",
+        googleDrivePhotosUrl: "https://drive.google.com/x",
+        guidebookUrl: "https://guidebook.example/x",
+      });
+    });
+
+    it("follows next_cursor across multiple pages, accumulating rows from every page", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          results: [row("1")],
+          has_more: true,
+          next_cursor: "cursor-a",
+        })
+        .mockResolvedValueOnce({
+          results: [row("2")],
+          has_more: false,
+          next_cursor: null,
+        });
+      const client = new NotionClient(credentials);
+
+      const records = await client.listDataSourceRecords("ds-123");
+
+      expect(mockRequest).toHaveBeenNthCalledWith(
+        2,
+        "/data_sources/ds-123/query",
+        {
+          method: "POST",
+          headers: { "Notion-Version": "2026-03-11" },
+          body: JSON.stringify({ page_size: 100, start_cursor: "cursor-a" }),
+        },
+      );
+      expect(records.map((r) => r.id)).toEqual(["1", "2"]);
+    });
+
+    it("rejects a repeated pagination cursor instead of looping forever", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          results: [row("1")],
+          has_more: true,
+          next_cursor: "cursor-a",
+        })
+        .mockResolvedValueOnce({
+          results: [row("2")],
+          has_more: true,
+          next_cursor: "cursor-a", // same cursor again — a well-behaved API never does this
+        });
+      const client = new NotionClient(credentials);
+
+      await expect(client.listDataSourceRecords("ds-123")).rejects.toThrow(
+        /repeated pagination cursor/,
+      );
+    });
+
+    it("rejects has_more: true with a missing next_cursor instead of silently truncating", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [row("1")],
+        has_more: true,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      await expect(client.listDataSourceRecords("ds-123")).rejects.toThrow(
+        /refusing to silently truncate/,
+      );
+    });
+
+    it("enforces a hard maximum page count instead of looping forever on ever-changing cursors", async () => {
+      let n = 0;
+      mockRequest.mockImplementation(async () => {
+        n += 1;
+        return {
+          results: [row(String(n))],
+          has_more: true,
+          next_cursor: `cursor-${n}`,
+        };
+      });
+      const client = new NotionClient(credentials);
+
+      await expect(client.listDataSourceRecords("ds-123")).rejects.toThrow(
+        /exceeded the maximum of 50 pages/,
+      );
+    });
+
+    it("maps nullable/missing properties to null instead of throwing", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          {
+            id: "1",
+            url: null,
+            properties: {
+              Name: { type: "title", title: [{ plain_text: "Bare Listing" }] },
+              // every other property omitted entirely
+            },
+          },
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const [record] = await client.listDataSourceRecords("ds-123");
+
+      expect(record).toEqual({
+        id: "1",
+        url: null,
+        name: "Bare Listing",
+        address: null,
+        bedrooms: null,
+        bathrooms: null,
+        guests: null,
+        directBooking: null,
+        airbnbLink: null,
+        vrboLink: null,
+        googleDrivePhotosUrl: null,
+        guidebookUrl: null,
+      });
+    });
+
+    it("concatenates multi-run rich_text values rather than taking only the first run", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          row("1", {
+            Address: {
+              type: "rich_text",
+              rich_text: [
+                { plain_text: "123 Main St, " },
+                { plain_text: "Suite 4" },
+              ],
+            },
+          }),
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const [record] = await client.listDataSourceRecords("ds-123");
+
+      expect(record?.address).toBe("123 Main St, Suite 4");
+    });
+
+    it("extracts a null number value without coercing it to zero", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [row("1", { Bedrooms: { type: "number", number: null } })],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const [record] = await client.listDataSourceRecords("ds-123");
+
+      expect(record?.bedrooms).toBeNull();
+    });
+
+    it("falls back to a generic label instead of inventing a name when Name is empty", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [row("1", { Name: { type: "title", title: [] } })],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const [record] = await client.listDataSourceRecords("ds-123");
+
+      expect(record?.name).toBe("(untitled listing)");
+    });
+
+    it("ignores an entirely missing properties object instead of throwing", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [{ id: "1", url: "https://notion.so/1" }], // no `properties` key at all
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const records = await client.listDataSourceRecords("ds-123");
+
+      expect(records).toEqual([
+        {
+          id: "1",
+          url: "https://notion.so/1",
+          name: "(untitled listing)",
+          address: null,
+          bedrooms: null,
+          bathrooms: null,
+          guests: null,
+          directBooking: null,
+          airbnbLink: null,
+          vrboLink: null,
+          googleDrivePhotosUrl: null,
+          guidebookUrl: null,
+        },
+      ]);
+    });
+
+    it("ignores an unexpected/unmodeled property type on a known field instead of throwing", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          row("1", {
+            // A future Notion schema change: Address is now `select`, a
+            // type this client doesn't model — must resolve to null, not
+            // crash the whole row.
+            Address: { type: "select", select: { name: "Downtown" } },
+          }),
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const [record] = await client.listDataSourceRecords("ds-123");
+
+      expect(record?.address).toBeNull();
+    });
+
+    it("ignores a completely unrecognized property present on the row without affecting known fields", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          row("1", {
+            // A brand-new column this client has never heard of.
+            "Cleaning Notes": {
+              type: "rich_text",
+              rich_text: [{ plain_text: "Extra towels" }],
+            },
+          }),
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const [record] = await client.listDataSourceRecords("ds-123");
+
+      expect(record).not.toHaveProperty("Cleaning Notes");
+      expect(record?.name).toBe("Listing 1"); // known fields unaffected
+    });
+
+    it("falls back to null for a malformed rich_text property (type matches but the array is missing)", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          row("1", {
+            Address: { type: "rich_text" }, // missing `rich_text` array entirely
+          }),
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const [record] = await client.listDataSourceRecords("ds-123");
+
+      expect(record?.address).toBeNull();
+    });
+
+    it("falls back to null for a malformed number property (type matches but the value isn't numeric)", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [row("1", { Bedrooms: { type: "number", number: "three" } })],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const [record] = await client.listDataSourceRecords("ds-123");
+
+      expect(record?.bedrooms).toBeNull();
+    });
+
+    it("falls back to null when a known field's raw value is a primitive, not an object", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          row("1", { Address: "just a string, not a Notion property object" }),
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const [record] = await client.listDataSourceRecords("ds-123");
+
+      expect(record?.address).toBeNull();
+    });
+
+    it("falls back to null when a known field's raw value is null", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [row("1", { Address: null })],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const [record] = await client.listDataSourceRecords("ds-123");
+
+      expect(record?.address).toBeNull();
+    });
+
+    it("one malformed row does not prevent other rows in the same page from being returned", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          { id: "bad", url: null, properties: "not even an object" },
+          row("2"),
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const records = await client.listDataSourceRecords("ds-123");
+
+      expect(records).toHaveLength(2);
+      expect(records[0]).toEqual(
+        expect.objectContaining({ id: "bad", name: "(untitled listing)" }),
+      );
+      expect(records[1]).toEqual(
+        expect.objectContaining({ id: "2", name: "Listing 2" }),
+      );
+    });
+
+    it("makes only bare POST .../query requests — no create/update/delete/archive call is ever introduced", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          results: [row("1")],
+          has_more: true,
+          next_cursor: "cursor-a",
+        })
+        .mockResolvedValueOnce({
+          results: [row("2")],
+          has_more: false,
+          next_cursor: null,
+        });
+      const client = new NotionClient(credentials);
+
+      await client.listDataSourceRecords("ds-123");
+
+      for (const call of mockRequest.mock.calls) {
+        const [path, init] = call as [string, { method: string }];
+        expect(path).toBe("/data_sources/ds-123/query");
+        expect(init.method).toBe("POST");
+      }
+    });
+  });
 });
