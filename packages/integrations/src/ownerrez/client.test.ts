@@ -58,18 +58,221 @@ describe("OwnerrezClient", () => {
     expect(result.details).toBe("timeout");
   });
 
-  it("listProperties() unwraps the paginated response", async () => {
-    mockRequest.mockResolvedValueOnce({
-      items: [{ id: 1, name: "Cabin A", key: "cabin-a", active: true }],
+  describe("listProperties", () => {
+    it("fetches active=true and active=false separately and merges the results", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          items: [{ id: 1, name: "Cabin A", key: "cabin-a", active: true }],
+          next_page_url: null,
+        })
+        .mockResolvedValueOnce({
+          items: [{ id: 2, name: "Cabin B", key: "cabin-b", active: false }],
+          next_page_url: null,
+        });
+      const client = new OwnerrezClient(credentials);
+
+      const properties = await client.listProperties();
+
+      expect(mockRequest).toHaveBeenNthCalledWith(1, "/properties?active=true");
+      expect(mockRequest).toHaveBeenNthCalledWith(
+        2,
+        "/properties?active=false",
+      );
+      expect(properties).toEqual([
+        { id: 1, name: "Cabin A", key: "cabin-a", active: true },
+        { id: 2, name: "Cabin B", key: "cabin-b", active: false },
+      ]);
     });
-    const client = new OwnerrezClient(credentials);
 
-    const properties = await client.listProperties();
+    it("follows next_page_url across multiple pages for the active=true set", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          items: [{ id: 1, name: "Cabin A", key: "cabin-a", active: true }],
+          next_page_url:
+            "https://api.ownerreservations.com/v2/properties?active=true&offset=20",
+        })
+        .mockResolvedValueOnce({
+          items: [{ id: 2, name: "Cabin B", key: "cabin-b", active: true }],
+          next_page_url: null,
+        })
+        .mockResolvedValueOnce({ items: [], next_page_url: null }); // active=false
+      const client = new OwnerrezClient(credentials);
 
-    expect(mockRequest).toHaveBeenCalledWith("/properties");
-    expect(properties).toEqual([
-      { id: 1, name: "Cabin A", key: "cabin-a", active: true },
-    ]);
+      const properties = await client.listProperties();
+
+      expect(mockRequest).toHaveBeenNthCalledWith(1, "/properties?active=true");
+      expect(mockRequest).toHaveBeenNthCalledWith(
+        2,
+        "/properties?active=true&offset=20",
+      );
+      expect(mockRequest).toHaveBeenNthCalledWith(
+        3,
+        "/properties?active=false",
+      );
+      expect(properties).toEqual([
+        { id: 1, name: "Cabin A", key: "cabin-a", active: true },
+        { id: 2, name: "Cabin B", key: "cabin-b", active: true },
+      ]);
+    });
+
+    it("follows next_page_url across multiple pages for the active=false set", async () => {
+      mockRequest
+        .mockResolvedValueOnce({ items: [], next_page_url: null }) // active=true
+        .mockResolvedValueOnce({
+          items: [{ id: 3, name: "Cabin C", key: "cabin-c", active: false }],
+          next_page_url: "/v2/properties?active=false&offset=20",
+        })
+        .mockResolvedValueOnce({
+          items: [{ id: 4, name: "Cabin D", key: "cabin-d", active: false }],
+          next_page_url: null,
+        });
+      const client = new OwnerrezClient(credentials);
+
+      const properties = await client.listProperties();
+
+      expect(mockRequest).toHaveBeenNthCalledWith(
+        3,
+        "/properties?active=false&offset=20",
+      );
+      expect(properties).toEqual([
+        { id: 3, name: "Cabin C", key: "cabin-c", active: false },
+        { id: 4, name: "Cabin D", key: "cabin-d", active: false },
+      ]);
+    });
+
+    it("dedupes by id when the same property id appears in both active and inactive results", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          items: [{ id: 1, name: "Cabin A", key: "cabin-a", active: true }],
+          next_page_url: null,
+        })
+        .mockResolvedValueOnce({
+          items: [{ id: 1, name: "Cabin A", key: "cabin-a", active: false }],
+          next_page_url: null,
+        });
+      const client = new OwnerrezClient(credentials);
+
+      const properties = await client.listProperties();
+
+      expect(properties).toHaveLength(1);
+    });
+
+    it("resolves a root-relative next_page_url against OwnerRez's own host", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          items: [{ id: 1, name: "Cabin A", key: "cabin-a", active: true }],
+          next_page_url: "/v2/properties?active=true&offset=20",
+        })
+        .mockResolvedValueOnce({ items: [], next_page_url: null })
+        .mockResolvedValueOnce({ items: [], next_page_url: null }); // active=false
+      const client = new OwnerrezClient(credentials);
+
+      await expect(client.listProperties()).resolves.toBeDefined();
+      expect(mockRequest).toHaveBeenNthCalledWith(
+        2,
+        "/properties?active=true&offset=20",
+      );
+    });
+
+    it("resolves a valid absolute OwnerRez next_page_url", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          items: [{ id: 1, name: "Cabin A", key: "cabin-a", active: true }],
+          next_page_url:
+            "https://api.ownerreservations.com/v2/properties?active=true&offset=20",
+        })
+        .mockResolvedValueOnce({ items: [], next_page_url: null })
+        .mockResolvedValueOnce({ items: [], next_page_url: null }); // active=false
+      const client = new OwnerrezClient(credentials);
+
+      await expect(client.listProperties()).resolves.toBeDefined();
+      expect(mockRequest).toHaveBeenNthCalledWith(
+        2,
+        "/properties?active=true&offset=20",
+      );
+    });
+
+    it("rejects a next_page_url pointing at a foreign host", async () => {
+      mockRequest.mockResolvedValueOnce({
+        items: [{ id: 1, name: "Cabin A", key: "cabin-a", active: true }],
+        next_page_url: "https://evil.example.com/v2/properties?offset=20",
+      });
+      const client = new OwnerrezClient(credentials);
+
+      await expect(client.listProperties()).rejects.toThrow(/unexpected host/);
+    });
+
+    it("rejects a next_page_url pointing outside the expected endpoint path", async () => {
+      mockRequest.mockResolvedValueOnce({
+        items: [{ id: 1, name: "Cabin A", key: "cabin-a", active: true }],
+        next_page_url:
+          "https://api.ownerreservations.com/v2/bookings?offset=20",
+      });
+      const client = new OwnerrezClient(credentials);
+
+      await expect(client.listProperties()).rejects.toThrow(/unexpected path/);
+    });
+
+    it("rejects a repeated pagination URL instead of looping forever", async () => {
+      const repeatingUrl =
+        "https://api.ownerreservations.com/v2/properties?active=true&offset=20";
+      mockRequest
+        .mockResolvedValueOnce({
+          items: [{ id: 1, name: "Cabin A", key: "cabin-a", active: true }],
+          next_page_url: repeatingUrl,
+        })
+        .mockResolvedValueOnce({
+          items: [{ id: 2, name: "Cabin B", key: "cabin-b", active: true }],
+          next_page_url: repeatingUrl, // same URL again — a well-behaved API never does this
+        });
+      const client = new OwnerrezClient(credentials);
+
+      await expect(client.listProperties()).rejects.toThrow(
+        /repeated pagination URL/,
+      );
+    });
+
+    it("enforces a hard maximum page count instead of looping forever on ever-changing URLs", async () => {
+      let offset = 0;
+      mockRequest.mockImplementation(async () => {
+        offset += 20;
+        return {
+          items: [
+            {
+              id: offset,
+              name: `Cabin ${offset}`,
+              key: `cabin-${offset}`,
+              active: true,
+            },
+          ],
+          next_page_url: `https://api.ownerreservations.com/v2/properties?active=true&offset=${offset}`,
+        };
+      });
+      const client = new OwnerrezClient(credentials);
+
+      await expect(client.listProperties()).rejects.toThrow(
+        /exceeded the maximum of 50 pages/,
+      );
+    });
+
+    it("introduces no mutation/write calls — every request is a bare GET with no init argument", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          items: [{ id: 1, name: "Cabin A", key: "cabin-a", active: true }],
+          next_page_url: null,
+        })
+        .mockResolvedValueOnce({
+          items: [{ id: 2, name: "Cabin B", key: "cabin-b", active: false }],
+          next_page_url: null,
+        });
+      const client = new OwnerrezClient(credentials);
+
+      await client.listProperties();
+
+      for (const call of mockRequest.mock.calls) {
+        expect(call).toHaveLength(1);
+      }
+    });
   });
 
   describe("listBookings", () => {
@@ -124,6 +327,38 @@ describe("OwnerrezClient", () => {
 
       expect(mockRequest).toHaveBeenCalledTimes(1);
       expect(mockRequest.mock.calls[0]).toHaveLength(1);
+    });
+
+    it("follows next_page_url across multiple pages, accumulating bookings from every page", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          items: [{ id: 1 }],
+          next_page_url:
+            "https://api.ownerreservations.com/v2/bookings?since_utc=2026-01-01T00%3A00%3A00Z&offset=20",
+        })
+        .mockResolvedValueOnce({
+          items: [{ id: 2 }],
+          next_page_url: null,
+        });
+      const client = new OwnerrezClient(credentials);
+
+      const bookings = await client.listBookings({
+        sinceUtc: "2026-01-01T00:00:00Z",
+      });
+
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+      expect(bookings).toEqual([{ id: 1 }, { id: 2 }]);
+    });
+
+    it("rejects a bookings next_page_url pointing outside /v2/bookings", async () => {
+      mockRequest.mockResolvedValueOnce({
+        items: [{ id: 1 }],
+        next_page_url:
+          "https://api.ownerreservations.com/v2/properties?offset=20",
+      });
+      const client = new OwnerrezClient(credentials);
+
+      await expect(client.listBookings()).rejects.toThrow(/unexpected path/);
     });
   });
 

@@ -18,7 +18,57 @@ import type {
 
 export type { OwnerrezBooking, OwnerrezProperty } from "./types";
 
-const BASE_URL = "https://api.ownerreservations.com/v2";
+const API_ORIGIN = "https://api.ownerreservations.com";
+const API_BASE_PATH = "/v2";
+const BASE_URL = `${API_ORIGIN}${API_BASE_PATH}`;
+const PROPERTIES_PATH_PREFIX = `${API_BASE_PATH}/properties`;
+const BOOKINGS_PATH_PREFIX = `${API_BASE_PATH}/bookings`;
+
+// Hard cap independent of cycle detection below — belt-and-suspenders, not
+// a substitute for it. OwnerRez's real portfolio pages at 20 items/page
+// (confirmed live 2026-08-26); 50 pages is generously above any realistic
+// property or 90-day-booking volume.
+const MAX_PAGINATION_PAGES = 50;
+
+/**
+ * Validates and normalizes a `next_page_url` OwnerRez returned in a page
+ * response into a path safe to pass to this client's own `HttpClient`
+ * (which always prepends `BASE_URL` itself) — never fetches an arbitrary
+ * URL a response happens to contain. `next_page_url` is resolved against
+ * `API_ORIGIN` so it works whether OwnerRez sends a full absolute URL or a
+ * root-relative path; either way, the result must land back on OwnerRez's
+ * own host and on the same endpoint family it was paginating (properties
+ * pagination must stay under /v2/properties, bookings under /v2/bookings).
+ * Anything else — a different host, a path outside the expected endpoint,
+ * or an unparseable string — is rejected outright.
+ */
+function resolvePaginationPath(
+  nextPageUrl: string,
+  expectedPathPrefix: string,
+): string {
+  let url: URL;
+  try {
+    url = new URL(nextPageUrl, API_ORIGIN);
+  } catch {
+    throw new Error(
+      `OwnerRez returned a malformed pagination URL: "${nextPageUrl}"`,
+    );
+  }
+
+  if (url.origin !== API_ORIGIN) {
+    throw new Error(
+      `Refusing to follow OwnerRez pagination URL with unexpected host: "${url.origin}"`,
+    );
+  }
+
+  if (!url.pathname.startsWith(expectedPathPrefix)) {
+    throw new Error(
+      `Refusing to follow OwnerRez pagination URL with unexpected path: "${url.pathname}"`,
+    );
+  }
+
+  return `${url.pathname.slice(API_BASE_PATH.length)}${url.search}`;
+}
 
 /**
  * OwnerRez's own API requires `since_utc` or `property_ids` on GET
@@ -121,20 +171,82 @@ export class OwnerrezClient
     }
   }
 
+  /**
+   * Follows every page of a paginated OwnerRez list endpoint, validating
+   * each `next_page_url` via resolvePaginationPath() before following it,
+   * and accumulating `items` across all pages. Two independent safeguards
+   * against a runaway loop: a hard page-count cap, and rejection of any
+   * pagination URL already seen in this same call (a well-behaved API
+   * should never repeat one).
+   */
+  private async fetchAllPages<T>(
+    initialPath: string,
+    expectedPathPrefix: string,
+  ): Promise<T[]> {
+    const items: T[] = [];
+    const seenPaths = new Set<string>();
+    let path: string | null = initialPath;
+    let pageCount = 0;
+
+    while (path !== null) {
+      if (pageCount >= MAX_PAGINATION_PAGES) {
+        throw new Error(
+          `OwnerRez pagination for "${expectedPathPrefix}" exceeded the maximum of ${MAX_PAGINATION_PAGES} pages — refusing to continue.`,
+        );
+      }
+      if (seenPaths.has(path)) {
+        throw new Error(
+          `OwnerRez returned a repeated pagination URL for "${expectedPathPrefix}" — refusing to loop.`,
+        );
+      }
+      seenPaths.add(path);
+      pageCount++;
+
+      const page: OwnerrezPage<T> =
+        await this.http.request<OwnerrezPage<T>>(path);
+      items.push(...page.items);
+
+      path = page.next_page_url
+        ? resolvePaginationPath(page.next_page_url, expectedPathPrefix)
+        : null;
+    }
+
+    return items;
+  }
+
+  /**
+   * OwnerRez's `active` filter on GET /properties defaults to `true` when
+   * omitted (confirmed via OwnerRez's live OpenAPI spec) — a bare call
+   * silently excludes every inactive/disabled property. Fetches both
+   * states explicitly and merges by `id` (deduped defensively, though the
+   * two sets should never overlap) so the full portfolio — active and
+   * inactive — is returned, each state fully paginated.
+   */
   async listProperties(): Promise<OwnerrezProperty[]> {
-    const page =
-      await this.http.request<OwnerrezPage<OwnerrezProperty>>("/properties");
-    return page.items;
+    const active = await this.fetchAllPages<OwnerrezProperty>(
+      "/properties?active=true",
+      PROPERTIES_PATH_PREFIX,
+    );
+    const inactive = await this.fetchAllPages<OwnerrezProperty>(
+      "/properties?active=false",
+      PROPERTIES_PATH_PREFIX,
+    );
+
+    const byId = new Map<number, OwnerrezProperty>();
+    for (const property of [...active, ...inactive]) {
+      byId.set(property.id, property);
+    }
+    return [...byId.values()];
   }
 
   async listBookings(params?: {
     sinceUtc?: string;
   }): Promise<OwnerrezBooking[]> {
     const sinceUtc = params?.sinceUtc ?? defaultSinceUtc();
-    const page = await this.http.request<OwnerrezPage<OwnerrezBooking>>(
+    return this.fetchAllPages<OwnerrezBooking>(
       `/bookings?since_utc=${encodeURIComponent(sinceUtc)}`,
+      BOOKINGS_PATH_PREFIX,
     );
-    return page.items;
   }
 
   async getGuest(guestId: number): Promise<OwnerrezGuest> {

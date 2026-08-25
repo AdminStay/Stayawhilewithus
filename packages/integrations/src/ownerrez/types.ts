@@ -46,5 +46,18 @@ export interface OwnerrezGuest {
 
 export interface OwnerrezPage<T> {
   items: T[];
-  next_page?: string | null;
+  // Confirmed 2026-08-26 against OwnerRez's live OpenAPI spec and real
+  // Production responses: the real field is `next_page_url`, not `next_page`
+  // (the previous name here). Under the old name, pagination could never
+  // actually be followed — the real field was silently ignored on every
+  // call. A null value means there are no more pages.
+  next_page_url?: string | null;
+  // Present on /properties responses (PageableListOfPropertyViewModel):
+  // total records in the FULL collection, not just this page. Not present
+  // on /bookings responses.
+  count?: number;
+  // Server-controlled page size — OwnerRez does not document a request
+  // param to change this on either /properties or /bookings.
+  limit?: number;
+  offset?: number;
 }
