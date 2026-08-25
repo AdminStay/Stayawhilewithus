@@ -19,6 +19,11 @@ export interface OwnerrezProperty {
   // property). Matches OwnerRez's own `active` query filter on this same
   // endpoint and its `active` field on the sibling `listing_sites` resource.
   active: boolean;
+  // A second stable matching key, confirmed present on real /properties
+  // list responses. Used only for read-only match-report bucketing
+  // (property_ids -> StayWhile internalCode) — never for a name-based
+  // guess, and never written back to OwnerRez.
+  internal_code?: string;
 }
 
 export interface OwnerrezBooking {
