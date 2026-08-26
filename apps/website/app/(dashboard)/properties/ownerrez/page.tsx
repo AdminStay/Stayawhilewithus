@@ -1,31 +1,37 @@
 import { EmptyState, PageHeader } from "@stayw/ui";
 import { PlugZap } from "lucide-react";
 
+import { OwnerRezConfirmLinkPanel } from "@/domains/properties/components/OwnerRezConfirmLinkPanel";
 import { OwnerRezMatchReportPreview } from "@/domains/properties/components/OwnerRezMatchReportPreview";
 import { matchOwnerRezProperties } from "@/domains/properties/services/ownerrez-match-report.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
 /**
- * Read-only Production preview of the OwnerRez <-> StayWhile property match
- * report. Calls only matchOwnerRezProperties() (a read-only function — see
- * ownerrez-match-report.service.ts) and renders only
- * OwnerRezMatchReportPreview, a display-only component. There is no
- * field-change preview, no confirm/create/apply UI, and no server action
- * reachable from this page — that capability is a separate, not-yet-
- * approved phase.
+ * Live OwnerRez <-> StayWhile property match report, plus Phase B's
+ * one-at-a-time approved-link confirmation panel. Calls only
+ * matchOwnerRezProperties() (read-only — see ownerrez-match-report.service.ts)
+ * once, and passes the same result to both sections below.
+ * OwnerRezMatchReportPreview remains exactly the read-only, display-only
+ * component it always was — unchanged by Phase B. The only write affordance
+ * on this page lives in OwnerRezConfirmLinkPanel, which renders a Confirm
+ * control solely for the closed, human-approved set in
+ * APPROVED_OWNERREZ_LINKS.
  */
 export default async function OwnerRezMatchReportPage() {
   const actor = await getCurrentUser();
   const result = await matchOwnerRezProperties(actor);
 
   return (
-    <div>
+    <div className="space-y-10">
       <PageHeader
-        title="OwnerRez Match Report — Read-Only Preview"
-        subtitle="Live, read-only match report against OwnerRez's real property list. Nothing on this page links, creates, or overwrites anything."
+        title="OwnerRez Match Report"
+        subtitle="Live match report against OwnerRez's real property list, plus one-at-a-time confirmation for the properties a human has already approved for linking."
       />
       {result.configured ? (
-        <OwnerRezMatchReportPreview report={result.report} />
+        <>
+          <OwnerRezConfirmLinkPanel report={result.report} />
+          <OwnerRezMatchReportPreview report={result.report} />
+        </>
       ) : (
         <EmptyState
           icon={PlugZap}

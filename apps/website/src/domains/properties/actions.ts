@@ -2,11 +2,13 @@
 
 import { revalidatePath } from "next/cache";
 
+import { confirmOwnerRezLinkSchema } from "./schemas/ownerrez-link.schema";
 import {
   createPropertySchema,
   updatePropertyOccupancySchema,
   updatePropertyStatusSchema,
 } from "./schemas/properties.schema";
+import { confirmOwnerRezLink } from "./services/ownerrez-link.service";
 import {
   createProperty,
   deleteProperty,
@@ -68,4 +70,25 @@ export async function deletePropertyAction(formData: FormData) {
 
   await deleteProperty(actor, propertyId);
   revalidatePath("/properties");
+}
+
+/**
+ * One confirmation per submission — the form this binds to
+ * (OwnerRezConfirmLinkPanel) never submits more than one
+ * propertyId/ownerRezPropertyId pair per request, and this action has no
+ * array/bulk input shape to accept one even if a request tried. All real
+ * validation (approval, current link state, exact-id match) happens inside
+ * confirmOwnerRezLink() — this action is just the form-data-to-typed-input
+ * boundary, same as every other action in this file.
+ */
+export async function confirmOwnerRezLinkAction(formData: FormData) {
+  const actor = await getCurrentUser();
+
+  const input = confirmOwnerRezLinkSchema.parse({
+    propertyId: formData.get("propertyId"),
+    ownerRezPropertyId: formData.get("ownerRezPropertyId"),
+  });
+
+  await confirmOwnerRezLink(actor, input);
+  revalidatePath("/properties/ownerrez");
 }
