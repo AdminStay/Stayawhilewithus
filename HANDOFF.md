@@ -28,7 +28,46 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 Continuation Checkpoint — 2026-08-21 (READ THIS FIRST)
+# 🔖 CURRENT STATE — 2026-08-26 (READ THIS FIRST — supersedes the 2026-08-24 pivot below)
+
+**Authoritative current state as of `## Increment 58` (2026-08-26), the latest increment in this file.** The "PRIORITY PIVOT — 2026-08-24" section immediately below is kept for history — several of the items it lists as pending are now complete. Read this summary first; where it conflicts with anything below (including that section), this summary governs. Full detail for every line below is in `## Increment 58` at the bottom of this file.
+
+1. **OwnerRez pagination / full portfolio retrieval** — ✅ **COMPLETE, Production-verified.** Real portfolio is 58 total properties (38 active, 20 inactive); pagination and the undocumented `active=true` default are both fixed. See Increments 54/55.
+2. **Notion read / listing / search** — ✅ **COMPLETE, Production-verified.** 35 real "View of Listings" records load with name/keyword/region search, strictly read-only. See Increments 53/56/57.
+3. **OwnerRez Phase A — read-only match report** — ✅ **COMPLETE, Production-verified.** 0 properties linked; no Confirm/Create/Apply control exists anywhere in the deployed code. See Increment 58.
+4. **Six OwnerRez candidate mappings** (Aqua Palm, Bahamas, Bonjour AMI, Island Tides, Ocean Pearl, Sandy Nudes) — **awaiting explicit human confirmation, one at a time.** Nothing linked yet. See Increment 58.
+5. **Miramar Bliss** — **unresolved, genuinely ambiguous** (3 OwnerRez candidates, none preferred or defaulted). Requires stronger evidence than name similarity before any decision. See Increment 58.
+6. **Phase B — one-at-a-time "Confirm Link" write capability** — **not yet enabled.** To be designed/built inside the isolated `ownerrez-property-sync` worktree only, after the six candidates above are explicitly approved.
+7. **Old write-capable `ownerrez-property-sync` worktree** (commit `46c4d6e`) — **remains isolated**: not merged to `main`, not deployed, not activated.
+8. **n8n, Nest, August, Cielo** — untouched, remain later priorities behind everything above.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-26" above] PRIORITY PIVOT — 2026-08-24
+
+**New active priority, set 2026-08-24 by the client, via the user.** OwnerRez + Notion must become genuinely production-verified BEFORE any further Nest/August/Cielo work resumes. This is a business-driven reordering, not a technical blocker on the device work — the device-control pivot below (2026-08-21) is paused, not abandoned.
+
+**Priority order from now on (expanded 2026-08-24, see `## Increment 39`'s "New standing priority order" for the full statement):**
+
+1. **OwnerRez property source of truth** — admin-review matching page + property-sync service. **Built and committed in the isolated `worktree-ownerrez-property-sync` worktree (commit `46c4d6e`) — not merged to `main`, not deployed, no real Production match run yet.** See Increments 40/41.
+2. **OwnerRez reservations** — Guest/Reservation sync
+3. **Notion read/search** — query-capable search method + service + dashboard UI
+4. **Notion change/deletion notifications** — polling-based diff first; webhooks only after Notion API capability is confirmed
+5. **Nest** → finish verification/control
+6. **August** → finish verification/control/PIN capabilities
+7. **Cielo** → finish telemetry and control verification
+
+Full audit findings for all of the above are in `## Increment 39` below. Read-only findings only — nothing has been implemented yet for OwnerRez or Notion beyond what already existed before this pivot.
+
+**Device-work pendings, preserved exactly, resume in this order after OwnerRez+Notion reach production-verified status:**
+
+- **Nest**: Production reads working; 33 devices discovered, all correctly Unmapped except one. **Aqua Palm - Living room** is the only device mapped/enabled (deliberate single test), showing real telemetry. **Unresolved**: a real, reproduced-in-a-fresh-incognito-session permission discrepancy — RBAC data says `ryskris0@gmail.com` has effective `thermostats:manage = YES`, but the Production UI still renders "View only — no permission to control this device" for Aqua Palm. A minimal, server-log-only diagnostic (commit `da8ac61`) is deployed and awaiting a fresh test + Vercel Function Log check — see `## Increment 38`'s "OPEN ISSUE" for the full trace and exact log-reading instructions. **No physical Nest command has ever been sent.** Do not enable any of the other 32 devices.
+- **August**: Read-only monitoring is live and real (7 `SmartDevice` rows from genuine API syncs). Full capability audit complete this session (`## Increment 39`) — no lock/unlock/PIN code exists anywhere in the codebase (not stubbed, never written); PIN create/edit/delete isn't available at all in the reference library (`yalexs`) this integration is built from. The "44 locks" figure from Increment 36 was never persisted — confirmed to have come from a zero-write diagnostic script's terminal output; 37 of 44 are silently discarded on every sync because `AUGUST_PROPERTY_MAP` only lists 4 properties. No `ProviderDevice`-based discovery exists for August (unlike Nest's Phase A-D). Do not attempt any lock/unlock/PIN work until this gap is deliberately closed.
+- **Cielo**: 3 real devices visible in Production (Bahamas Living Room, Island Tides Man Cave, Sandy Nudes Garage), but temperature/mode/humidity are blank for all three — `CieloClient.listDevices()` only ever returns name/online status, this is a known real gap, not yet investigated. Control is architecturally blocked regardless (WebSocket-only, no REST path, incompatible with this serverless app) — see `## Increment 37`/checkpoint below for the original finding.
+
+---
+
+# 🔖 Continuation Checkpoint — 2026-08-21
 
 **Read this section before anything else in this file.** It is a self-contained snapshot of the current project state so a new session doesn't need to read all 37 increments below to continue safely. Full historical detail for anything summarized here is in `## Increment 33` through `## Increment 37`.
 
@@ -1051,7 +1090,7 @@ Started 2026-08-06 (same day as the architectural refinement, in later sessions)
 - **Reservations** — ✅ done (2026-08-06). List + create, 4 RBAC tests, `/reservations` route. Manual bookings use `source=DIRECT` + generated UUID `externalReservationId`; writes the `ReservationGuest` join row in the same transaction.
 - **Tasks** — ✅ done (2026-08-06, later session). List + create + complete, 6 RBAC tests, `/tasks` route + nav link. Schema/service/components (`createTaskSchema`, `listTasks`/`createTask`/`completeTask`, `TaskList`/`CreateTaskForm`) already existed from an earlier session; this session added `actions.ts`, the route, the nav link, and the tests. `completeTask` sets `status=DONE` + `completedAt`. Full monorepo `lint typecheck test build` verified green (25/25 tasks) after landing.
 - **Cleaning schedules** — ✅ done (2026-08-06, same later session). List + create + complete, 6 RBAC tests, `/cleaning` route + nav link. `CleaningSchedule.taskId` is a required unique FK, so `createCleaningSchedule` creates the backing `Task` (type `CLEANING`) and the `CleaningSchedule` row together in one `prisma.$transaction`; `completeCleaningSchedule` updates both rows in one transaction too, mirroring the Reservations `Reservation`+`ReservationGuest` pattern. `CANCELLED`/`MISSED` statuses exist on the model but aren't wired to any UI action yet. Full monorepo `lint typecheck test build` verified green (25/25 tasks) after landing.
-- None of Guests/Reservations/Tasks wire a `triggerWorkflow(...)` call yet — no n8n workflow exists for `guest.created`/`task.created`/etc. (n8n instance confirmed empty 2026-08-06; n8n MCP connection itself is also currently unavailable, see above). Add workflow triggers once real n8n workflows exist, to avoid spurious `WorkflowExecution` FAILED rows and admin-notification noise.
+- None of Guests/Reservations/Tasks wire a `triggerWorkflow(...)` call yet — no n8n workflow exists for `guest.created`/`task.created`/etc. (n8n instance confirmed empty 2026-08-06; as of 2026-08-24 it still holds only the one inactive default workflow — see Increment 40). Add workflow triggers once real n8n workflows exist, to avoid spurious `WorkflowExecution` FAILED rows and admin-notification noise.
 - As of the end of the "Tasks shipped" session, this work (Guests, Reservations, Tasks domain code; `layout.tsx` nav updates; `IMPLEMENTATION_PLAN.md`; this file) was **not yet committed to git** — still local working-tree changes. Confirm current `git status` before assuming otherwise.
 
 ## Technology & Integration Audit — ⚠️ explicitly abandoned mid-way
@@ -1589,6 +1628,228 @@ All in `packages/database/`, all syntax-checked via `node --check`, all safe by 
 
 None of these are wired into the app; none run automatically. Consider committing them as dedicated ops tooling in a future session if they keep proving useful, or deleting them once the open issue above is resolved — not decided yet.
 
+## Increment 39 — 2026-08-24: priority pivot to OwnerRez+Notion; deployed the Nest diagnostic; completed a full August capability audit; completed OwnerRez and Notion production-verification audits — all read-only, nothing implemented for OwnerRez/Notion beyond what already existed
+
+### Nest diagnostic deployed
+
+The server-log-only diagnostic designed in Increment 38 was implemented exactly as scoped (narrower than originally proposed, per explicit user direction: logs only `actorUserId`, `aquaPalmPropertyId`, `aquaPalmCanManage` — derived from the already-computed `canManageByPropertyId` map, no new permission query — and `commitSha`; never the full map). Typecheck/tests(304 passing)/build all green. Committed (`da8ac61`) and pushed to `main` after explicit approval. **Not yet acted on**: needs a fresh `/thermostats` request as `ryskris0@gmail.com` followed by a Vercel Function Logs check for the `[nest-diag]` line — see the priority-pivot banner at the top of this file for the exact resume state. A fresh-incognito re-test (before this diagnostic was deployed) already **confirmed the "View only" discrepancy is reproducible**, ruling out stale browser/router cache as the cause.
+
+### August capability audit — read-only, zero writes, zero commands, zero PIN changes
+
+Full findings, condensed (see the priority-pivot banner above for the top-line summary):
+
+- **Credentials**: `AUGUST_IDENTIFIER`/`AUGUST_INSTALL_ID`/`AUGUST_ACCESS_TOKEN`/`AUGUST_BRAND` (names only), via a one-time interactive 2FA login (`packages/integrations/src/august/scripts/login.ts`), not a static API key.
+- **Discovery/sync path**: `syncAugustDevices()` (`smart-devices.service.ts:140-250`) → `AugustClient.listLocks()` (returns everything the account has, live) → each lock's `houseId` checked against `AUGUST_PROPERTY_MAP` → no match → `skipped.push(...); continue` (line 174-177), **never written anywhere** → match → `getLockDetail()` + `prisma.smartDevice.upsert()`. `/locks/page.tsx` reads only from the DB, no live call at render time.
+- **Mapping mechanism**: hard-coded `AUGUST_PROPERTY_MAP` env var only — confirmed the sole mechanism. No `ProviderDevice`-based admin-mapping flow exists for August (that table's only writer in the whole repo is Nest's discovery script).
+- **Why 7 locks now vs. 44 previously discovered — definitive answer**: the 37 were never persisted anywhere. They were observed via the real, committed, genuinely read-only script `packages/integrations/src/august/scripts/check.ts` (zero DB import, zero write call) — its terminal output was hand-transcribed into Increment 36, never stored. `AUGUST_PROPERTY_MAP` still only lists the original 4 properties, so the sync loop silently discards the other 37 on every run. **Exact same pattern as the pre-Phase-A-D Nest "33 devices" figure** — except August never got a Phase-A-D equivalent built.
+- **Read capabilities implemented**: locked/unlocked state (only when provider confirms validity), tri-state connectivity, battery %, last-sync/last-telemetry timestamps. **Not captured anywhere**: lock model/Type/SKU — not even parsed from the raw API response.
+- **Write capabilities**: genuinely absent, not merely unused — grepped the full codebase, zero lock/unlock/PIN method exists anywhere. `AugustClient`'s own doc comment states outright: "Read-only: does not implement lock/unlock." `yale/client.ts` is a 100% stub. PIN create/edit/delete don't exist in the `yalexs` reference library at all, regardless of implementation effort.
+- **RBAC**: no dedicated `locks`/`access_codes` permission resource exists — lock read is gated by the existing `smart_devices:read` (same two roles as thermostats: `admin`, `ops_manager`). No lock-control permission key exists because no lock-control code exists to gate.
+- **Safest next single test (not yet run, awaiting approval)**: a read-only re-run of `check.ts` against the real Production August account, to confirm the current 7-lock data is still fresh — the August equivalent of what `check-nest-discovery.mjs` did for Nest.
+- **Safest lock for a first controlled write test, later**: Aqua Palm - Front Door (same property as the Nest test property; ONLINE, 99% battery, fully verified real-time connectivity signal per Increment 20's data) — not being tested now, flagged for a future explicitly-approved pass only.
+
+### OwnerRez production-verification audit — read-only, zero writes, zero live calls this pass
+
+- **Integration code**: `OwnerrezClient` (`packages/integrations/src/ownerrez/client.ts`) is real — `connect`/`listProperties`/`listBookings`/`getGuest`/`sync("INBOUND")` all genuine HTTP Basic-Auth calls to `api.ownerreservations.com/v2`. Only `receiveWebhook()` is unimplemented (undocumented payload shape). No `getProperty(id)` detail endpoint exists yet — only the list endpoint.
+- **Production credentials/authentication**: confirmed present and working — per the existing 2026-08-21 record in this file (`OWNERREZ_USERNAME`/`OWNERREZ_API_TOKEN` added to Vercel Production, a self-deleting diagnostic returned valid credentials + 20 real properties). **Not re-verified with a new live call this session** — this is a citation of prior work, not a fresh check.
+- **Real API read status**: properties — proven live in Production (above). Bookings — proven live in local dev only (19 active + 1 canceled), not re-checked in Production.
+- **Any OwnerRez data stored/synced in the DB today**: **no.** `sync("INBOUND")` deliberately only counts bookings and returns — writes nothing. `Property.ownerRezPropertyId` and `Guest.ownerRezGuestId` both exist in the schema but are grepped repo-wide as **written nowhere, read nowhere**, outside their own field definitions.
+- **Where the dashboard's current 7 real properties actually come from**: manually, through the app's own `createProperty()` action (`properties.service.ts:26`) — confirmed by elimination, since no OwnerRez call exists anywhere near property creation, and the seed script only ever creates 2 fake demo rows (`DEMO-001`/`DEMO-002`), never the real properties.
+- **What's missing for OwnerRez to become source of truth**: a property-sync service and an admin-review mapping UI — both fully designed (strict-order match: `ownerRezPropertyId` exact → `internalCode` exact → everything else reported for human review only, never auto-linked), zero code written _as of this increment_ — **superseded by Increments 40/41 below, which built the preview/apply/create split and committed it in the isolated `worktree-ownerrez-property-sync` worktree (commit `46c4d6e`); not merged to `main`, not deployed**. `OwnerrezProperty`'s type also doesn't model address/bedrooms/bathrooms/etc. yet — only `id/name/key/active`.
+- **Last known real match report** (local dev only, not re-run against Production): 2 exact matches, 1 close-not-exact, **17 of 20 real OwnerRez properties had no StayWhile counterpart at all**.
+- **Reservation sync**: only a live, ephemeral 5-item "upcoming bookings" dashboard tile (`getOwnerRezHighlights`, `integrations.service.ts:373-397`), fetched fresh every page load, never persisted to `Reservation`/`Guest`. No webhook, no polling job, no scheduled sync exists anywhere.
+- **Airbnb-alteration-notification feasibility**: genuinely unresearched at the API level — not a guess, just never investigated. `receiveWebhook()`'s payload shape is an explicitly open design question in its own code comment and README.
+- **n8n vs. direct-backend architecture**: confirmed direct-backend only, always has been — n8n has zero OwnerRez credentials (or any provider credentials) today; per this file's own n8n section, n8n "cannot run these syncs itself today without credential duplication."
+- **Safest next step (not yet run, awaiting approval)**: re-run the already-written, self-deleting `packages/integrations/scripts/ownerrez-property-inventory.ts` against Production (read-only, no writes) to produce the full field-level property dump and the real bucketed match report — this was already pending before this session and remains pending.
+
+### Notion production-verification audit — read-only, zero writes, zero live calls, zero interaction with Michelle's real workspace this pass
+
+- **Two separate Notion credentials exist — do not conflate them.** App-level `NOTION_API_KEY` (real Bearer token, `.env.example:39`, used in `integrations.service.ts:322`): proven live 2026-08-15 in **local dev only** (100+ pages/databases, 4 real database schemas retrieved) — Production presence is unconfirmed. n8n-level "Notion account" credential (`notionApi` type, owned personally by Kenny Pham per `N8N_DISCOVERY.md`): existence re-confirmed 2026-08-24 via live n8n MCP `list_credentials` (see Increment 40) — still unused by any workflow. **Metadata existence only, not live-auth-tested** — see Increment 40 for what the read-only MCP surface can and cannot prove.
+- **Workspace identity**: app-level, only recorded as "the real StayWhile workspace," no more specific name anywhere. n8n-level, explicitly Kenny's personal account per its own discovery doc.
+- **n8n workflow usage**: **the credential is completely unused** — exactly one workflow exists in the entire n8n instance, and it's n8n's own auto-generated default scaffold (inactive, an unconfigured HTTP Request node, no auth wired in). Zero real automation of any kind currently runs in n8n.
+- **App-side Notion code**: real but narrow — `packages/integrations/src/notion/client.ts` implements `validateCredentials`/`sync` (count-only, writes nothing)/`listRecentlyEdited` (titles/URLs/timestamps for the 5 most recent items only, never page content). Powers exactly one dashboard "Notion" tile, gated by the generic `integrations:read` permission (no Notion-specific RBAC resource exists).
+- **Dashboard keyword-search status**: **does not exist at all.** No query-string search method anywhere in the client — Notion's real `/search` endpoint accepts a `query` param, it's simply never used. No `search`/`knowledge` domain exists anywhere in the app. Would be built from scratch.
+- **Change/deletion-notification status**: **does not exist.** A generic `Notification` model exists in the schema (used elsewhere, zero Notion usage today) and existing webhook routes (`/api/webhooks/clerk`, `/api/webhooks/n8n`) establish a pattern a Notion route could follow — but there is no polling job, no diff logic, and no webhook receiver for Notion today. Whether Notion's real API even supports outbound webhooks for page changes has **never been confirmed against Notion's actual docs** — this file already flagged this exact gap back in the "Second client meeting" priorities section ("verify actual Notion API capability first, don't promise real-time events the API doesn't support"), and it's still unresolved.
+- **Only mechanism provably buildable today with zero new unknowns**: polling `listRecentlyEdited()` and diffing against a stored "last seen" timestamp/state. A webhook-based approach requires first confirming Notion's API actually supports it.
+- **Safest next step (not yet run, awaiting approval)**: confirm `NOTION_API_KEY` presence in Vercel Production (name-only, same pattern as the OwnerRez check) — plus ask the user to independently verify the n8n-side Notion credential is still valid via the n8n UI, since no tool here can reach it.
+
+### OwnerRez — expanded architecture detail (2026-08-24, design confirmed against real schema; "still zero code written" below is superseded by Increments 40/41 — real code now exists, committed in the isolated `worktree-ownerrez-property-sync` worktree, not merged to `main`)
+
+Confirmed by direct `schema.prisma` inspection this session (not assumed): the schema is already meaningfully prepared for this work, more than previously credited.
+
+- **`Property.ownerRezPropertyId`** (`schema.prisma:137`) and **`PropertyStatus.ONBOARDING`** (`schema.prisma:692`) already exist — the property-matching plan's "no schema migration needed for this part" claim is now verified true, not just asserted.
+- **`Guest.ownerRezGuestId`** (`schema.prisma:167`, unique nullable) already exists — ready for OwnerRez guest sync with zero migration.
+- **`Reservation.source: ReservationSource`** already includes `OWNERREZ` (`schema.prisma:705`) and `Reservation` has a **compound unique constraint on `[source, externalReservationId]`** (`schema.prisma:213`) — the schema was already deliberately built to safely ingest reservations from multiple providers without ID collisions. This was not previously highlighted as clearly as it should have been.
+- **Still needed, additive/nullable, not yet migrated**: `Property.ownerRezActive: Boolean?` and `Property.ownerRezLastSeenAt: DateTime?` (OwnerRez's active/inactive signal must stay genuinely separate from `PropertyStatus`, never auto-triggering deactivation).
+- **`OwnerrezProperty` typed client** (`packages/integrations/src/ownerrez/types.ts:12-22`) only models `id`/`name`/`key`/`active` today — needs extending to the real detail-endpoint fields (address, `bedrooms`, `bathrooms_full`/`bathrooms_half`, `max_guests`, `property_type`, `time_zone`, lat/long) once `getProperty(id)` (`GET /properties/{id}`, not yet implemented in `client.ts` — only the list endpoint exists) is built.
+- **Field-ownership policy** (already designed, see the "OwnerRez — revised field-ownership policy" section above): OwnerRez-owned/continuously-synced/null-safe-per-field vs. StayWhile-owned/never-touched-by-sync — unchanged, now cross-checked against the real schema and confirmed consistent.
+- **Reservation/Guest persistence proposal (new this session, design only)**: sync writes a `Reservation` row only for a booking whose `propertyId` maps to an **already-confirmed-linked** property (never auto-creates a property from a booking); `Guest` is upserted by `ownerRezGuestId` (create if new, null-safe update if existing); a reservation is matched/updated by the existing `[source, externalReservationId]` unique key; cancellations/date-changes update the existing row's `status`/dates, never delete.
+- **Airbnb alteration-notification feasibility**: confirmed genuinely un-researched at the API level (not "designed, not built" — literally never investigated). `receiveWebhook()` (`client.ts:149-154`) is an explicit open design question in its own code comment and the package README. Next real step is reading OwnerRez's actual webhook/API docs, not proposing an architecture yet.
+
+### Notion — clarified verification-state distinction (2026-08-24)
+
+Explicitly separating four states that were previously at risk of being conflated:
+
+- **Known existing credential/configuration**: two separate credentials — app-level `NOTION_API_KEY` (`.env.example:39`) and an n8n-level "Notion account" credential (`notionApi` type, owned personally by Kenny Pham per `N8N_DISCOVERY.md`). Not necessarily the same token.
+- **Previously verified connection (real, evidence-backed)**: app-level, proven live 2026-08-15 in **local dev only** (100+ pages/databases, 4 real DB schemas). n8n-level, only confirmed to _exist_ as a credential object (2026-08-06) — never proven to still authenticate.
+- **Still cannot be proven via n8n MCP, even now that the connection is back (2026-08-24, Increment 40)**: the n8n-level credential's _live_ validity. The MCP surface (19 read-only tools) can confirm the credential object exists and its non-secret metadata, but exposes no create/execute/test-credential tool — so no live Notion API call can be made without adding a Notion node to a workflow and running it, which is out of scope. Proving live validity still requires either the n8n web UI's built-in credential "Test" button (no workflow needed) or a check at the app level (separate credential, see above).
+- **Genuinely never verified by anyone**: `NOTION_API_KEY` presence in Vercel **Production** (2026-08-15 check was dev-only); whether the app-level and n8n-level credentials are the same integration; whether Notion's API supports outbound webhooks for page changes at all.
+- **Read-only feasibility, both requested features**: keyword search is directly buildable — Notion's real `/search` endpoint already accepts a `query` param, simply unused today, fully non-destructive. Change/deletion detection: polling `listRecentlyEdited()` and diffing against a stored "last seen" state is the only mechanism provably buildable today with zero new unknowns; a webhook approach needs Notion API capability confirmed first. Neither feature touches or could touch Michelle's actual content — both are read-only by construction.
+
+### New standing priority order (see banner at top of this file for the full statement)
+
+1. **OwnerRez property source of truth** — admin-review matching page + property-sync service (design exists, zero code written _at the time this list was written_ — see Increments 40/41: built and committed in the isolated worktree, commit `46c4d6e`, not merged/deployed)
+2. **OwnerRez reservations** — Guest/Reservation sync per the persistence proposal above
+3. **Notion read/search** — query-capable search method + service + dashboard UI
+4. **Notion change/deletion notifications** — polling-based diff first; webhooks only after Notion API capability is separately confirmed
+5. **Nest** → finish verification/control
+6. **August** → finish verification/control/PIN capabilities
+7. **Cielo** → finish telemetry and control verification
+
+Nothing has been implemented for OwnerRez or Notion this session — audits and architecture clarification only. No Production writes, no OwnerRez writes, no Notion writes (nothing in Michelle's real workspace was touched in any way), no bulk imports, no migrations, no deployment beyond the already-approved-and-pushed Nest diagnostic commit `da8ac61`, no Nest/August/Cielo commands, no RBAC changes, no credential values read or printed anywhere.
+
+## Increment 40 — 2026-08-24 (fresh session): n8n MCP connection re-confirmed working; Notion read-only verification via n8n MCP
+
+### n8n MCP connection — corrected finding
+
+The note above and elsewhere in this file stating "no n8n tool is available from inside Claude Code in this environment" is **outdated as of this fresh session**. `claude mcp list`-equivalent tool availability was re-checked: **19 n8n MCP tools are loaded and callable** (`explore_node_resources`, `get_node_types`, `get_workflow_best_practices`, `get_workflow_details`, `get_workflow_execution`, `get_workflow_history`, `get_workflow_sdk_reference`, `get_workflow_version`, `list_credentials`, `list_n8n_connect_services`, `list_workflow_tags`, `search_data_tables`, `search_folders`, `search_nodes`, `search_projects`, `search_workflow_executions`, `search_workflows`, `validate_node_config`, `validate_workflow`). None of the 19 create, update, delete, activate, publish, or execute anything — the surface is read-only/inspection-only by construction. Per the finding at line ~1100, MCP availability is session-specific and must be re-checked each session; it should not be assumed connected or disconnected based on a prior entry in this file.
+
+Used three of the read-only tools (`search_projects`, `list_credentials`, `search_workflows`) to re-verify the StayWhile n8n instance against `N8N_DISCOVERY.md`'s 2026-08-06 baseline. Result: **exact match, nothing changed**:
+
+- **1 project**: `Kenny Pham <admin@stayawhilewithus.com>` (personal) — no other projects, no team projects, no cross-client data of any kind visible.
+- **1 workflow**: `"My workflow"` (id `p9AsCYI5THw1oVLX`), inactive, 0 triggers, 2 nodes (`Manual Trigger` → unconfigured `HTTP Request`) — confirmed via `get_workflow_details`, no Notion (or any other service) node present.
+- **3 credentials**: `Notion account` (`notionApi`), `Anthropic account` (`anthropicApi`), `Header Auth account` (`httpHeaderAuth`) — same three as the 2026-08-06 baseline, no new ones added.
+
+No n8n modifications were made this increment — every call above is a read/search/get, never a create/update/delete/execute.
+
+### Notion read-only verification via n8n MCP (Michelle's requested scope: keyword search of authorized Notion content + alter/delete notifications; hard rule: never modify Notion)
+
+- **Credential existence**: confirmed. `list_credentials` returns `Notion account` (id `4VXm2JUDYsHUKKP6`, type `notionApi`, home project = Kenny Pham personal). Only non-secret metadata is ever returned by this tool (name/type/id/project/scopes) — no secret value was or can be read through it.
+- **Workflow usage**: confirmed **zero**. The only workflow in the instance (`My workflow`) has exactly 2 nodes, neither of which is a Notion node — verified via `get_workflow_details` on its full node list, not inferred. The Notion credential is not wired into any workflow anywhere in this n8n instance.
+- **Can the current MCP toolset validate the Notion connection itself (no workflow created/edited)?** **No.** All 19 tools were reviewed: `validate_node_config` and `validate_workflow` are schema/shape validators only (they check that node parameters or SDK code are well-formed) — neither makes a live call to any external API, and neither can test a credential's live authentication. There is no `test_credential`, `execute_workflow`, or equivalent tool exposed. `search_nodes` confirms the **Notion node type itself** is available in this n8n instance's catalog (`n8n-nodes-base.notion` — supports `page.search`/`page.getMarkdown` operations, which map directly to Michelle's keyword-search ask; `n8n-nodes-base.notionTrigger` exists for the alteration-notification ask) — but this only proves the node type is installed, not that the credential authenticates against Michelle's real workspace.
+- **What can be safely confirmed without writing anything**: credential object exists and is unused; no workflow currently touches Notion; the Notion action node and Notion trigger node both exist in this instance's catalog, so both of Michelle's requested capabilities are structurally buildable here in principle. Nothing about real page/database content, real workspace identity, or live authentication can be confirmed through n8n MCP without running a node against the live API.
+- **"Credential exists" vs. "real Notion API read proven" — explicitly distinguished**: existence is proven (this increment, live `list_credentials` call). A real read is **not proven** for the n8n-level credential — the only real, evidence-backed live Notion read on record anywhere is the **app-level** `NOTION_API_KEY` check from 2026-08-15, and that was **local dev only**, a separate credential, and has not been re-run this session.
+- **Smallest safe next step to prove a live n8n-side Notion read, if wanted**: use the n8n web UI's built-in credential "Test" button on the `Notion account` credential. This is a native n8n feature that pings the real Notion API to confirm the token authenticates — it does **not** require creating, editing, activating, or executing any workflow, and makes no write call to Notion. This has to be done by the user directly in the n8n UI; no MCP tool here can trigger it. (Separately, re-running the app-level `NOTION_API_KEY` check against Production — already queued from Increment 39 — would prove the _other_ credential live, but doesn't speak to the n8n-side one.)
+
+No Notion content was read, searched, or modified. No workflow was created, edited, activated, published, deleted, or executed. No credential was changed. Stopped for approval per explicit instruction before any further Notion or OwnerRez action.
+
+### Notion production-verification audit — completed, full report (still this increment, read-only, zero writes)
+
+Cross-checked the n8n-side findings above against the app-level code directly (`packages/integrations/src/notion/client.ts`, its `README.md`, `integrations.service.ts`, `dashboard.service.ts`) to produce one consolidated report, explicitly separating the categories Michelle/the user asked not to conflate:
+
+1. **Credential exists**: Yes, two separate credentials, both confirmed to exist, neither the same object. n8n-level `Notion account` (`notionApi`, id `4VXm2JUDYsHUKKP6`) — confirmed live this session via `list_credentials`. App-level `NOTION_API_KEY` (`.env.example:39`) — confirmed by name in code, not re-read this session.
+2. **Credential appears valid**: n8n-level — unknowable from the MCP surface; `list_credentials` returns no validity/status field at all, only name/type/id/project/scopes, so "appears valid" cannot be assessed for this credential beyond "well-formed object of the right type in the right project." App-level — the closest real signal on record: `NotionClient.validateCredentials()` (a genuine `GET /users/me` call) succeeded on 2026-08-15, but that was **local dev only**; Production presence/validity of `NOTION_API_KEY` is unconfirmed.
+3. **Real Notion API read proven or not proven**: **Not proven** for the n8n-level credential — no tool in the 19-tool read-only MCP surface can make a live external call (confirmed: `validate_node_config`/`validate_workflow` are schema-only; no `test_credential`/`execute_workflow` tool exists). **Proven, but only for the separate app-level credential, and only in local dev**: `validateCredentials()` + `listRecentlyEdited()` both succeeded against the real StayWhile workspace on 2026-08-15 (100+ pages/databases seen, 4 real database schemas retrieved).
+4. **What workspace/content access is actually available**: Whatever the app-level `NOTION_API_KEY` integration token can see via Notion's `/search` endpoint — proven as "100+ pages/databases" in dev on 2026-08-15, not re-quantified since. The n8n-level credential's access scope is completely unverified — its live validity has never been tested at all (not even in dev), so nothing can be said about what it can see.
+5. **Does any existing n8n workflow use Notion?** **No.** The instance's only workflow (`My workflow`, id `p9AsCYI5THw1oVLX`) has exactly 2 nodes — `Manual Trigger` → `HTTP Request` — confirmed via `get_workflow_details`'s full node list. Zero Notion nodes anywhere in this n8n instance.
+6. **What is already built in the StayWhile app**:
+   - `NotionClient` (`packages/integrations/src/notion/client.ts`) is genuinely read-only **by construction**, not just by convention — every method (`connect`/`healthCheck`/`validateCredentials`/`listRecentlyEdited`) issues only `GET`-style reads against `/users/me` or `/search`; `sync()` accepts only `INBOUND` and throws on `OUTBOUND`; there is no `PATCH`/create/archive/append call anywhere in the file. This matches Michelle's "never modify Notion" rule at the code level, not just as an unenforced intention.
+   - Wired into exactly one place: `getNotionHighlights()` (`integrations.service.ts:317-336`), gated by the generic `integrations:read` permission (no Notion-specific RBAC resource exists), which powers one dashboard tile (`DashboardSummary.tsx`) showing the 5 most recently edited pages/titles/URLs. `configured: false` (env var unset) is handled as a normal state, not an error.
+   - The README (`packages/integrations/src/notion/README.md`) already encodes a hard client-directed safety rule (2026-08-15): Notion is read-only source of truth, no write/patch/archive/rename path may ever be added, any Kenny/Jenny-vs-StayWhile data conflict must be reported to a human, never auto-resolved — and any property-mapping must be explicit/human-confirmed, never inferred from name/address similarity.
+7. **What is still missing for Michelle's keyword search**: No query-string search exists anywhere in the app — `listRecentlyEdited()` calls `/search` with only `page_size`/`sort`, never a `query` param, and no dashboard UI, route, or service method accepts a search term today. Notion's real `/search` endpoint does accept a `query` param (confirmed in the client's own request shape), so this is additive — a new service method plus a small UI — not a redesign, and stays read-only by construction if built the same way as `listRecentlyEdited()`.
+8. **What is still missing for change/deletion notifications**: No polling job, no diff/last-seen-state storage, and no webhook receiver exist for Notion anywhere in the codebase today (the generic `Notification` model exists but has zero Notion usage). Whether Notion's real API even supports outbound webhooks for page changes/deletions has **never been confirmed against Notion's actual documentation** — this is a standing open question carried over from Increment 39, still unresolved. The only mechanism provably buildable today with zero new unknowns is polling `listRecentlyEdited()` (or a new query-capable variant) on a schedule and diffing against a stored last-seen timestamp/state per page.
+
+**Smallest safe next step to prove the n8n-side credential is actually live, without writing anything**: use the n8n web UI's built-in credential **"Test"** button on `Notion account`. It performs a real read-only ping against Notion's API to confirm the token authenticates, requires no workflow to be created, edited, activated, or executed, and makes no write call. No MCP tool available here can trigger this — it has to be done by the user directly in the n8n UI. (A secondary, independent option: re-run the already-queued, already-approved-in-design check of `NOTION_API_KEY` presence/validity in Vercel Production — proves the _other_, app-level credential, not this one.)
+
+Nothing in Michelle's real Notion workspace was read, searched, or modified this increment. No workflow created/edited/activated/executed/deleted. No credential changed. `.claude/worktrees/ownerrez-property-sync` was noted to exist (via a repo-wide grep) but not entered, read further, or modified. Stopped here for approval, per explicit instruction, before any Notion build work, the n8n UI credential test, or the OwnerRez/Nest/August/Cielo queue.
+
+### Notion audit — consolidated final findings (this increment, read-only, zero writes)
+
+**Path A — n8n → Notion:**
+
+- Credential exists (`Notion account`, `notionApi`, id `4VXm2JUDYsHUKKP6`) — confirmed live via MCP `list_credentials`.
+- Credential appears valid — **cannot be assessed**; `list_credentials` returns no validity/status field at all.
+- Real Notion API read proven — **not proven**. No tool in the 19-tool read-only MCP surface (`explore_node_resources` … `validate_workflow`) can make a live external call; `validate_node_config`/`validate_workflow` are schema-only. Verdict, stated exactly: **"The credential exists, but no live Notion API read has been proven this session."**
+- Existing workflow usage — **zero**. The instance's only workflow (`My workflow`) has exactly 2 nodes (`Manual Trigger` → `HTTP Request`), confirmed via `get_workflow_details`'s full node list; no Notion node anywhere.
+- Workspace/content access provable through this path — **none**. Nothing about this credential's actual reach into Michelle's workspace can be established without a live call, which the MCP surface cannot make.
+
+**Path B — StayWhile app → Notion:**
+
+- `NOTION_API_KEY` consumed in exactly one place: `getNotionHighlights()` (`apps/website/src/domains/integrations/services/integrations.service.ts:317-336`), reading `process.env.NOTION_API_KEY` directly.
+- Production configuration status — **only expected/documented in `.env.example:39`, never confirmed present in Production this session or in any prior recorded session**. The top-level `SECURE_CONFIGURATION_CHECKLIST.md` still shows Notion unchecked (though that checklist is stale generally — e.g. OwnerRez is also shown unchecked there despite being separately confirmed live in Production — so its checkbox state alone isn't strong evidence either way). Cannot be checked directly this session: this environment is under a standing restriction against authenticating the Vercel CLI (documented earlier in this file), so Production env-var presence can only be confirmed via the user's own Vercel dashboard or a self-deleting diagnostic script — not attempted this increment.
+- Working Notion client — **yes**, `NotionClient` (`packages/integrations/src/notion/client.ts`), genuine HTTP calls to `api.notion.com/v1`, read-only **by construction** (no `PATCH`/create/archive/append call exists anywhere in the file; `sync()` throws on `OUTBOUND`).
+- Read operations supported today: `connect`/`healthCheck`/`validateCredentials` (all `GET /users/me`), `sync("INBOUND")` (count-only `POST /search`), `listRecentlyEdited(limit)` (`POST /search` sorted by `last_edited_time`, returns id/type/title/url/last-edited-time for the top N).
+- Dashboard keyword search — **unbuilt**. No method anywhere passes a `query` param to `/search`; no route/UI accepts a search term.
+- Change/deletion detection — **completely pending**, not partially implemented. No polling job, no last-seen-state storage, no webhook receiver exist anywhere in the codebase for Notion. Whether Notion's real API even supports outbound webhooks for page changes/deletions has never been confirmed against Notion's actual docs — still open.
+- Exposed in the Production dashboard today — **yes, narrowly**: one tile (`DashboardSummary.tsx`) showing the 5 most-recently-edited Notion items, gated by the generic `integrations:read` permission, powered by `getNotionHighlights()`. That's the entire current surface — no search, no notifications.
+
+No credential value was read, printed, or exposed at any point in this audit.
+
+### Michelle's requested Notion functionality — recommended architecture (design/analysis only, nothing built)
+
+**1. Dashboard keyword/property/region search → recommend direct StayWhile app → Notion.**
+Rationale: this is a synchronous, user-initiated read at request time — the same shape the app's `NotionClient` already handles (`listRecentlyEdited` already does a live `/search` call on dashboard render). Extending `/search` with a real `query` param is additive to the existing read-only client, stays inside the app's existing RBAC model, and needs no second credential. Notion's `/search` API is generic full-text only — it has no native "region" concept — so property-name and keyword matching map directly onto `query`, but **region filtering (SRQ/Largo/St. Augustine/Panhandle/Destin/SPI) would have to be done by matching Notion results against StayWhile's own property list/region field, not by inventing a Notion-side filter**, since Notion has no equivalent structure today (unconfirmed either way until a real read happens — see next section). Routing this through n8n instead would add a second credential to keep in sync, a second network hop, and no benefit for a synchronous user query.
+
+**2. Change/deletion notifications → recommend a split architecture.**
+The polling/diff/notify loop (schedule trigger → diff against last-seen state → dispatch to Slack/email/team) is a better structural fit for n8n — that's what its trigger/schedule/notification-node primitives are for, and building an equivalent scheduler + notification dispatcher from scratch inside the StayWhile app would duplicate what n8n already does. But: **the definition of "relevant" (which pages/properties matter) should stay driven by the same source the app already trusts**, not be redefined independently inside n8n — otherwise the two systems' notion of "relevant Notion content" can silently drift apart. Concretely: StayWhile-side owns the property/region reference data and decides scope; n8n-side owns the scheduling, diffing, and notification dispatch once scope is handed to it. This is a recommendation only — not designed in detail, not built, and blocked on first proving the n8n-side Notion credential is actually live (Path A above) and on confirming whether Notion's API supports webhooks at all (still unconfirmed).
+
+### Meeting reference — Michelle's 38-property regional structure (reference only — NOT yet proven to match Notion's real structure)
+
+Recorded verbatim as given; **do not assume Notion is organized this way until a real Notion read confirms it** — this is StayWhile/meeting-side reference data only, not a Notion read result.
+
+| Region                   | Count | Properties                                                                                                                                                                                                                                                                                                                               |
+| ------------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SRQ                      | 24    | Aqua Palm, Bonjour AMI, Camingo, Casa del Mar, Champion Retreat, Coco Vista, Driftwood Cottage, Florisun, Lakeshore, Lucky Charm, Mahalo, Maison de la Mer, Majestic Isla, Moonlit Cove, Moroccan Moon, Once Upon a Pond, Palm Haven, Paradise Awaits, Picasa, Riverside Château, Robinson Recluse, Royal Eden, Royal Palms, The Bahamas |
+| Largo                    | 1     | Ocean Pearl                                                                                                                                                                                                                                                                                                                              |
+| St. Augustine            | 1     | Magnolia                                                                                                                                                                                                                                                                                                                                 |
+| Panhandle                | 4     | Aloha by the Sea, Island SOS, Islafront                                                                                                                                                                                                                                                                                                  |
+| Destin                   | 4     | Bird of Paradise, Casa Blanca, Miramar Bliss, Surfside Solace                                                                                                                                                                                                                                                                            |
+| SPI (South Padre Island) | 4     | Las Sirenas, Orion's Landing, Roseate Madre, Sandy Nudes                                                                                                                                                                                                                                                                                 |
+
+Total meeting reference inventory: **38 properties**. (Note: Panhandle lists 4 as the count header but 3 named properties, and Largo/St. Augustine each list 1 name for a count of 1 — transcribed exactly as given without correcting or inferring a missing name.)
+
+**OwnerRez reference aliases (reference-only, no action taken)**: `BOP` → Bird of Paradise; `Miramar Bliss 2` → Miramar Bliss.
+
+**Hard rule carried forward**: these aliases, and this entire regional list, are reference information only. They must **not** trigger automatic matching, linking, renaming, or any data change — same standard already established in the Notion README's "Mapping rule" and applied to `AUGUST_PROPERTY_MAP`/`CIELO_PROPERTY_MAP`: every property correspondence requires explicit, human-confirmed matching, never inference from name/alias similarity, no matter how obvious it looks.
+
+### Notion — status summary (complete vs. pending vs. next step)
+
+**Complete**: app-level read-only Notion client (connect/healthCheck/validateCredentials/sync-count/listRecentlyEdited); one dashboard tile exposing it in Production; n8n-side credential existence re-confirmed this session; n8n-side zero-workflow-usage confirmed; full read-only n8n MCP capability ceiling established (no live-call/test-credential tool exists); architecture recommendation drafted for both of Michelle's requested features (design only).
+
+**Pending**: n8n-side Notion credential's live validity (never proven, needs n8n UI "Test" button); `NOTION_API_KEY` Production presence (never proven, needs Vercel dashboard check or an approved self-deleting diagnostic — Vercel CLI auth remains off-limits in this environment); Notion API webhook-support research (never done); dashboard keyword/property/region search (unbuilt); change/deletion polling+notify pipeline (unbuilt); real Notion read confirming/refuting Michelle's 38-property regional structure.
+
+**Recommended next step**: the user tests the n8n-side `Notion account` credential via the n8n UI's built-in "Test" button (no workflow needed, no write to Notion) — this is the one remaining question a live call can answer that nothing in this session's tooling can. Everything else above is design/build work awaiting explicit approval.
+
+### Notion Production connection verification — attempted, blocked (still this increment, zero writes, zero credential exposure)
+
+Attempted the smallest possible read-only proof that `NOTION_API_KEY` is configured in Production, authenticates, and can read — preferring an existing safe read path (`healthCheck()`/`GET /users/me`, or the existing dashboard tile's `listRecentlyEdited()` call) over building anything new, per explicit instruction. **Could not complete this session.** Three paths considered, all currently unavailable or out of scope:
+
+1. **No existing Notion-specific diagnostic script** — unlike OwnerRez (`ownerrez-property-inventory.ts`), nothing in `packages/integrations/scripts/` targets Notion yet. Writing one is a build step, explicitly deferred.
+2. **Claude-in-Chrome browser extension not connected this session** — checked via `tabs_context_mcp`, returned "Browser extension is not connected." This would have been the zero-build option: the Production dashboard's existing "Notion" tile already calls the real `NOTION_API_KEY` through `getNotionHighlights()` → `listRecentlyEdited()`, so viewing it read-only would have proven configured/authenticated/read-access/item-count in one step, exactly the safe metadata shape requested, with no new code and no secret exposure.
+3. **Vercel CLI authentication remains off-limits in this environment** — per the standing rule already recorded earlier in this file; not attempted.
+
+**Verdict: Production connection status is genuinely unverified, not "assumed missing" or "assumed working."** No credential value was read, printed, or exposed. Nothing was built.
+
+**Three concrete options handed to the user, in order of conclusiveness:**
+
+- **(A)** User logs into the Production dashboard as `admin@stayawhilewithus.com` and reads the existing "Notion" dashboard tile directly — proves configured + authenticated + read-access + item count in one look, or reports the exact "not configured"/error state shown.
+- **(B)** User reconnects the Claude-in-Chrome browser extension so the same tile can be viewed read-only from inside this session.
+- **(C)** User approves building a minimal, self-deleting, name/status-only diagnostic (same pattern as `ownerrez-property-inventory.ts`) calling only `healthCheck()` against the real Production key, reporting only `configured`/`authenticated`/`checkedAt` — never the token. Not started; a build step awaiting explicit approval.
+
+Nothing further attempted this session pending the user's choice among (A)/(B)/(C).
+
+### Notion Production connection — DEFINITIVE RESULT (via user's own Production dashboard, option A above)
+
+The user logged into the real StayWhile Production dashboard as `admin@stayawhilewithus.com` and read the existing "Notion" tile directly — the zero-build path this file predicted would be conclusive. It reads:
+
+> **NOTION — Not connected — set `NOTION_API_KEY` to enable.**
+
+This is the `configured: false` branch of `getNotionHighlights()` (`integrations.service.ts:317-336`) — the code only ever shows this exact message when `process.env.NOTION_API_KEY` is unset. **Definitive, closed finding: StayWhile Production does NOT currently have the app-level `NOTION_API_KEY` configured.** This is exactly why the direct app → Notion integration is inactive in Production today — not a code bug, not an auth failure, simply an unset env var. This also answers, definitively, the item this file has carried as unconfirmed since 2026-08-15: Production presence of `NOTION_API_KEY` is now known, not merely unconfirmed — it is **absent**.
+
+Same screenshot also showed the OwnerRez dashboard tile:
+
+> **OWNERREZ — Couldn't reach OwnerRez: Request to `/bookings` failed with 400**
+
+**Recorded as a separate, real, currently-unexplained Production issue — not investigated, not touched this session**, per explicit instruction. This differs from and is newer than every prior OwnerRez Production finding in this file (Increment 22's live-credential verification, Increment 39's property/booking-read confirmation) — something now causes a 400 on `/bookings` in Production that wasn't previously reported. Flagged for a future session; do not start on it without explicit direction.
+
+### OwnerRez — untouched this increment, but the `ownerrez-property-sync` worktree is NOT "zero code written"
+
+**Correction**: several places above in this file (Increment 39, and the priority banner near the top) describe the OwnerRez property-sync service and admin-review UI as "design exists, zero code written." That was accurate at the time each was written, but is now superseded: Increments 40 and 41 (this same file, below/above per reading order) document that this work was actually built and is committed — `a415919` then `46c4d6e` ("Split OwnerRez sync into preview/apply/create, rewrite test suite") — inside the **isolated** `worktree-ownerrez-property-sync` git worktree at `.claude/worktrees/ownerrez-property-sync`. Confirmed this session via a read-only `git log`/`git status` in that worktree: HEAD is `46c4d6e`, clean working tree, nothing uncommitted. **`main`'s own HEAD remains `da8ac61`** (confirmed via `git worktree list`) — this work has **not** been merged into `main`, not deployed, not pushed beyond the worktree's own tracking branch. No OwnerRez work was done, and the worktree was not entered, modified, merged, or pushed this increment or this session — only its git log/status were read to confirm the above.
+
+### App-level Notion connection procedure — requested, not yet actioned (design/instructions only, nothing built or changed)
+
+The user asked for the safest exact procedure to connect the app-level Notion integration in Production (obtain the correct integration token; verify it's scoped only to intended StayWhile content; where to add `NOTION_API_KEY` in Vercel; whether a redeploy is required; how to do the first read-only verification afterward). Given as guidance in conversation only — Michelle's absolute rule (no Notion content ever created/edited/moved/renamed/deleted/archived/restructured/tagged, no test content) applies throughout. Nothing was implemented, no token was requested in chat, no secret was read or exposed. Full procedure is in this session's conversation record; add it here if/when the user actually starts the connection work.
+
 ---
 
 # Notes
@@ -1597,3 +1858,683 @@ None of these are wired into the app; none run automatically. Consider committin
 - Local Postgres (Homebrew `postgresql@16`) runs as a background service with trust auth on localhost — fine for local dev only, never replicate this auth config anywhere else.
 - `packages/database/.env` and `apps/website/.env.local` contain real local Postgres connection strings and placeholder (non-functional) Clerk/n8n secrets — both gitignored, never commit them.
 - The plan file with full remaining-refinement content (exact ADR text scope, exact `@stayw/ai` API shapes, exact file lists) is at `/Users/kristinejoyreyes/.claude/plans/memoized-baking-otter.md` — read it before redoing design work that's already been thought through.
+
+---
+
+## Increment 42 — 2026-08-24: Authoritative current state — OwnerRez + Notion + n8n
+
+**This section is the authoritative current-state summary for OwnerRez, Notion, and n8n as of 2026-08-24.** It supersedes any conflicting statement in an earlier increment or banner above (several were written before this work existed, or before this session's fresh verification — most notably the "zero code written" phrasing that appears in Increment 39 and the priority banner near the top of this file, both now stale). History above is left intact; nothing was deleted or rewritten wholesale. Where an older statement conflicts with what's below, **this section governs.**
+
+_(Context: this increment consolidates ground truth after this session found its own prior HANDOFF edits appeared to have drifted — root-caused to a stray `cd` into the `ownerrez-property-sync` worktree persisting across Bash calls, which made several read-only shell checks target the worktree's own copy of this file instead of this one. No content was actually lost; this section is a clean, single consolidation pass, not a recovery from real data loss.)_
+
+### OwnerRez — current truth
+
+- A real OwnerRez property-sync implementation **exists** — it is not a design-only proposal.
+- It lives entirely in the **isolated** git worktree `worktree-ownerrez-property-sync`, checked out at `.claude/worktrees/ownerrez-property-sync`.
+- Two commits: **`a415919`** ("Add OwnerRez property-sync groundwork — match report, confirm, field sync") and **`46c4d6e`** ("Split OwnerRez sync into preview/apply/create, rewrite test suite").
+- Implements the **preview → apply → create** flow: `previewOwnerRezPropertyChanges` (read-only diff), `applyOwnerRezPropertyChanges` (writes exactly one property's changed OwnerRez-owned fields at a time), `createPropertyFromOwnerRez` (creates + links a new `Property` from an unmatched OwnerRez listing, atomically, admin-reviewed).
+- **28/28** focused OwnerRez tests passing.
+- Full website suite: **308/308** passing, zero regressions.
+- `pnpm --filter website exec next build` **succeeds** in that worktree.
+- An additive migration (`add_ownerrez_property_sync_fields` — two new nullable columns, `owner_rez_active`/`owner_rez_last_seen_at`) exists and **has only been applied to local dev** — never to Production.
+- **Not merged to `main`** — confirmed this session via `git worktree list`: `main`'s own HEAD is still `da8ac61`, the worktree's branch is a separate ref entirely.
+- **Not pushed beyond the worktree's own tracking branch, not deployed.**
+- **No Production OwnerRez writes have been made** as part of this work — everything above was verified against the local dev DB only.
+- Separately, the current Production dashboard shows **`OWNERREZ — Couldn't reach OwnerRez: Request to /bookings failed with 400`** — a real, currently-unexplained issue, observed directly by the user via the live dashboard this session. **This is a separate, pending OwnerRez issue — it is not evidence that the property-sync work above is broken** (that work has never touched Production; this 400 is on the existing, already-live `/bookings` read path). Not investigated, not touched this session, per explicit instruction.
+
+### Notion — current truth
+
+- n8n contains a **`Notion account`** credential (`notionApi` type, id `4VXm2JUDYsHUKKP6`, home project = Kenny Pham's personal StayWhile project).
+- **Credential existence is proven. Credential validity is not proven** — `list_credentials` returns no validity/status field of any kind.
+- **No live Notion API read has been proven through n8n this session** — the 19-tool read-only n8n MCP surface has no `test_credential`/`execute_workflow`/equivalent tool; `validate_node_config`/`validate_workflow` are schema-only, no live external call.
+- **No existing n8n workflow uses Notion** — confirmed via `get_workflow_details`: the instance's only workflow (`My workflow`, 2 nodes: `Manual Trigger` → `HTTP Request`) has zero Notion nodes.
+- The StayWhile app has a real, read-only-by-construction `NotionClient` (`packages/integrations/src/notion/client.ts`) — genuine HTTP calls to `api.notion.com/v1`, no `PATCH`/create/archive/append anywhere in the file.
+- The app-level dashboard path requires `NOTION_API_KEY` (`.env.example`) — a separate credential from the n8n-level one above.
+- **The user checked the actual Production dashboard directly and it shows: "Not connected — set `NOTION_API_KEY` to enable."**
+- **Therefore: Production app-level Notion is definitively NOT configured right now.** Not "unconfirmed" — known and absent.
+- Dashboard keyword/property/region search — **unbuilt**. No `query` param is ever passed to Notion's `/search` anywhere in the code.
+- Change/deletion detection — **unbuilt**. No polling job, no last-seen-state storage, no webhook receiver exist anywhere for Notion.
+- **No Notion content has been modified** at any point, by any path, this session or any prior one.
+
+### Michelle's Notion requirements (recorded, unbuilt)
+
+- Dashboard keyword/property/region search of authorized Notion content.
+- Notifications when relevant Notion content is changed or deleted.
+- **Strict read-only toward Notion content — absolute, no exceptions**: no create, edit, rename, move, delete, archive, restructure, tag, categorize, or test content, ever.
+
+### 38-property regional reference (Michelle's meeting reference — NOT yet proven to match Notion's real structure)
+
+Recorded verbatim; do not assume Notion is organized this way until a real Notion read confirms it.
+
+| Region                   | Count | Properties                                                                                                                                                                                                                                                                                                                               |
+| ------------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SRQ                      | 24    | Aqua Palm, Bonjour AMI, Camingo, Casa del Mar, Champion Retreat, Coco Vista, Driftwood Cottage, Florisun, Lakeshore, Lucky Charm, Mahalo, Maison de la Mer, Majestic Isla, Moonlit Cove, Moroccan Moon, Once Upon a Pond, Palm Haven, Paradise Awaits, Picasa, Riverside Château, Robinson Recluse, Royal Eden, Royal Palms, The Bahamas |
+| Largo                    | 1     | Ocean Pearl                                                                                                                                                                                                                                                                                                                              |
+| St. Augustine            | 1     | Magnolia                                                                                                                                                                                                                                                                                                                                 |
+| Panhandle                | 4     | Aloha by the Sea, Island SOS, Islafront                                                                                                                                                                                                                                                                                                  |
+| Destin                   | 4     | Bird of Paradise, Casa Blanca, Miramar Bliss, Surfside Solace                                                                                                                                                                                                                                                                            |
+| SPI (South Padre Island) | 4     | Las Sirenas, Orion's Landing, Roseate Madre, Sandy Nudes                                                                                                                                                                                                                                                                                 |
+
+Total meeting reference inventory: **38 properties**.
+
+**Reference-only aliases**: `BOP` → Bird of Paradise; `Miramar Bliss 2` → Miramar Bliss.
+
+**These aliases, and this entire regional list, are for human review/search context only. They must never trigger automatic matching, renaming, or relinking of any data** — same standard already established for `AUGUST_PROPERTY_MAP`/`CIELO_PROPERTY_MAP` and the Notion README's own mapping rule: every correspondence requires explicit, human-confirmed matching, never inference from name/alias similarity.
+
+### n8n — current truth
+
+- The official native n8n MCP is connected, StayWhile-only, local scope, at the correct URL: `https://adminstay.app.n8n.cloud/mcp-server/http`.
+- A fresh Claude Code session now loads **19 read-only n8n tools** (`explore_node_resources`, `get_node_types`, `get_workflow_best_practices`, `get_workflow_details`, `get_workflow_execution`, `get_workflow_history`, `get_workflow_sdk_reference`, `get_workflow_version`, `list_credentials`, `list_n8n_connect_services`, `list_workflow_tags`, `search_data_tables`, `search_folders`, `search_nodes`, `search_projects`, `search_workflow_executions`, `search_workflows`, `validate_node_config`, `validate_workflow`) — none create/update/delete/execute anything.
+- **One StayWhile project visible**: `Kenny Pham <admin@stayawhilewithus.com>` (personal) — no other projects, no cross-client data of any kind.
+- **One inactive default workflow**: `"My workflow"` (id `p9AsCYI5THw1oVLX`), 0 triggers, 2 nodes.
+- **Credentials visible**: `Notion account`, `Anthropic account`, `Header Auth account` — same three as the 2026-08-06 baseline in `N8N_DISCOVERY.md`, nothing added or removed.
+- **No cross-client data visible anywhere in this n8n instance.**
+- **No n8n writes performed** — every call made this session was read/search/get/list, never create/update/delete/execute.
+
+### Next priority, in order
+
+1. Configure/verify app-level `NOTION_API_KEY` in Production.
+2. Prove a real read-only Notion API call against it.
+3. Build Michelle's read-only Notion search (keyword/property/region).
+4. Design/verify change/deletion monitoring for Notion.
+5. Return to OwnerRez rollout/reconciliation (review + approve the worktree's changes; apply the additive migration to Production; deploy; run the real match report against Production for the first time) — separately, first investigate the newly observed `/bookings` 400.
+6. Then Nest → August → Cielo, per the standing device-work order.
+
+### Documentation rule going forward
+
+This Increment 42 is the authoritative current-state section for OwnerRez/Notion/n8n. Future sessions should not keep patching conflicting older increments one-by-one — leave history intact, and if an older statement conflicts, mark it superseded by Increment 42 (or append a new authoritative increment when the state changes again) rather than rewriting the historical record.
+
+Nothing was merged, pushed, or deployed this increment. The `ownerrez-property-sync` worktree was not entered, modified, merged, or pushed. No Notion content was touched. No n8n workflow was created, edited, activated, or executed.
+
+---
+
+## Increment 43 — 2026-08-25: `NOTION_API_KEY` confirmed live in Production; specific data source ("View of Listings") identified — supersedes Increment 42's Notion-configuration finding
+
+**Supersedes Increment 42's line "Production app-level Notion is definitively NOT configured right now."** That finding is now stale — see below. Increment 42 remains otherwise accurate and unmodified; this section governs where the two conflict.
+
+### Verified this increment (code inspection only — no live Notion API call made by this session)
+
+- User added `NOTION_API_KEY` to Vercel Production and redeployed. The Production dashboard's Notion tile changed from **"Not connected — set NOTION_API_KEY to enable"** to **"No pages/databases found."**
+- Per `DashboardSummary.tsx:591-603`, that exact wording only renders on the `configured === true && ok === true && items.length === 0` branch — i.e. `getNotionHighlights()` → `NotionClient.listRecentlyEdited()` → `POST /search` **completed without error** and returned zero results. **This proves the token authenticates successfully.** It is not an auth failure.
+- **Root cause of the empty result, by design of Notion's own permission model**: an internal integration token has zero content access by default — a page or database becomes visible to it only once a human explicitly shares it with that integration via Notion's own UI ("•••" → "Connections" → "Add connections"). `/users/me` (what `validateCredentials()`/`healthCheck()` call) succeeds regardless, since it's a workspace/bot-identity check, not content-scoped — explaining exactly why auth can look fine while `/search` still returns nothing. **Nothing has been shared with this integration yet** — this is the missing step, not a code bug.
+- User identified Michelle's property database as a Notion **data source** named **"View of Listings"** and copied its **data source ID** locally (Notion → Manage data sources → View of Listings → ••• → Copy data source ID). **The ID's value was not shared with or requested by this session, is not in chat, and is not in the repo.**
+- **Client version note, confirmed by direct code read**: `packages/integrations/src/notion/client.ts:44` pins `Notion-Version: "2022-06-28"` — predates Notion's multi-source-database feature. Under that version, content is addressed by `database_id` via `POST /v1/databases/{id}/query`; "data source" as a distinct queryable object is a newer API concept. **Open technical unknown, not yet resolved**: whether this copied data source ID is directly usable under the current pinned version (interchangeable with the classic database ID, common for a database that's never been split into multiple sources) or whether the `Notion-Version` header needs bumping first to query it via a newer, data-source-specific endpoint. Resolving this needs one real, approved, read-only test call — not more code reading.
+
+### Two conditions that must both hold before any query against this data source can succeed
+
+1. **"View of Listings" (or its parent database/page) must be explicitly shared with the integration** in Notion's UI — a separate, required manual step from copying the ID; not yet confirmed done.
+2. **The API version question above must be resolved** — confirms which endpoint shape (`/v1/databases/{id}/query` vs. a newer data-source-specific endpoint) actually accepts this ID.
+
+### Recommended storage (not yet added)
+
+A new Vercel Production environment variable — proposed name `NOTION_LISTINGS_DATA_SOURCE_ID` — added the same way `NOTION_API_KEY` was (Vercel dashboard → Settings → Environment Variables). Never hard-coded in source, never committed. This is a single fixed config pointer (which data source holds property listings), not a per-device mapping table, so it does not collide with the standing `*_PROPERTY_MAP` prohibition elsewhere in this file.
+
+### Smallest safe next step (proposed, NOT implemented — awaiting approval)
+
+One new, additive, read-only `NotionClient` method — e.g. `queryDataSource(dataSourceId, { page_size: 1 })` — reporting only `{ ok: boolean, resultCount, firstItemTitle? }`, never a full content dump, same shape as the existing `healthCheck()` pattern. Does not touch or replace the existing `/search`-based `listRecentlyEdited()` used by the current dashboard tile.
+
+### How this fits Michelle's planned keyword/property/region search
+
+Once read access to this specific data source is proven, the real search feature should query it directly (Notion's own `filter`/query object against that data source), not the generic `/search` used today — narrower in scope (property listings only, nothing else in the workspace) and a better match for "keyword/property/region." If "View of Listings" turns out to have its own structured "Region" property column, region filtering could become a real Notion-side `filter` rather than string-matching against StayWhile's own 38-property reference list (Increment 42) — a materially better design if the schema supports it. Not yet confirmed either way.
+
+Nothing implemented this increment. No Notion content read or modified. OwnerRez and n8n untouched.
+
+---
+
+## Increment 44 — 2026-08-25 (same day, continued): Notion API version/sharing question resolved via Notion's live official docs — resolves Increment 43's open technical unknown
+
+**Resolves the open item from Increment 43** ("whether this copied data source ID is directly usable under the current pinned version... or whether the Notion-Version header needs bumping"). Answered this increment by fetching Notion's current official docs directly (`developers.notion.com`, `notion.com/help`) — not from training memory, since Notion's API has moved since this assistant's knowledge cutoff. Still zero live calls made against StayWhile's actual Notion workspace; nothing implemented.
+
+### Verified facts (with sources)
+
+- **Sharing is managed at the database level, not per data source.** Individual data sources have no independent connection/permission setting — access is granted by sharing the parent **database** (••• → Add connections), which then covers every data source under it. [Notion Docs — Working with databases](https://developers.notion.com/guides/data-apis/working-with-databases)
+- **Whether sharing a parent page/teamspace cascades down to a nested database was checked directly and is NOT explicitly confirmed in Notion's docs either way.** Do not assume it cascades — the docs-backed action is to share the specific database directly. [Notion Help — Add & manage connections](https://www.notion.com/help/add-and-manage-connections-with-the-api)
+- **`2022-06-28` (this codebase's current pinned version) still works for a database with a single data source** — Notion's own migration guide: _"Connections using the 2022-06-28 API version (or older) will continue to work with existing databases in Notion that have a single data source."_ It only fails — with an explicit `400` validation error, not silently — if the database has multiple data sources. [Notion Docs — Start building with the Notion API (upgrade FAQs)](https://developers.notion.com/docs/upgrade-faqs-2025-09-03)
+- **Confirmed current required version for direct data-source access**: `GET /v1/data_sources/{data_source_id}` requires `Notion-Version: 2026-03-11` (fetched live from Notion's current reference page — newer than the 2025-09-03 version that introduced data sources). [Notion Docs — Retrieve a data source](https://developers.notion.com/reference/retrieve-a-data-source)
+- **Bumping the version is confirmed NOT globally backwards-compatible** — under the new version, `/search`'s filter values change (`"page"|"database"` → `"page"|"data_source"`) and its response shape changes to data-source objects. [Notion Docs — Upgrade guide 2025-09-03](https://developers.notion.com/guides/get-started/upgrade-guide-2025-09-03)
+- **This codebase's shared `HttpClient` (`packages/integrations/src/core/http-client.ts:33`) already supports a per-call header override** — `headers: { ...this.opts.headers, ...init.headers }` merges a caller-supplied header on top of the client's constructor default. Confirmed by direct code read. This means a new method can send `Notion-Version: 2026-03-11` for just its own call, leaving the client's global default (`2022-06-28`) and every existing method (`/users/me`, `/search`-based `sync()`/`listRecentlyEdited()`) completely untouched. **No version migration needed — purely additive.**
+- **Unshared-object error semantics, confirmed via Notion's own error reference**: an object not shared with the integration returns **`404 object_not_found`** (deliberately indistinguishable from "doesn't exist," by Notion's own design, to avoid leaking existence) — not a `403`. [Notion Docs — Errors](https://developers.notion.com/reference/errors)
+
+### Smallest safe proof — designed, NOT implemented, awaiting approval
+
+One new `NotionClient` method: single `GET /v1/data_sources/{id}` call, `Notion-Version: 2026-03-11` passed as a per-call header override only, reading `NOTION_LISTINGS_DATA_SOURCE_ID` from env (never hard-coded). Reports only `{ ok, status, title? }` — the data source's own name field, never its rows/pages/property content. No create/update/delete/archive anywhere in this design.
+
+### Diagnostic power of this one call
+
+- `200` → database is shared with the integration and readable. Proof succeeds in one call, regardless of single- vs multi-source, since this targets the modern, universally-correct endpoint directly.
+- `404 object_not_found` → not yet shared with the integration (the sharing step from Increment 43 hasn't been done, or the ID is wrong — can't fully distinguish those two, but the ID came directly from Notion's own "Copy data source ID" action, so 404 here should be read as "go share the database").
+- Recommendation given to the user: **do the one-click sharing step in Notion's UI first** (zero-risk, no code, reversible), then run this proof — cleanest path to an unambiguous result, even though the proof call is technically capable of surfacing "not shared" on its own via the 404.
+
+Nothing implemented this increment. No live call made against StayWhile's real Notion workspace. No Notion content read or modified. OwnerRez and n8n untouched.
+
+---
+
+## Increment 45 — 2026-08-25 (same day, continued): identified exactly where "View of Listings"'s parent database lives and how to share it; refined the read-only proof to a query call
+
+**Builds directly on Increment 44.** Still code/documentation reasoning only — no live call made against StayWhile's real Notion workspace, nothing implemented.
+
+### Where "View of Listings" sits, confirmed via Notion's own current help docs
+
+- **"Manage data sources" is opened via the slider icon at the top of a database** — it is a menu on the database's own page, not a separate hidden object. [Notion Help — Data sources & linked databases](https://www.notion.com/help/data-sources-and-linked-databases)
+- That panel splits into two sections: **"Sources"** (data sources native to the current page) and **"Linked"** (data sources originating from a _different_ database, shown here only as a linked view).
+- **The exact disambiguating check handed to the user**: whether "View of Listings" appeared under "Sources" (→ the page the user was already on **is** the parent database — no separate object to find) or "Linked" (→ the real parent database is elsewhere, and that one needs sharing instead). Not yet confirmed which case applies — the user needs to check this once, in Notion's UI, before sharing.
+- **Where to share, in the (more likely) "Sources" case**: the same page's top-right **"•••" menu** → scroll to a "Connections" section → "Add connections" → select the StayWhile Dashboard integration by name. [Notion Help — Add & manage connections](https://www.notion.com/help/add-and-manage-connections-with-the-api) If not visible there, check the adjacent **"Share"** button instead — Notion has moved this control between the two across UI versions; this session cannot confirm which one is current from documentation alone.
+- Per Increment 44, this is a one-time, database-level action that will cover every data source under that database automatically, including "View of Listings" — no separate per-data-source share needed.
+
+### Proof design refined: query, not a bare object descriptor
+
+The user's "retrieve at most 1 item, report count" description matches Notion's **query** call, not a plain `GET /v1/data_sources/{id}` object fetch (which returns exactly one object — a schema/metadata descriptor, no "count" concept). Refined design:
+
+```
+POST /v1/data_sources/{id}/query
+Notion-Version: 2026-03-11   (per-call header override only — global client default untouched, per Increment 44)
+Body: { "page_size": 1 }
+```
+
+Returns `{ results: [...], has_more, next_cursor }` — the same shape already used by the existing `/search`-based methods, so `results.length` as "count" and one safe title (via the same `extractTitle()` logic already in `client.ts`) fit naturally. Zero content dump; env-var-sourced ID (`NOTION_LISTINGS_DATA_SOURCE_ID`), never hard-coded; no create/update/delete/archive anywhere in this design. **Confirmed as the safest available approach for this proof.**
+
+### Four-way disambiguation (honest, not oversimplified)
+
+| Outcome                           | Status                 | Meaning                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Valid ID, database not yet shared | `404 object_not_found` | Go do the sharing step above                                                                                                                                                                                                                                                                                                                                                                                    |
+| Wrong/invalid data source ID      | `404 object_not_found` | **Same status as above** — Notion deliberately conflates "not shared" with "doesn't exist" to avoid leaking existence (confirmed, Increment 44's error-reference source). Since the ID was copied directly from Notion's UI, a wrong ID is the less likely of the two — if sharing is confirmed done and still 404, re-copy the ID and check the env var for whitespace/truncation before suspecting a code bug |
+| Wrong API version                 | `400` validation error | Shouldn't occur since the proof sends the confirmed-current `2026-03-11` header for this one call; still worth surfacing the raw status/error text in the report                                                                                                                                                                                                                                                |
+| Successful read                   | `200 OK`               | `results.length` and one title confirm sharing + readability at once                                                                                                                                                                                                                                                                                                                                            |
+
+Nothing implemented this increment. No live call made against StayWhile's real Notion workspace. OwnerRez, n8n, Nest, August, and Cielo untouched.
+
+---
+
+## Increment 46 — 2026-08-25 (same day, continued): built the one-row read-only Notion data-source proof — implemented, unit-tested/mocked only, NOT run against Production
+
+**Implements Increments 44/45's design exactly.** Additive only — the client's global `NOTION_VERSION` default and every existing Notion method are untouched. No live call has been made against StayWhile's real Notion workspace or against Notion's API at all this increment (only mocked unit tests were run).
+
+### Files changed (7 modified, 1 new)
+
+- `packages/integrations/src/notion/types.ts` — new `NotionDataSourceQueryResult` type (`{ resultCount, firstTitle }`).
+- `packages/integrations/src/notion/client.ts` — new `NOTION_DATA_SOURCE_QUERY_VERSION = "2026-03-11"` constant (per-request override only) and new `queryDataSource(dataSourceId, pageSize = 1)` method: one `POST /data_sources/{id}/query` call, reports only count + first row's title, never full content.
+- `packages/integrations/src/notion/client.test.ts` — 4 new tests (correct path/header/body, default page size, empty-result handling, error propagation).
+- `apps/website/src/domains/integrations/services/integrations.service.ts` — new `getNotionListingsAccessProof(actor)`, mirroring the existing `getNotionHighlights()` pattern exactly: `assertPermission(actor, "integrations:read")` gate, reads `NOTION_API_KEY` + `NOTION_LISTINGS_DATA_SOURCE_ID` from env (neither ever logged), returns a discriminated `NotionListingsAccessProof` (`configured: false` / `ok: true` with count+title / `ok: false` with a classified `reason`). New `classifyNotionProofFailure()` maps HTTP status embedded in the thrown error message to `"unauthorized"` (401) / `"not_found_or_no_access"` (404) / `"version_or_validation_error"` (400) / `"unexpected_error"` (anything else) — exactly the four-way distinction from Increment 45, honestly limited by what Notion's API itself allows (404 covers both "not shared" and "invalid ID," per Notion's own error design).
+- `apps/website/src/domains/integrations/services/integrations.service.test.ts` — 8 new tests covering both missing-env-var cases, success, all three classified failure reasons, the unexpected-error fallback, and RBAC denial propagation.
+- `.env.example` — added `NOTION_LISTINGS_DATA_SOURCE_ID=""` placeholder with an explanatory comment (name only, no value, matches existing convention).
+- `packages/integrations/src/notion/README.md` — new section documenting `queryDataSource()`, the version requirement, and the sharing precondition.
+- **New file** `packages/integrations/src/notion/scripts/verify-listings-access.ts` — standalone CLI proof script, same convention as `august/scripts/check.ts`: prints only `configured: yes/no`, `read: success/failure`, `result count`, optional `first title`, and a classified failure reason — never a token, never the data source ID, never row/page content. **Typechecked only, never executed** (even locally) — running it makes a genuine live HTTP call to Notion's real API, which is out of scope until explicitly approved.
+
+### Verification
+
+- `packages/integrations`: focused `client.test.ts` — **12/12 passing** (8 pre-existing + 4 new).
+- `website`: focused `integrations.service.test.ts` — **32/32 passing** (24 pre-existing + 8 new).
+- `website`: full suite — **312/312 passing, 33 files, zero regressions** (up from 308 at Increment 41; the 4-test difference is this increment's new client-level tests living in the `@stayw/integrations` package, not `website` — the website-side increase of 8 tests is net new here).
+- `pnpm --filter @stayw/integrations exec tsc --noEmit` — clean, 0 errors.
+- `pnpm --filter website exec tsc --noEmit` — clean, 0 errors.
+
+### Exact command for later Production verification (NOT run this increment)
+
+```
+NOTION_API_KEY="<production value>" NOTION_LISTINGS_DATA_SOURCE_ID="<production value>" \
+  pnpm --filter @stayw/integrations exec tsx src/notion/scripts/verify-listings-access.ts
+```
+
+Real Production credential values are pasted inline into the command only — never written to any file, never committed, never logged by the script. This is the same "paste real values directly into a one-off local invocation" pattern already used for OwnerRez's and August's Production/live checks earlier in this file. Expected outcomes, per Increment 45's four-way table: `configured: no` (an env var is missing) / `read: success` + count/title (database is shared and readable) / `read: failure` + `not_found_or_no_access` (not shared yet, or wrong ID) / `read: failure` + `unauthorized` (bad token) / `read: failure` + `version_or_validation_error` (shouldn't occur, since the script sends the confirmed-current header).
+
+**Explicitly not done this increment**: the proof was not run — not locally with real credentials, not against Production. Sharing the database in Notion's UI (Increment 45) has not been confirmed done. No Notion content was read or modified. OwnerRez, n8n workflows, Nest, August, and Cielo were all untouched.
+
+---
+
+## Increment 47 — 2026-08-25 (same day, continued): `queryDataSource()` implementation checkpoint — strengthened tests, verified clean, still NOT run against Production
+
+**Closes out Increment 46's implementation with the specific rigor requested**: read `client.ts`/`types.ts` fully top-to-bottom (no duplicate exports, no diff artifacts — one `NotionDataSourceQueryResult` definition, one re-export line, `NOTION_VERSION`/`NOTION_DATA_SOURCE_QUERY_VERSION` each used in exactly the one place documented), and added a dedicated fetch-level test proving the header-scoping claim as an actual runtime fact, not just a code-reading inference.
+
+### What was added this increment
+
+- **New file** `packages/integrations/src/notion/notion-version.test.ts` — does **not** mock `HttpClient` (unlike the rest of the suite), instead stubs global `fetch` directly so the real header-merging logic in `core/http-client.ts` actually runs. Proves, on the wire: `connect()` (`/users/me`) sends `Notion-Version: 2022-06-28`; `sync()` (`/search`) sends `2022-06-28`; `queryDataSource()` sends `2026-03-11` for that one call, and an immediately-following `connect()` call on the **same client instance** still sends `2022-06-28` — i.e. the override is genuinely per-call, not a client-instance-level leak.
+- `client.test.ts` — added: (1) a constructor-argument capture proving `HttpClient` is still constructed with `Notion-Version: 2022-06-28` as its default; (2) `toHaveBeenCalledTimes(1)` strengthening on the main `queryDataSource` test; (3) a dedicated "read-only by construction" test asserting the method's one call uses `POST` and explicitly is not `PATCH`/`DELETE`.
+
+### Full verification this increment
+
+- Focused: `pnpm --filter @stayw/integrations exec vitest run src/notion/` — **17/17 passing** (2 files: `client.test.ts` 14, `notion-version.test.ts` 3 new).
+- `pnpm --filter @stayw/integrations exec tsc --noEmit` — clean, 0 errors.
+- `pnpm --filter website exec tsc --noEmit` — clean, 0 errors.
+- Full `@stayw/integrations` suite: **116/116 passing, 11 files**, zero regressions.
+- Full `website` suite: **312/312 passing, 33 files**, unchanged from Increment 46 (no website-side test changes this increment).
+
+### Confirmed: global Notion client behavior is unchanged
+
+Proven at the fetch level this increment, not just asserted: every existing method (`connect`/`disconnect`/`authenticate`/`healthCheck`/`validateCredentials`/`sync`/`listRecentlyEdited`) still sends `Notion-Version: 2022-06-28`. Only `queryDataSource()`'s own single request carries the `2026-03-11` override, and it does not persist onto any subsequent call on the same client instance.
+
+### Files changed this increment (2 modified, 1 new — on top of Increment 46's 7 modified + 1 new)
+
+- `packages/integrations/src/notion/client.test.ts` (+100/-1)
+- `packages/integrations/src/notion/client.ts` (+44/-1, from Increment 46 — unchanged this increment beyond what 46 already added)
+- **New**: `packages/integrations/src/notion/notion-version.test.ts`
+
+### Exact safe Production verification step (still NOT run)
+
+Unchanged from Increment 46 — same command, same script, still untouched since typechecking:
+
+```
+NOTION_API_KEY="<production value>" NOTION_LISTINGS_DATA_SOURCE_ID="<production value>" \
+  pnpm --filter @stayw/integrations exec tsx src/notion/scripts/verify-listings-access.ts
+```
+
+Real Production values pasted inline only — never written to a file, never committed, never logged.
+
+### What each outcome looks like
+
+- **Success**: `configured: yes`, `read: success`, `result count: <N>`, optional `first title: <safe title>`.
+- **Access denied / not shared**: `configured: yes`, `read: failure`, `reason: not_found_or_no_access (database not shared with this integration, or the data source ID is wrong — Notion returns the same status for both, by design)`.
+- **Wrong/invalid data source ID**: **identical output to "access denied"** above — Notion's API deliberately returns the same `404 object_not_found` for both, so this script (and Notion itself) cannot distinguish them from the response alone. Practical tell: since the ID was copied directly from Notion's own UI, a wrong ID is the less likely of the two.
+- **Version mismatch**: `configured: yes`, `read: failure`, `reason: version_or_validation_error` — shouldn't occur in practice, since the script always sends the confirmed-current `2026-03-11` header for this call.
+
+Nothing was run against Production. No Notion content was read or modified. OwnerRez, n8n workflows, Nest, August, and Cielo remain untouched.
+
+---
+
+## Increment 48 — 2026-08-25 (same day, continued): completed local verification pass — formatted, re-read, git-checked. Still NOT run against Production.
+
+**Final local-verification checkpoint before any Production call.** No new functionality added beyond Increment 46/47's read-only proof — this increment is verification only.
+
+### What was done
+
+- Ran `prettier --write` scoped only to the files this Notion work touched (not the wider working tree). Two files reformatted (`client.test.ts`, `notion/README.md` — whitespace/wrapping only, no logic change); the rest were already clean (`client.ts`, `types.ts`, `notion-version.test.ts`, `integrations.service.ts`, `integrations.service.test.ts` all reported "unchanged").
+- Re-ran the focused Notion suite after formatting: **17/17 passing**, unchanged from before formatting.
+- Re-ran `pnpm --filter @stayw/integrations exec tsc --noEmit`: clean, 0 errors.
+- Re-ran the full `@stayw/integrations` suite: **116/116 passing, 11 files**, zero regressions.
+- Read `client.ts`, `types.ts`, `client.test.ts` (261 lines total after formatting), and `notion-version.test.ts` **fully, top-to-bottom, post-format**. Confirmed: one `NotionDataSourceQueryResult` definition, one re-export line, no duplicate imports/exports, no malformed fragments, no leftover diff markers, brace/paren nesting closes cleanly (single `describe("NotionClient")` → nested `describe("listRecentlyEdited")` and `describe("queryDataSource")`, 14 `it()` cases total, matching vitest's own count).
+- **Confirmed existing Notion methods still use the default `2022-06-28`** — not by re-reading code again, but re-running the fetch-level `notion-version.test.ts` proof from Increment 47, which still passes: `connect()`/`sync()` still send `2022-06-28`; only `queryDataSource()`'s one call sends `2026-03-11`, and it doesn't leak onto a subsequent call.
+- `git diff --check` — run scoped to the Notion-touched files **and** across the entire working tree: **exit code 0, zero whitespace errors, both scopes.**
+- `git status` reviewed in full and explicitly split: **8 files modified + 2 new** belong to this Notion work (`.env.example`, `HANDOFF.md`, `integrations.service.ts`/`.test.ts`, `notion/{README.md, client.ts, client.test.ts, types.ts}`, plus new `notion-version.test.ts` and `notion/scripts/verify-listings-access.ts`). Every other modified/untracked path (`.gitignore`, the `users` domain files, `platform/auth`/`platform/identity`/`platform/errors.ts`, `.claude/`, the `packages/database/*.mjs` diagnostic scripts, etc.) was already present in the working tree **before this entire investigation started** — confirmed against the original `git status` snapshot from the start of this session, untouched by any of this work.
+
+### Result
+
+Local verification is complete and clean. Nothing was committed, pushed, or deployed. No Production Notion API call was made. No Notion content was read or modified. The `ownerrez-property-sync` worktree, n8n workflows, Nest, August, and Cielo were not touched.
+
+### Exact next Production step (not executed)
+
+```
+NOTION_API_KEY="<production value>" NOTION_LISTINGS_DATA_SOURCE_ID="<production value>" \
+  pnpm --filter @stayw/integrations exec tsx src/notion/scripts/verify-listings-access.ts
+```
+
+Same command as Increments 46/47 — unchanged, still not run. Real Production values would be pasted inline only, never written to a file, never committed, never logged. Awaiting explicit approval before this is executed.
+
+---
+
+## Increment 49 — 2026-08-25 (same day, continued): OwnerRez inventory (read-only) + `/bookings` 400 root-caused and fixed locally — NOT yet deployed or verified live
+
+**Priority shift, per explicit instruction: Notion paused (waiting on Michelle granting Teamspace Owner access); OwnerRez is now the active priority.** The `ownerrez-property-sync` worktree remains untouched throughout this increment — read-only `git log`/`git status` only, no entry, no edit, no merge.
+
+### OwnerRez read-only inventory (`main` branch only)
+
+- **Code**: `packages/integrations/src/ownerrez/{client.ts, types.ts, README.md, client.test.ts}` (real HTTP client, Basic Auth) + `packages/integrations/scripts/ownerrez-property-inventory.ts` (self-deleting, interactive-credential, read-only — still present, meaning it hasn't been successfully run to completion yet). **Nothing OwnerRez-specific exists under `apps/website/src/domains/properties/`** on `main` — confirmed by direct search, zero files.
+- **Env vars**: `OWNERREZ_USERNAME`/`OWNERREZ_API_TOKEN` (names only, `.env.example`). No hard-coded property mapping anywhere — confirmed by grep.
+- **Production credentials**: per this file's own 2026-08-21 record, confirmed present and live at that time (20 real properties). Not re-verified live this increment.
+- **Endpoints implemented**: `GET /properties`, `GET /bookings` (+ `since_utc`), `GET /guests/{id}`. No `GET /properties/{id}` detail endpoint. `receiveWebhook()` still throws `NotImplementedError`.
+- **Retrievable today**: properties/IDs/names — yes, code-complete. Reservations/bookings/guest status — code exists, but see the 400 below.
+- **OwnerRez → database sync**: **none on `main`.** `Property.ownerRezPropertyId`/`Guest.ownerRezGuestId` exist in the schema (confirmed via direct read) but are written/read nowhere outside their own definitions. The real preview/apply/create implementation exists only in the unmerged `worktree-ownerrez-property-sync` worktree (commits `a415919`/`46c4d6e`) — not re-inspected this increment, cited from this file's own prior record only.
+- **Tests**: 9 tests on `main` before this increment (now 12 — see fix below). No property-sync tests exist on `main` — those 28 live only in the worktree.
+- **Deployed vs. local**: everything on `main` matches Production (`main`'s HEAD was `da8ac61` going into this increment). The worktree's real sync implementation is neither merged nor deployed.
+
+### `/bookings` 400 — root cause found, provable without any live call
+
+Traced the exact code path: `getOwnerRezHighlights()` (`integrations.service.ts:458`) calls `client.listBookings()` with **zero arguments** → `listBookings()` (`client.ts`, pre-fix) built an **empty query string** when `sinceUtc` wasn't supplied → the actual outgoing request was a bare `GET /bookings`, no parameters at all. Confirmed via a repo-wide grep (including the untouched worktree) that **every real caller of `listBookings()` — `getOwnerRezHighlights()` and `sync("INBOUND")` — has always called it bare.** No caller anywhere has ever supplied `sinceUtc`; only the mocked unit test exercised that branch.
+
+**Confirmed against OwnerRez's own current official API documentation** (fetched live, `api.ownerreservations.com/help/v2/bookings/get-bookings`): _"Either `property_ids` or `since_utc` is required."_ A bare, parameter-less `GET /bookings` is exactly the shape OwnerRez's own docs say is invalid — a `400` by design on OwnerRez's side, not a Production-environment, credential, or API-version issue. This is consistent with this file's own earlier admission (Increment 39) that bookings were only ever "proven live in local dev," never previously confirmed against the real Production account — today may be the first time this exact bare call ever actually hit Production.
+
+### Fix implemented — minimal, additive, read-only-preserving (NOT deployed, NOT verified live)
+
+- `packages/integrations/src/ownerrez/client.ts`: added `DEFAULT_BOOKINGS_LOOKBACK_DAYS = 90` and a `defaultSinceUtc()` helper (`Date.now()` minus 90 days, `.toISOString()`). `listBookings(params?)` now always sends `since_utc` — the caller's value if supplied, `defaultSinceUtc()` otherwise. **No change to either call site** (`getOwnerRezHighlights()`, `sync("INBOUND")`) — both call `listBookings()` bare exactly as before, and both now genuinely send a valid `since_utc` by construction, centralized in one place rather than duplicated across callers. `sync()`'s doc comment updated to note `recordsProcessed` now reflects the lookback window, not all-time. **Authentication (Basic Auth/credentials) untouched. No write/mutation endpoint added — `property_ids` was not added, per instruction, since nothing here scopes by property yet.**
+- `packages/integrations/src/ownerrez/client.test.ts`: `listBookings` describe block — new tests proving (a) the default 90-day cutoff is sent when called bare (fake-timers, exact assertion), (b) the default is a well-formed ISO-8601 UTC datetime (regex + `Date` parse check), (c) the call is a plain GET with no write-shaped payload (single-arg call, same shape as `listProperties()`). `sync(INBOUND)` test updated to assert the actual request URL now contains `since_utc` (previously only asserted the mocked return value, never the request shape).
+
+### Verification this increment
+
+- Focused: `pnpm --filter @stayw/integrations exec vitest run src/ownerrez/client.test.ts` — **12/12 passing** (9 pre-existing + 3 new; the `sinceUtc`-override test was kept, not counted as new).
+- `pnpm --filter @stayw/integrations exec tsc --noEmit` — clean, 0 errors.
+- Full `@stayw/integrations` suite: **119/119 passing, 11 files**, zero regressions (up from 116).
+- `pnpm --filter website exec tsc --noEmit` — clean, 0 errors.
+- Focused `website` `integrations.service.test.ts` — **32/32 passing, unchanged** — confirms `getOwnerRezHighlights()`'s own code didn't need to change and `pickRelevantBookings()`'s sorting/filtering behavior is provably untouched (its tests mock `listBookings` at the module boundary and never needed updating).
+- Full `website` suite: **312/312 passing, 33 files**, zero regressions.
+- `git diff --check` — **exit code 0**, zero whitespace errors, whole working tree.
+- Prettier run on both changed files — both already correctly formatted, no changes needed.
+
+### Files changed this increment (2 modified)
+
+- `packages/integrations/src/ownerrez/client.ts` (+28/-4)
+- `packages/integrations/src/ownerrez/client.test.ts` (+69/-6, includes the new nested `describe("listBookings")` block)
+
+### Exact Production verification step (NOT run — awaiting approval)
+
+No standalone script exists yet for this one (unlike Notion's `verify-listings-access.ts`) — the safest read-only live check, once approved, is the same self-deleting-script pattern already used for OwnerRez's own Production credential check (Increment "2026-08-21"): a small, temporary, read-only script calling `listBookings()` bare (now with the fix, so it should send a valid `since_utc` automatically) against real Production credentials, printing only a count and never the credential values, then confirming Production's dashboard "OwnerRez" tile itself no longer shows the 400. Not built or run this increment — a decision for the next approved step.
+
+Nothing deployed, nothing pushed, nothing committed. No live OwnerRez call was made (all verification was via mocked unit tests). No database, Vercel, or n8n changes. The `ownerrez-property-sync` worktree, Notion, n8n, Nest, August, and Cielo were all untouched.
+
+---
+
+## Increment 50 — 2026-08-25 (same day, continued): confirmed Increment 49's OwnerRez fix landed intact — no correction needed
+
+User reported an "Error editing file" message after Increment 49's edit. Re-verified independently this increment (fresh `Read` + separate `grep`/`wc` via Bash, not relying on any cached tool state): `client.ts` is 175 lines, exactly one definition each of `DEFAULT_BOOKINGS_LOOKBACK_DAYS`, `defaultSinceUtc()`, and `listBookings()`, matching open/close braces throughout, no duplicate or partial fragment. **The fix fully landed correctly — no correction was necessary.**
+
+Fresh re-run this increment: focused `client.test.ts` — **12/12 passing**; `tsc --noEmit` — clean; full `@stayw/integrations` suite — **119/119 passing, 11 files**; `git diff --check` — exit 0. All three required proofs (no-arg call includes `since_utc`; explicit override still wins; default is valid ISO) already existed from Increment 49 and re-verified passing — no new tests were needed.
+
+**Files changed — unchanged from Increment 49** (2 modified, nothing new this increment): `packages/integrations/src/ownerrez/client.ts` (+28/-4), `packages/integrations/src/ownerrez/client.test.ts` (+69/-6).
+
+Nothing deployed, pushed, or committed. No live OwnerRez request made. The `ownerrez-property-sync` worktree, Notion, n8n, Nest, August, and Cielo remain untouched.
+
+---
+
+## Increment 51 — 2026-08-25 (same day, continued): FINAL verification checkpoint for the OwnerRez `/bookings` fix — approved, still not deployed
+
+**User has accepted the OwnerRez implementation as correct.** This increment is the closing verification pass before a deploy decision — no code changed.
+
+### Root cause (recap)
+
+`getOwnerRezHighlights()` and `sync("INBOUND")` both call `listBookings()` with zero arguments, producing a bare `GET /bookings` with no query parameters. OwnerRez's own current official API docs (`api.ownerreservations.com/help/v2/bookings/get-bookings`, fetched live) state: _"Either `property_ids` or `since_utc` is required."_ A repo-wide grep (worktree included) confirmed no caller anywhere has ever supplied either parameter — this is a real `400` by design on OwnerRez's side, not a Production/credential/API-version issue.
+
+### The fix (recap)
+
+`packages/integrations/src/ownerrez/client.ts`: `listBookings()` now always sends `since_utc` — the caller's value if supplied, otherwise a new `defaultSinceUtc()` helper (`DEFAULT_BOOKINGS_LOOKBACK_DAYS = 90`, `Date.now()` minus 90 days, `.toISOString()`). Neither real call site needed to change — both call `listBookings()` bare exactly as before, and both now genuinely send a valid parameter by construction.
+
+### Final verification results (this increment, all fresh)
+
+- Full `@stayw/integrations` suite: **119/119 passing, 11 files.**
+- `website`'s `integrations.service.test.ts` (covers `getOwnerRezHighlights()`): **32/32 passing, unchanged.**
+- `pnpm --filter website exec tsc --noEmit`: clean, 0 errors.
+- `git diff --check`: exit code 0, zero whitespace errors.
+
+### Confirmations
+
+- **Exact files changed by this fix — 2 modified, nothing else**: `packages/integrations/src/ownerrez/client.ts` (+28/-4), `packages/integrations/src/ownerrez/client.test.ts` (+69/-6).
+- **No write/mutation OwnerRez endpoint added** — confirmed by diffing `client.ts` for `PATCH`/`POST`/`DELETE`/any Prisma call: none introduced. `listBookings()` remains a single `GET`.
+- **No database/schema change** — confirmed `git diff --stat` against `packages/database/prisma/schema.prisma` is empty.
+- **The isolated `ownerrez-property-sync` worktree remains untouched** — confirmed via `git -C` into the worktree: clean working tree, HEAD still `46c4d6e`, unchanged since Increment 49.
+
+### Exact Production verification step, after deployment (not run yet)
+
+Once this fix is deployed to Production: reload the Production dashboard and check the "OwnerRez" tile. Expected outcomes:
+
+- **Fixed**: the tile now shows the real upcoming-bookings preview (or "0 upcoming" if genuinely none exist in the 90-day window) instead of an error.
+- **Still broken**: if it still shows a `400`, the 90-day default itself may be insufficient (e.g., if OwnerRez's real Production account has additional requirements beyond `since_utc`) — would need a fresh, separate diagnosis, not assumed to be the same root cause.
+- No standalone script is needed for this check — unlike Notion's proof, this is directly observable on the existing, already-deployed dashboard tile once the fix ships, with zero new tooling.
+
+Nothing deployed, committed, or pushed this increment. No live OwnerRez request made. Notion, n8n, Nest, August, Cielo, and the OwnerRez worktree remain untouched.
+
+---
+
+## Increment 52 — 2026-08-25 (same day, continued): dedicated OwnerRez and Notion dashboard sections — implemented, not committed/deployed
+
+Planned in formal plan mode (research via 2 parallel Explore agents + 1 Plan agent, full detail in `/Users/kristinejoyreyes/.claude-staywhile/plans/witty-chasing-bachman.md`), approved with one revision, then implemented. Purely a read-through UI/service-layer addition — no persistence, no writes, no OwnerRez/Notion client HTTP-behavior change.
+
+### What was built
+
+- **New `/ownerrez` page** (`apps/website/app/(dashboard)/ownerrez/page.tsx`) — shows real OwnerRez properties (via new `getOwnerRezProperties(actor)`) and up to 20 upcoming bookings (via `getOwnerRezHighlights(actor, 20)` — the function gained an optional `limit = 5` param, default unchanged so `dashboard.service.ts`'s existing bare call keeps working). Rendered by new presentational component `OwnerRezOverview.tsx` (`MetricStrip` + two `Table`s, modeled on `ThermostatsList.tsx` — zero write forms).
+- **New `/notion` page** (`apps/website/app/(dashboard)/notion/page.tsx`) — status/placeholder only, per the user's approved revision to the plan: does **not** call the live `getNotionListingsAccessProof()` proof on render (that's a real Notion API call — out of scope for a routine status page). Instead calls a new, non-network `getNotionIntegrationConfigStatus(actor)` (checks `NOTION_API_KEY` presence only, no HTTP call) and shows three static facts: integration/token configured; real search pending "View of Listings" access; keyword/property/region search coming next once resolved.
+- **`integrations.service.ts`**: added `getOwnerRezProperties` (wraps `OwnerrezClient.listProperties()`, same `IntegrationHighlights<T>` shape as its siblings, uncapped), `getNotionIntegrationConfigStatus` (no network call, see above), and the `limit` param on `getOwnerRezHighlights`. Added `type OwnerrezProperty` to the existing import line.
+- **`nav-config.ts`**: added `/ownerrez` and `/notion` to the "Operations" section, right after Reservations — reused existing `calendar`/`plug` `NavIconKey`s, no `packages/ui` change needed.
+- **`DashboardSummary.tsx`**: both Home tiles (Notion, OwnerRez) gained a `SectionHeader action={<Link>View all</Link>}` to their new dedicated page (matching the existing "Recent Activity" precedent exactly) and now render `.slice(0, 3)` instead of the full capped-at-5 list — a genuinely lighter Home tile without touching `dashboard.service.ts`.
+- **Permissions**: both new pages/functions reuse `integrations:read` — zero RBAC/seed changes, same roles (`admin`/`ops_manager`/`read_only`) see this data identically to how they already do on Home today.
+
+### Verification
+
+- `pnpm --filter website exec tsc --noEmit` — clean, 0 errors.
+- Focused `integrations.service.test.ts` — **39/39 passing** (32 pre-existing + 7 new: `getOwnerRezProperties` not-configured/success/error/denied, `getNotionIntegrationConfigStatus` not-configured/configured-no-network-call/denied).
+- Full `website` suite — **319/319 passing, 33 files**, zero regressions.
+- `next build` — **failed, confirmed unrelated to this work**: `apps/website/env.ts`'s required `N8N_BASE_URL`/`N8N_WEBHOOK_SHARED_SECRET`/`N8N_INBOUND_WEBHOOK_SHARED_SECRET` schema rejects this local `.env.local`'s pre-existing (malformed/incomplete) n8n values, failing to collect page data for `/api/webhooks/n8n` — nothing touched by this increment relates to n8n or that route. Per the explicit instruction not to touch n8n, no workaround was attempted (not even a temporary placeholder-value build, since that file also holds a real local n8n credential). Typecheck + full test suite are the two checks the approved plan itself named as sufficient for this class of change (thin service wrappers, no new business logic).
+- Manual browser click-through: **not performed** — no browser tool connected this session (consistent with earlier findings this same session).
+
+### Files changed (5 modified, 3 new)
+
+- NEW: `apps/website/app/(dashboard)/ownerrez/page.tsx`, `apps/website/app/(dashboard)/notion/page.tsx`, `apps/website/src/domains/integrations/components/OwnerRezOverview.tsx`
+- MODIFIED: `apps/website/src/domains/integrations/services/integrations.service.ts`, `integrations.service.test.ts`, `apps/website/src/platform/layout/nav-config.ts`, `apps/website/src/domains/dashboard/components/DashboardSummary.tsx`
+
+### Explicitly not done / untouched
+
+No Notion search implemented (placeholder only, per the pause). No persistence/sync of OwnerRez data into the database. `packages/integrations/src/ownerrez/client.ts`/`notion/client.ts` untouched beyond what already shipped (the `since_utc` fix, `queryDataSource()`). `packages/database/prisma/schema.prisma` untouched. The `ownerrez-property-sync` worktree, n8n, Nest, August, and Cielo untouched. Nothing committed, pushed, or deployed this increment.
+
+---
+
+## Increment 53 — 2026-08-25 (same day, continued): AUTHORITATIVE PRODUCTION CHECKPOINT — OwnerRez `/bookings` fix live, Notion access fully verified and read-only capability shipped, both dedicated dashboard sections deployed
+
+**This section is the authoritative current-state summary for OwnerRez, Notion, and the dashboard-sections work as of 2026-08-25.** History above is left intact — nothing rewritten or deleted. Where an older entry conflicts, this section governs.
+
+### OwnerRez
+
+- **Production `/bookings` 400 root cause, confirmed**: `getOwnerRezHighlights()`/`sync("INBOUND")` called `OwnerrezClient.listBookings()` bare (zero query params) — a plain `GET /bookings`. OwnerRez's own official API docs require `property_ids` or `since_utc`; a bare call is invalid by OwnerRez's own design, not a Production/credential/version issue.
+- **Fixed**: `listBookings()` now defaults to a rolling 90-day-back `since_utc` cutoff whenever the caller doesn't supply one — centralized in the client, so neither real call site needed to change.
+- **Commit `46c6903`** — "Fix OwnerRez bookings request with required since_utc." **Pushed and deployed; Vercel confirmed Ready.**
+- **Dedicated `/ownerrez` dashboard section added in commit `2e1f1bd`** — live properties + up to 20 upcoming bookings, via new `getOwnerRezProperties()` and an optional `limit` param on `getOwnerRezHighlights()`.
+- **OwnerRez remains strictly read-only** — no database persistence, no sync, no write path added by any of this work. OwnerRez stays the source of truth for the property portfolio; StayWhile's database is untouched by these changes.
+
+### Notion — access now fully verified
+
+- The StayWhile Dashboard's internal Notion integration is configured **read-only by capability**: can read content; cannot update content; cannot insert content.
+- **Root cause of the earlier access gap, resolved**: the user was originally only a Teamspace Member (not Owner) in the main StayAWhileWithUs teamspace — insufficient to grant the integration database-level access. This has been resolved; the user is now Workspace Owner.
+- **"View of Listings" now shows the StayWhile Dashboard integration under Connections** — the missing sharing step (flagged in Increments 44/45) is complete.
+- **Fresh token authentication proven**: `/users/me` → `authenticated: yes`.
+- **Direct read-only data source verification proven** (via the approved `verify-listings-access.ts` script, run against real Production credentials): `configured: yes`, `read: success`, `result count: 1`, `first title: Moonlit Cove`.
+- **Therefore, fully verified as of this increment**: `NOTION_API_KEY`, `NOTION_LISTINGS_DATA_SOURCE_ID`, database sharing, and real read access are all confirmed working — not merely "configured," actually proven live.
+- **No Notion content was created, edited, deleted, moved, archived, or otherwise modified** at any point in this entire investigation, from Increment 40 through this one.
+
+### Notion read-only API implementation — shipped
+
+- Added `NotionClient.queryDataSource(dataSourceId, pageSize)` — one `POST /v1/data_sources/{id}/query` call, `Notion-Version: 2026-03-11` sent as a **per-request header override only**. The verification script uses `page_size: 1`.
+- **The client's existing default `Notion-Version: 2022-06-28` behavior is unchanged for every other method** (`/users/me`, `/search`-based `sync()`/`listRecentlyEdited()`) — proven at the fetch level (Increment 47's `notion-version.test.ts`), not just asserted.
+- **Commit `dfe3985`** — "Add read-only Notion data source query support." **Pushed; Vercel Production deployment confirmed Ready.**
+
+### Dedicated dashboard sections
+
+- **Commit `2e1f1bd`** — "Add dedicated OwnerRez and Notion dashboard sections."
+- **Commit `376f643`** — "Update Notion page after access verification."
+- `/ownerrez` and `/notion` are now both part of `main`, deployed.
+- Home dashboard keeps lighter (3-item) summary tiles for both, each with a "View all" link into its dedicated section.
+- `/notion` now shows: **Notion connection: Connected**; **View of Listings: Read access verified**; **Property/keyword/region search: Next feature.**
+
+### Deployment issue — root-caused and resolved
+
+- Vercel's clean build of `376f643` initially failed: `integrations.service.ts` referenced `NotionClient.queryDataSource()`, but the Notion client files defining that method were still only local/uncommitted (confirmed via direct diff against `origin/main` and an isolated clean-build reproduction in a temporary worktree — exact same error, same line, reproduced before any fix was applied).
+- Exact clean-build error: `Property 'queryDataSource' does not exist on type 'NotionClient'.`
+- The required Notion read-only client/type/test/docs/script files were committed in `dfe3985` (only those 6 files — nothing else staged).
+- **Production now builds successfully and shows Ready**, confirmed via both an isolated pre-commit clean-build reproduction (overlaying the exact staged content onto a fresh worktree) and the real Vercel deployment afterward.
+
+### Current next priorities
+
+1. Production click-through verification of `/ownerrez` and `/notion` (steps already handed to the user; results not yet reported back as of this increment).
+2. Build real Notion keyword/property/region search against "View of Listings" — strictly read-only, not started yet.
+3. Then return to the isolated `ownerrez-property-sync` worktree for property source-of-truth work (still unmerged, still at commit `46c4d6e`, untouched by everything in this increment).
+4. n8n, Nest, August, and Cielo remain untouched by this entire sequence.
+
+### Local credential hygiene
+
+**Record, not yet acted on by this session**: the temporary terminal copies of `NOTION_API_KEY` and `NOTION_LISTINGS_DATA_SOURCE_ID` used for the manual local verification run should be unset from the shell/environment after verification — they were only ever needed for that one-off script invocation. The real values remain correctly set in Vercel Production only; nothing was written to any local file.
+
+---
+
+## Increment 54 — 2026-08-26: OwnerRez 20-property discrepancy root-caused via live Production inspection and fixed (Part 1 of 2); Notion "View of Listings" schema discovered read-only; Notion search deliberately deferred to a separate rollout
+
+### Root cause — proven via live, read-only Production calls (not inferred)
+
+A direct, read-only inspection against real OwnerRez Production credentials (three raw `GET` calls, counts/metadata only, no records or credentials printed) confirmed **two simultaneous, independent defects**, not one:
+
+- `GET /properties?active=true` → `count: 38`, `limit: 20`, `next_page_url` **non-null**.
+- `GET /properties?active=false` → `count: 20`, `limit: 20`, `next_page_url: null` (complete in one page).
+- Bare `GET /properties` (the code's prior behavior) → identical to `active=true` — confirming OwnerRez's documented `active` default (`true` when omitted, per its live OpenAPI spec) was silently excluding all 20 inactive properties.
+- `GET /bookings?since_utc=<90d>` (the code's prior behavior) → `limit: 20`, `next_page_url` **non-null** — the 90-day booking window is _currently_ being silently truncated in Production too, not just a theoretical risk.
+
+**Verified truth: OwnerRez's real portfolio is 58 properties (38 active + 20 inactive).** The dashboard's "20 Total / 20 Active" was page 1 of the paginated active-only result — both the undocumented `active=true` default and unhandled pagination were live, simultaneous causes.
+
+**Also found while implementing the fix**: `OwnerrezPage<T>` had the wrong field name (`next_page` — OwnerRez's real field, confirmed via its OpenAPI spec, is `next_page_url`). Pagination could never have been followed under the old name even if the calling code had tried.
+
+### Fix implemented — `packages/integrations/src/ownerrez/` (client.ts, types.ts, client.test.ts) — NOT committed, NOT deployed
+
+- `OwnerrezPage<T>` corrected to `next_page_url` (+ typed `count`/`limit`/`offset`).
+- New private `OwnerrezClient.fetchAllPages<T>()`: follows `next_page_url` to completion, with **two independent safety mechanisms** — a hard 50-page cap, and rejection of any pagination URL already seen in the same call (cycle detection) — never trusts a single guard alone.
+- New `resolvePaginationPath()`: validates every `next_page_url` (relative or absolute) resolves to `https://api.ownerreservations.com` **and** stays within the endpoint family being paginated (`/v2/properties` pagination can't wander into `/v2/bookings` or a foreign host) before it is ever fetched — never blindly follows an arbitrary URL a response happens to contain.
+- `listProperties()`: now fetches `active=true` and `active=false` explicitly (each fully paginated), merges by `id`, dedupes defensively.
+- `listBookings()`: now fully paginated via the same helper. `sync("INBOUND")` inherits this automatically (calls `listBookings()` internally) — no separate change needed there.
+- Public method signatures unchanged (`Promise<OwnerrezProperty[]>` / `Promise<OwnerrezBooking[]>`) — `integrations.service.ts`, `dashboard.service.ts`, and `/ownerrez/page.tsx` required **zero** changes.
+- Notion, n8n, Nest, August, Cielo, and the `ownerrez-property-sync` worktree were not touched. No database write, no staging/commit/push/deploy.
+
+### Verification, forced fresh this increment
+
+- `packages/integrations/src/ownerrez/client.test.ts`: **24/24 passing** (14 new tests covering active+inactive merge/dedupe, multi-page pagination for both properties and bookings, relative and absolute `next_page_url` resolution, foreign-host rejection, wrong-endpoint-path rejection, repeated-URL rejection, the 50-page cap, and a check that every request stays a bare GET with no write-shaped call introduced).
+- `@stayw/integrations` full suite: **131/131 passing** (0 regressions across Notion/August/Cielo/Nest/Asana/Slack/core).
+- `@stayw/integrations` `tsc --noEmit`: clean (one implicit-`any` circularity found and fixed with an explicit type annotation during this pass).
+- Website tests touching OwnerRez (`dashboard.service.test.ts`, `integrations.service.test.ts`): **49/49 passing**, unchanged — proves the fix is fully transparent to every caller.
+- Website `tsc --noEmit`: clean.
+- `git diff --check` on the changed files: clean (no whitespace errors).
+- **Production build**: attempted, **failed for a reason fully unrelated to this change** — `apps/website/app/api/webhooks/n8n/route.ts`'s env validation fails locally because `.env.local` is missing `N8N_WEBHOOK_SHARED_SECRET`/`N8N_INBOUND_WEBHOOK_SHARED_SECRET` (only `N8N_BASE_URL` is set). This is a pre-existing local-environment gap in the n8n webhook route, not touched or introduced by this session — confirmed by isolating the failure message (pure env-schema validation, zero mention of anything in `ownerrez/`) and by every OwnerRez-relevant test/typecheck passing clean. n8n remains explicitly out of scope this increment; the gap was not worked around or fixed.
+
+### Files changed this increment (3 modified, all in `packages/integrations/src/ownerrez/`)
+
+`client.ts`, `types.ts`, `client.test.ts`. Nothing else.
+
+### Expected Production result once deployed (not yet deployed)
+
+- `/ownerrez`: Total Properties = **58**, Active Properties = **38**, and the 20 previously-invisible inactive properties become visible in the table (an "Inactive" count isn't a separate metric in the current UI — `Total − Active` will equal 20 once this ships, since the UI's existing `activeProperties` filter already computes correctly off whatever array it's given).
+- `/bookings`-backed data (dashboard highlights + `/ownerrez`'s "Upcoming bookings"): the 90-day window will return its full, real count instead of being silently capped at 20 raw items before any upcoming/recency filtering is applied.
+
+### Notion — schema discovered this increment (read-only, one live call), search deliberately NOT implemented
+
+Live `GET /v1/data_sources/{NOTION_LISTINGS_DATA_SOURCE_ID}` (`Notion-Version: 2026-03-11`) confirmed "View of Listings"'s real schema: `Name` (title), `Address` (rich_text), `Number of Guests`/`Bathrooms`/`Bedrooms` (number), `Direct booking`/`Airbnb Link`/`VRBO Link` (rich_text), `Google Drive Photos`/`Guidebook` (url). **No `Region` property exists** — confirmed, not assumed. Per explicit direction this increment, Notion search implementation (real listing display, name/keyword search, app-side region filtering via the existing 38-property meeting reference plus the `BOP`/`Miramar Bliss 2` aliases — both already documented above as reference-only, human-confirmed-matching data, explicitly **not** covering the full 58-property OwnerRez portfolio, so unmatched properties must render as "Unknown / Unassigned," never guessed) is fully designed but **deliberately deferred to a separate rollout, after the OwnerRez fix above is deployed and Production-verified.** Full design (exact files, API calls, test plan) is recorded in this session's chat transcript, not yet transcribed into this file since it isn't being built yet.
+
+### Current next priorities (superseded by Increment 55 below)
+
+1. ~~User to review and approve this increment's OwnerRez diff (still uncommitted, undeployed).~~ Done — see Increment 55.
+2. ~~Commit, push, deploy; then Production-verify.~~ Done — see Increment 55.
+3. Then, as a separate rollout: implement Notion real listing display + name/keyword/region search per the design referenced above.
+4. Then return to the isolated `ownerrez-property-sync` worktree (still unmerged, still at commit `46c4d6e`) — now working from a trustworthy property count.
+5. n8n, Nest, August, and Cielo remain untouched.
+
+---
+
+## Increment 55 — 2026-08-26 (continued): OwnerRez pagination fix committed, pushed, and Production-verified — COMPLETE
+
+**Commit `e67871e802a1c1c1c74b4ec693929581b66a2a22`** — "Fix OwnerRez property and booking pagination." Contains exactly 3 files: `packages/integrations/src/ownerrez/client.ts`, `types.ts`, `client.test.ts` (the Increment 54 diff, reformatted only by the repo's pre-commit `prettier` hook — no logic change, re-verified 24/24 passing post-commit). Pushed to `origin/main` (`dfe3985..e67871e`), confirmed via `git fetch` that `origin/main` moved to this exact SHA. No other files were staged or committed — HANDOFF.md itself, the users-domain/auth/identity work, and the `packages/database/*.mjs` diagnostic scripts all remain exactly as they were, untouched by this commit.
+
+**Production verification — confirmed by the user directly on the deployed `/ownerrez` page, after this commit reached Production via Vercel's auto-deploy:**
+
+| Metric              | Before this fix        | After this fix (Production, verified) |
+| ------------------- | ---------------------- | ------------------------------------- |
+| Total Properties    | 20                     | **58**                                |
+| Active Properties   | 20                     | **38**                                |
+| Inactive Properties | 0 (not visible at all) | **20** (derived: Total − Active)      |
+| Upcoming Bookings   | 15                     | **20**                                |
+
+This matches the root cause proven in Increment 54's live inspection exactly: the true portfolio is 38 active + 20 inactive = 58, and the prior code's undocumented `active=true` default plus unhandled pagination were both hiding real data. **OwnerRez full property + booking pagination is now COMPLETE and PRODUCTION-VERIFIED — no further OwnerRez code changes planned or needed at this time.**
+
+### Next priority — Notion real listings + search (separate rollout, not started)
+
+Per the standing plan (Increment 54's "Notion — schema discovered..." section, and this session's chat transcript for full file/test/API-call detail): implement real listing display on `/notion`, replacing the current status-only placeholder, with:
+
+- Property/name search against the confirmed `Name` (title) field.
+- Keyword search against `Name`, `Address`, and `Direct booking` (rich_text) — explicitly excluding the link-typed fields (`Airbnb Link`, `VRBO Link`, `Google Drive Photos`, `Guidebook`) from keyword matching.
+- App-side region filtering using the existing 38-property meeting reference table (§"Meeting reference — Michelle's 38-property regional structure" above) plus the `BOP → Bird of Paradise` / `Miramar Bliss 2 → Miramar Bliss` aliases — explicitly a **known-subset** mapping, not a match for the full 58-property OwnerRez portfolio just confirmed above; any listing whose name isn't in that table must render as **"Unknown / Unassigned,"** never guessed or inferred.
+- Full read-only Notion data-source fetch (paginated via `has_more`/`next_cursor`), no writes, no database persistence, no changes to Notion structure.
+
+Not started. Should reuse the same pagination-safety discipline just proven on OwnerRez (cycle detection + hard page cap) for Notion's own cursor pagination.
+
+### Updated next priorities, in order
+
+1. Implement Notion real listing display + name/keyword/region search (design already agreed, not yet built).
+2. Deploy and Production-verify the Notion feature.
+3. Return to the isolated `ownerrez-property-sync` worktree (still unmerged, still at commit `46c4d6e`) — now working from a trustworthy, Production-verified property count.
+4. n8n, Nest, August, and Cielo remain untouched.
+
+---
+
+## Increment 56 — 2026-08-26 (continued): observed Notion display-name variant recorded; Notion real listing display + search implementation begins
+
+**Observed Notion display-name variant, recorded per explicit user confirmation before any use in code (2026-08-26)**: the user has observed the literal string **`BOP (Birds of Paradise)`** as a real display name in Production Notion — not previously documented anywhere in this file. This is recorded here, before implementation, as a third known-safe match for the same property the existing reference table calls "Bird of Paradise" (Destin region) and the existing alias table already covers under the shorter `BOP`. Per the standing mapping rule (no inference from similarity, ever), this exact string — along with the plain `Birds of Paradise` variant — is added to the app-side region-matching alias/variant table as **exact, literal, case/whitespace-normalized matches only**, alongside the two aliases already documented above (`BOP → Bird of Paradise`, `Miramar Bliss 2 → Miramar Bliss`). No fuzzy or substring matching is introduced. No Notion or OwnerRez record is renamed or modified by this.
+
+Implementation of the approved Notion listing-display + search plan (property/name search, keyword search over Name/Address/non-URL Direct booking, app-side region filtering with "Unknown / Unassigned" fallback, full cursor-paginated retrieval, strictly read-only, no raw Notion property objects reaching the Client Component) begins below this entry.
+
+---
+
+## Increment 57 — 2026-08-26 (continued): Notion listings + search — COMPLETE, committed, deployed, and Production-verified
+
+**Commit `0fa2ad0388a7e6a9c95069e0a412e666e6362e82`** — "Add read-only Notion listings search." 17 files (Notion client pagination/mapping + tests, app-side region config/matching + tests, URL-safety utility + tests, `NotionListingsSearch` component + tests, service-layer `listNotionListings()` + tests, `/notion` page wiring, plus the `@testing-library/react`/`jsdom` dev-dependency additions and matching `vitest.config.mts`/`pnpm-lock.yaml` changes this required — the first React component test in this codebase). `HANDOFF.md` was deliberately excluded from this commit (it carries a large body of unrelated accumulated documentation not yet committed) and remains uncommitted, tracked separately. Pushed to `origin/main` (`e67871e..0fa2ad0`), confirmed via `git fetch` that `origin/main` moved to this exact SHA.
+
+**Production verification — confirmed by the user directly on the deployed `/notion` page, after this commit reached Production via Vercel's auto-deploy:**
+
+- "Notion connection: Connected" and "View of Listings: Read access verified" — both derived from the real live `listNotionListings()` result on this page load, not a hardcoded status string.
+- **35 of 35 real Notion listings loaded** — full pagination confirmed working against the real data source (no silent truncation).
+- Real listing fields (name, address, bedrooms, bathrooms, guests, direct booking, Airbnb/VRBO/photos/guidebook links) render correctly.
+- **Region mapping confirmed working**: e.g. Moonlit Cove → SRQ (exact match against the 38-property reference table).
+- **Conservative fallback confirmed working**: e.g. Surfside Solace → "Unknown / Unassigned" in Production, despite "Surfside Solace" being a name listed in the Destin region of the reference table. The exact Notion name did not match the current canonical/alias mapping; the cause has not yet been investigated. **Flagged, not fixed**: if the real Notion display name for this listing is later confirmed by a human, it can be added as an explicit alias/variant the same way `BOP (Birds of Paradise)` was — never inferred or guessed at. Until then, "Unknown / Unassigned" is the correct, safe result, not a bug.
+- Name search, keyword search, region filter, and Reset are all present and working; the page remains strictly read-only.
+
+**Standing rule reaffirmed, unchanged**: unknown/unmatched regions must always resolve to "Unknown / Unassigned" — never inferred from address, property name similarity, OwnerRez data, or a nearby mapped property. The Surfside Solace observation above is a live proof of this rule working correctly, not a reason to relax it.
+
+**Explicit note on the two source-system counts — do not conflate them**: Notion's "View of Listings" now confirmed at **35 listings**; OwnerRez confirmed at **58 total properties** (38 active + 20 inactive, per Increment 55). **These are separate source-system counts and must not be assumed to reconcile** — nothing in this project has yet established that every OwnerRez property should have a corresponding Notion listing, or vice versa. Any future reconciliation work between the two must be based on an explicit, human-confirmed mapping decision, not an assumption that the counts should match.
+
+**No application code changed this increment** — this entry is a documentation-only Production-verification checkpoint.
+
+### Updated next priorities, in order (supersedes Increment 55/56's list)
+
+1. ~~Implement Notion real listing display + name/keyword/region search.~~ Done — see this increment.
+2. ~~Deploy and Production-verify the Notion feature.~~ Done — see this increment.
+3. **Return to the isolated `ownerrez-property-sync` worktree** (still unmerged, still at commit `46c4d6e`) — now working from both a trustworthy, Production-verified OwnerRez property count (58) and a trustworthy, Production-verified Notion listing count (35), tracked as separate systems per the note above.
+4. n8n, Nest, August, and Cielo remain untouched.
+
+---
+
+## Increment 58 — 2026-08-26 (continued): OwnerRez read-only match report (narrowed Phase A) shipped, Production-verified; read-only candidate-mapping investigation completed for the 7 known StayWhile properties — nothing linked
+
+### Phase A — COMPLETE, committed, merged, deployed, Production-verified
+
+Investigation this session found the existing `ownerrez-property-sync` worktree (`46c4d6e`) carried real write-capable code (`confirmOwnerRezPropertyMatch`/`createPropertyFromOwnerRez`/`applyOwnerRezPropertyChanges`, a schema migration, `getProperty()`, and the full write-capable UI/actions) mixed into the same file as its read-only match report — an unsafe unit to bring toward Production as-is. Rather than cherry-pick or partially extract from that branch, a **fresh branch (`ownerrez-match-report-preview`) was cut directly from `main`** and a narrower, hand-authored, strictly read-only implementation was built: `matchOwnerRezProperties()` (a new, dedicated service — `ownerrez-match-report.service.ts` — using a narrow Prisma `select` of exactly `id`/`name`/`internalCode`/`ownerRezPropertyId`, never the full `Property` row), a read-only `OwnerRezMatchReportPreview` component, and a new `/properties/ownerrez` page — with source-level and rendered-DOM tests proving zero write-capable imports, forms, buttons, or dialogs anywhere in the route.
+
+- **Commit `93462dfc8dafda796948f0775ee42fb9841c2dd7`** — "Add read-only OwnerRez property match report." 8 files, verified clean (typecheck, full test suites, `git diff --check`, and a clean production build using a temporary local-only fake `.env.local`, deleted immediately after each check).
+- Fast-forward merged into `main` (`git merge --ff-only`) — no merge commit, linear history, confirmed zero effect on any unrelated dirty/untracked file in the primary checkout.
+- Pushed; deployed via Vercel auto-deploy; **Production-verified directly by the user** on the live `/properties/ownerrez` page.
+- The old `ownerrez-property-sync` worktree/branch was **not** used, touched, rebased, or merged for this — it remains exactly as it was (`46c4d6e`, isolated, unmerged), still carrying real write-capable code not yet approved for Production.
+
+### Phase A — confirmed Production truth (live, read-only, verified by the user)
+
+- OwnerRez: **58 total** (38 active, 20 inactive) — matches Increment 55's earlier live pagination fix verification.
+- StayWhile: **7 properties**.
+- Already linked: **0**.
+- Automatic proposed exact-`internal_code` matches: **0** — expected and correct, not a bug: OwnerRez's `internal_code` field holds OwnerRez's own short names (e.g. "Aqua Palm"), not StayWhile's `internalCode` convention (e.g. `AQUA-PALM`), so exact-code auto-proposal structurally can't fire yet regardless of how obvious a name match looks to a human.
+- Unmatched OwnerRez: **58**. Unmatched StayWhile: **7**.
+- **Phase A verified successfully and remains strictly read-only** — no Confirm/Create/Apply control exists anywhere in the deployed code (confirmed both by direct grep of the full commit diff and by dedicated tests), no migration was applied, no write of any kind occurred.
+
+### Read-only candidate-mapping investigation — completed this session, nothing linked
+
+Using one live, read-only `GET /properties` call (both `active=true`/`active=false`, fully paginated — the same mechanism already proven in Phase A) against the real 58-property OwnerRez portfolio, each of the 7 known StayWhile property names was checked for plausible OwnerRez candidates. **Name/internal_code similarity was used only as a human-review clue — never as an automatic matching rule, and nothing was linked, written, or applied.**
+
+**Six verified-unique candidates** — each checked against the _entire_ 58-property set (not just accepted on first look) and found to have no competing entry anywhere in the dataset:
+
+| StayWhile (internalCode)      | OwnerRez ID | OwnerRez name | Status |
+| ----------------------------- | ----------- | ------------- | ------ |
+| Aqua Palm (`AQUA-PALM`)       | 386471      | Aqua Palm     | Active |
+| Bahamas (`BAHAMAS`)           | 377839      | The Bahamas   | Active |
+| Bonjour AMI (`BONJOUR-AMI`)   | 432997      | Bonjour AMI   | Active |
+| Island Tides (`ISLAND-TIDES`) | 355021      | Island Tides  | Active |
+| Ocean Pearl (`OCEAN-PEARL`)   | 431354      | Ocean Pearl   | Active |
+| Sandy Nudes (`SANDY-NUDES`)   | 355024      | Sandy Nudes   | Active |
+
+Island Tides has one near-neighbor in the full dataset — **Island SOS (355022, Active)** — sharing the word "Island." Inspected directly: the second word ("SOS" vs. "Tides") is unmistakably different, confirming this is a distinct, unrelated property, not a competing candidate. All six are **ready to present for explicit human confirmation** — none have been linked.
+
+**Miramar Bliss (`MIRAMAR-BLISS`) — unresolved, genuinely ambiguous, all three candidates preserved, none preferred:**
+
+| OwnerRez ID | OwnerRez name    | internal_code    | Status   |
+| ----------- | ---------------- | ---------------- | -------- |
+| 389173      | Miramar Bliss    | Miramar Bliss    | Inactive |
+| 410682      | Miramar Bliss II | Miramar Bliss II | Inactive |
+| 480401      | Miramar-Bliss    | Miramar Bliss 2  | Active   |
+
+**No candidate is designated preferred or correct.** Active status (480401) and the existing Notion-side alias (`Miramar Bliss 2 → Miramar Bliss`, documented in the region-reference section above) are recorded here only as **clues for a human to weigh — not proof, and not a tiebreaker rule.** Whether `389173`/`480401` represent the same physical property at different points in time, and whether `410682` ("II") is a genuinely separate second unit, remains an open question requiring stronger authoritative evidence than name similarity.
+
+**StayWhile Production database credentials were not available in this local environment** (`.env.local`'s `DATABASE_URL`/`DIRECT_URL` point to a local dev database, not Production) — the 7 real `internalCode` values above were provided directly by the user from the deployed Production dashboard, not queried by this session. No Production database credentials were requested or configured as part of this investigation.
+
+**Nothing was linked, written, or applied anywhere in this investigation** — no database write, no OwnerRez write, no code change, no migration.
+
+### Current next priorities, in order (supersedes Increment 57's list)
+
+1. **Present the six verified-unique OwnerRez candidates (Aqua Palm, Bahamas, Bonjour AMI, Island Tides, Ocean Pearl, Sandy Nudes) for explicit human confirmation.**
+2. **Do not write or link anything until those mappings are explicitly approved**, one at a time.
+3. **Investigate Miramar Bliss separately, using stronger authoritative evidence than name similarity** — do not infer or default to any of the three candidates.
+4. **After human approval of the six**, design a narrow Phase B: a one-at-a-time "Confirm Link" write capability, built and verified inside the isolated `ownerrez-property-sync` worktree — kept isolated, **not merged or activated** until separately approved.
+5. n8n, Nest, August, and Cielo remain untouched.
+
+**Standing safety rule reaffirmed**: candidate identification is not link approval. No automatic name-based matching, no fuzzy-matching auto-decisions, no bulk linking, no writes of any kind until a human explicitly confirms each individual mapping.
