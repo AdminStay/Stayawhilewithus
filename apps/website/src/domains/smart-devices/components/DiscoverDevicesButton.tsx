@@ -43,6 +43,9 @@ export function DiscoverDevicesButton({
         <p className="mt-1 text-xs text-success-600">
           Discovered {state.discovered} device
           {state.discovered === 1 ? "" : "s"}.
+          {state.enriched != null && ` ${state.enriched} enriched.`}
+          {!!state.detailFailures &&
+            ` ${state.detailFailures} detail lookup${state.detailFailures === 1 ? "" : "s"} failed.`}
         </p>
       )}
       {state.status === "failure" && (

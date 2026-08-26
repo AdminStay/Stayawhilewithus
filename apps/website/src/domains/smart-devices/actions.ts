@@ -47,7 +47,12 @@ export type NestCommandActionState = { status: "idle" } | NestCommandResult;
  */
 export type DiscoverActionState =
   | { status: "idle" }
-  | { status: "success"; discovered: number }
+  | {
+      status: "success";
+      discovered: number;
+      enriched?: number;
+      detailFailures?: number;
+    }
   | { status: "failure"; error: string };
 
 /**
@@ -56,6 +61,10 @@ export type DiscoverActionState =
  * ProviderDevice upsert logic they call are completely unchanged by this;
  * this is purely the "catch and report" wrapper so a thrown error becomes
  * a renderable state instead of crashing to the page-level error boundary.
+ * enriched/detailFailures are passed through only when the discover call
+ * actually returned them (August's two-phase discovery) — Nest's discovery
+ * never sets them, so they stay undefined and the button renders its plain
+ * discovered-count message unchanged.
  */
 async function runDiscovery(
   discover: (actor: AuthContext) => Promise<DiscoverySyncResult>,
@@ -64,7 +73,12 @@ async function runDiscovery(
     const actor = await getCurrentUser();
     const result = await discover(actor);
     revalidatePath(DEVICES_PAGE_PATH);
-    return { status: "success", discovered: result.discovered };
+    return {
+      status: "success",
+      discovered: result.discovered,
+      enriched: result.enriched,
+      detailFailures: result.detailFailures,
+    };
   } catch (err) {
     return {
       status: "failure",

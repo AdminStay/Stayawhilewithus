@@ -68,8 +68,30 @@ describe("discoverAugustDevicesAction", () => {
 
     const result = await discoverAugustDevicesAction(IDLE);
 
-    expect(result).toEqual({ status: "success", discovered: 43 });
+    expect(result).toEqual({
+      status: "success",
+      discovered: 43,
+      enriched: undefined,
+      detailFailures: undefined,
+    });
     expect(mockRevalidatePath).toHaveBeenCalledWith("/integrations/devices");
+  });
+
+  it("passes through enriched/detailFailures from the two-phase discovery result", async () => {
+    mockDiscoverAugustDevices.mockResolvedValueOnce({
+      discovered: 43,
+      enriched: 41,
+      detailFailures: 2,
+    });
+
+    const result = await discoverAugustDevicesAction(IDLE);
+
+    expect(result).toEqual({
+      status: "success",
+      discovered: 43,
+      enriched: 41,
+      detailFailures: 2,
+    });
   });
 
   it("returns a failure state instead of throwing when discovery fails (e.g. RBAC denial), and does not revalidate", async () => {

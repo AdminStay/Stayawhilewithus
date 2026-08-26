@@ -30,6 +30,18 @@ import { recordAudit } from "@/platform/audit/record-audit";
 
 export interface DiscoverySyncResult {
   discovered: number;
+  /** August-only today — Nest's listDevices() already returns full detail in one call, so it has nothing to separately "enrich." Omitted (not zero) when not applicable. */
+  enriched?: number;
+  detailFailures?: number;
+}
+
+/** Splits an array into consecutive chunks of at most `size` items each — used to bound how many August detail requests run concurrently. */
+function chunk<T>(items: readonly T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
 }
 
 /**
@@ -214,21 +226,50 @@ export async function discoverNestDevices(
 }
 
 /**
- * August equivalent of discoverNestDevices() above — same discovery-only
- * contract: upserts every lock the real August API reports into the
- * ProviderDevice staging table, keyed on [integrationConnectionId,
- * externalDeviceId] (the lock's own id — never houseId, so two locks that
- * share a house, e.g. "Island Tides - Front Door" and "Island Tides - Man
- * Cave", persist as two independent rows, each independently mappable).
- * NEVER touches propertyId/enabled/mappedAt/mappedByUserId/smartDeviceId —
- * every discovered lock starts life Unmapped. This is purely additive
+ * At most this many August detail requests are ever in flight at once.
+ * Chosen specifically to avoid the resource-contention pattern that
+ * previously caused Production P2024 pool-timeout errors and a 300s
+ * function timeout: 43 fully sequential HTTP+DB round trips kept a single
+ * long-running invocation (and its one permitted DB connection, per
+ * Production's required connection_limit=1 pgbouncer setting) alive far
+ * longer than any normal request, starving other concurrent requests'
+ * connections. 4-6 is small enough to stay well clear of August's own
+ * unofficial API, while cutting total wall-clock time by roughly this
+ * factor compared to one-at-a-time.
+ */
+const AUGUST_DETAIL_CONCURRENCY = 5;
+
+/**
+ * August equivalent of discoverNestDevices() above, but split into two
+ * phases specifically to avoid the resource-contention bug fixed here (see
+ * AUGUST_DETAIL_CONCURRENCY's comment):
+ *
+ *   Phase 1 (fast, required): one listLocks() call, then one batched
+ *   prisma.$transaction([...]) upserting every lock's id/name/houseId —
+ *   the identity fields listLocks() already provides, sufficient for the
+ *   device to appear Unmapped and manually mappable. No per-lock detail
+ *   call is needed to reach this state.
+ *
+ *   Phase 2 (best-effort enrichment): battery/connectivity/lockState
+ *   require a separate getLockDetail() call per lock (listLocks() doesn't
+ *   return them) — these run in bounded-concurrency batches
+ *   (AUGUST_DETAIL_CONCURRENCY at a time via Promise.allSettled), and each
+ *   batch's successful results are written in one further batched
+ *   $transaction — never one write per lock, and never a network call
+ *   issued from inside a $transaction (each batch's HTTP calls fully
+ *   settle first). A lock whose detail request fails simply keeps its
+ *   Phase 1 base fields — it does not fail its batch-mates or the run.
+ *
+ * Identity/upsert semantics are unchanged from before: keyed on
+ * [integrationConnectionId, externalDeviceId] (the lock's own id, never
+ * houseId — two locks sharing a house, e.g. "Island Tides - Front Door"
+ * and "Island Tides - Man Cave", persist as two independent rows, each
+ * independently mappable). NEVER touches propertyId/enabled/mappedAt/
+ * mappedByUserId/smartDeviceId — every discovered lock starts life
+ * Unmapped, regardless of enrichment outcome. This is purely additive
  * alongside the existing AUGUST_PROPERTY_MAP-driven syncAugustDevices() —
  * it does not read that env var, does not call it, and does not affect any
  * SmartDevice row that sync already created.
- *
- * listLocks() only returns id/name/houseId — battery/connectivity/lockState
- * require a separate getLockDetail() call per lock, same as
- * syncAugustDevices() and the read-only check.ts script already do.
  */
 export async function discoverAugustDevices(
   actor: AuthContext,
@@ -256,33 +297,75 @@ export async function discoverAugustDevices(
     accessToken,
     brand: brand && isAugustBrand(brand) ? brand : "august",
   });
+
+  // Phase 1: fast base inventory. One HTTP call, one batched DB write.
   const locks = await client.listLocks();
 
-  for (const lock of locks) {
-    const detail = await client.getLockDetail(lock.id);
+  if (locks.length > 0) {
+    await prisma.$transaction(
+      locks.map((lock) =>
+        prisma.providerDevice.upsert({
+          where: {
+            integrationConnectionId_externalDeviceId: {
+              integrationConnectionId: connection.id,
+              externalDeviceId: lock.id,
+            },
+          },
+          update: {
+            discoveredName: lock.name,
+            rawMetadata: lock as unknown as Prisma.InputJsonValue,
+            lastSeenAt: new Date(),
+          },
+          create: {
+            integrationConnectionId: connection.id,
+            externalDeviceId: lock.id,
+            deviceType: "LOCK",
+            discoveredName: lock.name,
+            connectivityStatus: "UNKNOWN",
+            rawMetadata: lock as unknown as Prisma.InputJsonValue,
+          },
+        }),
+      ),
+    );
+  }
 
-    await prisma.providerDevice.upsert({
-      where: {
-        integrationConnectionId_externalDeviceId: {
-          integrationConnectionId: connection.id,
-          externalDeviceId: detail.id,
-        },
-      },
-      update: {
-        discoveredName: detail.name,
-        connectivityStatus: detail.connectivity,
-        rawMetadata: detail as unknown as Prisma.InputJsonValue,
-        lastSeenAt: new Date(),
-      },
-      create: {
-        integrationConnectionId: connection.id,
-        externalDeviceId: detail.id,
-        deviceType: "LOCK",
-        discoveredName: detail.name,
-        connectivityStatus: detail.connectivity,
-        rawMetadata: detail as unknown as Prisma.InputJsonValue,
-      },
-    });
+  // Phase 2: bounded-concurrency, best-effort enrichment.
+  let enriched = 0;
+  let detailFailures = 0;
+
+  for (const batch of chunk(locks, AUGUST_DETAIL_CONCURRENCY)) {
+    const results = await Promise.allSettled(
+      batch.map((lock) => client.getLockDetail(lock.id)),
+    );
+
+    const successfulDetails = results
+      .filter(
+        (result): result is PromiseFulfilledResult<AugustLockDetail> =>
+          result.status === "fulfilled",
+      )
+      .map((result) => result.value);
+    detailFailures += results.length - successfulDetails.length;
+
+    if (successfulDetails.length > 0) {
+      await prisma.$transaction(
+        successfulDetails.map((detail) =>
+          prisma.providerDevice.update({
+            where: {
+              integrationConnectionId_externalDeviceId: {
+                integrationConnectionId: connection.id,
+                externalDeviceId: detail.id,
+              },
+            },
+            data: {
+              connectivityStatus: detail.connectivity,
+              rawMetadata: detail as unknown as Prisma.InputJsonValue,
+              lastSeenAt: new Date(),
+            },
+          }),
+        ),
+      );
+      enriched += successfulDetails.length;
+    }
   }
 
   await prisma.integrationConnection.update({
@@ -290,7 +373,7 @@ export async function discoverAugustDevices(
     data: { lastSyncedAt: new Date(), status: "CONNECTED" },
   });
 
-  return { discovered: locks.length };
+  return { discovered: locks.length, enriched, detailFailures };
 }
 
 export async function listDiscoveredDevices(

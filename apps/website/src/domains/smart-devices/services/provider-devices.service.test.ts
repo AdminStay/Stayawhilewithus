@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.mock factories are hoisted above every top-level statement (including
 // plain `const`), so any value a factory dereferences directly (not inside
@@ -174,9 +174,47 @@ describe("discoverNestDevices", () => {
 });
 
 describe("discoverAugustDevices", () => {
+  beforeEach(() => {
+    // Real Prisma's $transaction (both the batched-array form this function
+    // uses, and the interactive-callback form other functions in this file
+    // use) actually runs what it's given — mirror that here so assertions
+    // can rely on results/rejections propagating, instead of the bare
+    // vi.fn() default of returning undefined. describe blocks below that
+    // need the interactive-callback form override this per-test via
+    // mockImplementationOnce, which takes precedence over this default.
+    mockTransaction.mockImplementation(async (arg) =>
+      Array.isArray(arg) ? Promise.all(arg) : arg,
+    );
+  });
+
   afterEach(() => {
     restoreEnv();
   });
+
+  function baseLock(id: string, name = "Front Door", houseId = "house-1") {
+    return { id, name, houseId };
+  }
+
+  function detailFor(
+    lock: { id: string; name: string; houseId: string },
+    overrides: Partial<{
+      batteryLevel: number | null;
+      connectivity: string;
+      lockState: string | null;
+    }> = {},
+  ) {
+    return {
+      id: lock.id,
+      name: lock.name,
+      houseId: lock.houseId,
+      batteryLevel: 92,
+      connectivity: "ONLINE",
+      lockState: "locked",
+      telemetryUpdatedAt: "2026-08-26T00:00:00.000Z",
+      seenAt: "2026-08-26T00:00:00.000Z",
+      ...overrides,
+    };
+  }
 
   it("throws a clear error when August credentials aren't configured, without calling the provider", async () => {
     restoreEnv();
@@ -188,7 +226,7 @@ describe("discoverAugustDevices", () => {
     expect(mockListLocks).not.toHaveBeenCalled();
   });
 
-  it("upserts every discovered lock into ProviderDevice as deviceType LOCK, keyed on [connection, externalDeviceId], and never sets propertyId/enabled/mappedAt", async () => {
+  it("Phase 1: persists the complete base inventory (id/name/houseId) from a single listLocks() call via one batched upsert, before any detail call resolves", async () => {
     withAugustEnv();
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
     vi.mocked(
@@ -197,19 +235,9 @@ describe("discoverAugustDevices", () => {
       id: "connection-1",
       provider: "AUGUST",
     } as never);
-    mockListLocks.mockResolvedValueOnce([
-      { id: "lock-1", name: "Front Door", houseId: "house-1" },
-    ]);
-    mockGetLockDetail.mockResolvedValueOnce({
-      id: "lock-1",
-      name: "Front Door",
-      houseId: "house-1",
-      batteryLevel: 92,
-      connectivity: "ONLINE",
-      lockState: "locked",
-      telemetryUpdatedAt: "2026-08-26T00:00:00.000Z",
-      seenAt: "2026-08-26T00:00:00.000Z",
-    });
+    const lock = baseLock("lock-1", "Front Door", "house-1");
+    mockListLocks.mockResolvedValueOnce([lock]);
+    mockGetLockDetail.mockResolvedValueOnce(detailFor(lock));
 
     const result = await discoverAugustDevices(actor);
 
@@ -218,6 +246,7 @@ describe("discoverAugustDevices", () => {
       "smart_devices:update",
     );
     expect(mockEnsureConnectionRows).toHaveBeenCalled();
+    expect(mockListLocks).toHaveBeenCalledTimes(1);
     expect(prisma.providerDevice.upsert).toHaveBeenCalledTimes(1);
 
     const call = vi.mocked(prisma.providerDevice.upsert).mock.calls[0]![0];
@@ -229,7 +258,10 @@ describe("discoverAugustDevices", () => {
     });
     expect(call.create.deviceType).toBe("LOCK");
     expect(call.create.discoveredName).toBe("Front Door");
-    expect(call.create.connectivityStatus).toBe("ONLINE");
+    // Phase 1 never has detail data yet — it must not fabricate a
+    // connectivity value, and it must never depend on getLockDetail()
+    // having already resolved.
+    expect(call.create.connectivityStatus).toBe("UNKNOWN");
     expect(call.create).not.toHaveProperty("propertyId");
     expect(call.create).not.toHaveProperty("enabled");
     expect(call.create).not.toHaveProperty("mappedAt");
@@ -237,7 +269,109 @@ describe("discoverAugustDevices", () => {
     expect(call.update).not.toHaveProperty("propertyId");
     expect(call.update).not.toHaveProperty("enabled");
 
-    expect(result).toEqual({ discovered: 1 });
+    // Phase 2 enrichment succeeded here, so the final result reports it —
+    // but via prisma.providerDevice.update, never a second upsert call.
+    expect(prisma.providerDevice.update).toHaveBeenCalledTimes(1);
+    const updateCall = vi.mocked(prisma.providerDevice.update).mock
+      .calls[0]![0];
+    expect(updateCall.data.connectivityStatus).toBe("ONLINE");
+    expect(updateCall.data).not.toHaveProperty("propertyId");
+    expect(updateCall.data).not.toHaveProperty("enabled");
+
+    expect(result).toEqual({ discovered: 1, enriched: 1, detailFailures: 0 });
+  });
+
+  it("persists the base inventory even when every detail request fails — discovery itself never fails because enrichment failed", async () => {
+    withAugustEnv();
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(
+      prisma.integrationConnection.findUniqueOrThrow,
+    ).mockResolvedValueOnce({
+      id: "connection-1",
+      provider: "AUGUST",
+    } as never);
+    const lock = baseLock("lock-1");
+    mockListLocks.mockResolvedValueOnce([lock]);
+    mockGetLockDetail.mockRejectedValueOnce(new Error("August API 500"));
+
+    const result = await discoverAugustDevices(actor);
+
+    expect(prisma.providerDevice.upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.providerDevice.update).not.toHaveBeenCalled();
+    expect(result).toEqual({ discovered: 1, enriched: 0, detailFailures: 1 });
+  });
+
+  it("one failed detail request doesn't fail discovery of the other locks in the same batch", async () => {
+    withAugustEnv();
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(
+      prisma.integrationConnection.findUniqueOrThrow,
+    ).mockResolvedValueOnce({
+      id: "connection-1",
+      provider: "AUGUST",
+    } as never);
+    const locks = [
+      baseLock("lock-1", "Front Door"),
+      baseLock("lock-2", "Back Door"),
+      baseLock("lock-3", "Garage"),
+    ];
+    mockListLocks.mockResolvedValueOnce(locks);
+    mockGetLockDetail
+      .mockResolvedValueOnce(detailFor(locks[0]!))
+      .mockRejectedValueOnce(new Error("timed out"))
+      .mockResolvedValueOnce(detailFor(locks[2]!));
+
+    const result = await discoverAugustDevices(actor);
+
+    expect(prisma.providerDevice.upsert).toHaveBeenCalledTimes(3);
+    expect(prisma.providerDevice.update).toHaveBeenCalledTimes(2);
+    const updatedIds = vi
+      .mocked(prisma.providerDevice.update)
+      .mock.calls.map(
+        (call) =>
+          call[0].where.integrationConnectionId_externalDeviceId!
+            .externalDeviceId,
+      );
+    expect(updatedIds.sort()).toEqual(["lock-1", "lock-3"]);
+    expect(result).toEqual({ discovered: 3, enriched: 2, detailFailures: 1 });
+  });
+
+  it("bounds detail-request concurrency instead of running all of them at once", async () => {
+    withAugustEnv();
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(
+      prisma.integrationConnection.findUniqueOrThrow,
+    ).mockResolvedValueOnce({
+      id: "connection-1",
+      provider: "AUGUST",
+    } as never);
+    const locks = Array.from({ length: 12 }, (_, i) =>
+      baseLock(`lock-${i}`, `Lock ${i}`),
+    );
+    mockListLocks.mockResolvedValueOnce(locks);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    mockGetLockDetail.mockImplementation(async (id: string) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return detailFor(baseLock(id));
+    });
+
+    const result = await discoverAugustDevices(actor);
+
+    expect(mockGetLockDetail).toHaveBeenCalledTimes(12);
+    // The implementation's own concurrency cap (AUGUST_DETAIL_CONCURRENCY)
+    // is 5 — this asserts real bounding happened, not just "less than 12".
+    expect(maxInFlight).toBeLessThanOrEqual(5);
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(result).toEqual({
+      discovered: 12,
+      enriched: 12,
+      detailFailures: 0,
+    });
   });
 
   it("persists two locks that share the same houseId as two independent ProviderDevice rows, each separately identified by its own lock id", async () => {
@@ -249,39 +383,18 @@ describe("discoverAugustDevices", () => {
       id: "connection-1",
       provider: "AUGUST",
     } as never);
-    mockListLocks.mockResolvedValueOnce([
-      {
-        id: "lock-front",
-        name: "Island Tides - Front Door",
-        houseId: "house-shared",
-      },
-      {
-        id: "lock-man-cave",
-        name: "Island Tides - Man Cave",
-        houseId: "house-shared",
-      },
-    ]);
+    const locks = [
+      baseLock("lock-front", "Island Tides - Front Door", "house-shared"),
+      baseLock("lock-man-cave", "Island Tides - Man Cave", "house-shared"),
+    ];
+    mockListLocks.mockResolvedValueOnce(locks);
     mockGetLockDetail
-      .mockResolvedValueOnce({
-        id: "lock-front",
-        name: "Island Tides - Front Door",
-        houseId: "house-shared",
-        batteryLevel: 92,
-        connectivity: "UNKNOWN",
-        lockState: null,
-        telemetryUpdatedAt: null,
-        seenAt: null,
-      })
-      .mockResolvedValueOnce({
-        id: "lock-man-cave",
-        name: "Island Tides - Man Cave",
-        houseId: "house-shared",
-        batteryLevel: 59,
-        connectivity: "UNKNOWN",
-        lockState: null,
-        telemetryUpdatedAt: null,
-        seenAt: null,
-      });
+      .mockResolvedValueOnce(
+        detailFor(locks[0]!, { batteryLevel: 92, connectivity: "UNKNOWN" }),
+      )
+      .mockResolvedValueOnce(
+        detailFor(locks[1]!, { batteryLevel: 59, connectivity: "UNKNOWN" }),
+      );
 
     const result = await discoverAugustDevices(actor);
 
@@ -293,7 +406,61 @@ describe("discoverAugustDevices", () => {
     expect(firstKey.externalDeviceId).toBe("lock-front");
     expect(secondKey.externalDeviceId).toBe("lock-man-cave");
     expect(firstKey.externalDeviceId).not.toBe(secondKey.externalDeviceId);
-    expect(result).toEqual({ discovered: 2 });
+    expect(result).toEqual({ discovered: 2, enriched: 2, detailFailures: 0 });
+  });
+
+  it("calling upsert/update again for an already-discovered lock stays idempotent — same key, no duplicate rows implied", async () => {
+    withAugustEnv();
+    vi.mocked(assertPermission)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.integrationConnection.findUniqueOrThrow).mockResolvedValue(
+      {
+        id: "connection-1",
+        provider: "AUGUST",
+      } as never,
+    );
+    const lock = baseLock("lock-1");
+    mockListLocks.mockResolvedValueOnce([lock]).mockResolvedValueOnce([lock]);
+    mockGetLockDetail
+      .mockResolvedValueOnce(detailFor(lock))
+      .mockResolvedValueOnce(detailFor(lock));
+
+    await discoverAugustDevices(actor);
+    await discoverAugustDevices(actor);
+
+    expect(prisma.providerDevice.upsert).toHaveBeenCalledTimes(2);
+    const [firstCallArgs, secondCallArgs] = vi.mocked(
+      prisma.providerDevice.upsert,
+    ).mock.calls;
+    expect(firstCallArgs![0].where).toEqual(secondCallArgs![0].where);
+  });
+
+  it("never sets propertyId/enabled on the discovered lock regardless of enrichment outcome — no automatic mapping", async () => {
+    withAugustEnv();
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(
+      prisma.integrationConnection.findUniqueOrThrow,
+    ).mockResolvedValueOnce({
+      id: "connection-1",
+      provider: "AUGUST",
+    } as never);
+    const locks = [baseLock("lock-ok"), baseLock("lock-fail")];
+    mockListLocks.mockResolvedValueOnce(locks);
+    mockGetLockDetail
+      .mockResolvedValueOnce(detailFor(locks[0]!))
+      .mockRejectedValueOnce(new Error("nope"));
+
+    await discoverAugustDevices(actor);
+
+    for (const call of vi.mocked(prisma.providerDevice.upsert).mock.calls) {
+      expect(call[0].create).not.toHaveProperty("propertyId");
+      expect(call[0].create).not.toHaveProperty("enabled");
+    }
+    for (const call of vi.mocked(prisma.providerDevice.update).mock.calls) {
+      expect(call[0].data).not.toHaveProperty("propertyId");
+      expect(call[0].data).not.toHaveProperty("enabled");
+    }
   });
 
   it("does not create any SmartDevice row — discovery only ever writes ProviderDevice", async () => {
@@ -305,19 +472,11 @@ describe("discoverAugustDevices", () => {
       id: "connection-1",
       provider: "AUGUST",
     } as never);
-    mockListLocks.mockResolvedValueOnce([
-      { id: "lock-1", name: "Front Door", houseId: "house-1" },
-    ]);
-    mockGetLockDetail.mockResolvedValueOnce({
-      id: "lock-1",
-      name: "Front Door",
-      houseId: "house-1",
-      batteryLevel: 92,
-      connectivity: "UNKNOWN",
-      lockState: null,
-      telemetryUpdatedAt: null,
-      seenAt: null,
-    });
+    const lock = baseLock("lock-1");
+    mockListLocks.mockResolvedValueOnce([lock]);
+    mockGetLockDetail.mockResolvedValueOnce(
+      detailFor(lock, { connectivity: "UNKNOWN", lockState: null }),
+    );
 
     await discoverAugustDevices(actor);
 

@@ -115,6 +115,61 @@ describe("DiscoverDevicesButton", () => {
     expect(screen.getByText("Discovered 43 devices.")).toBeTruthy();
   });
 
+  it("shows the enriched count alongside the discovered count when the action reports it (August's two-phase discovery)", () => {
+    mockUseActionState.mockReturnValue([
+      { status: "success", discovered: 43, enriched: 41, detailFailures: 0 },
+      noopFormAction,
+      false,
+    ]);
+
+    render(
+      <DiscoverDevicesButton
+        label="Discover August devices"
+        action={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("Discovered 43 devices. 41 enriched."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/failed/)).toBeNull();
+  });
+
+  it("shows a detail-lookup-failure count when enrichment partially failed, without affecting the discovered count", () => {
+    mockUseActionState.mockReturnValue([
+      { status: "success", discovered: 43, enriched: 41, detailFailures: 2 },
+      noopFormAction,
+      false,
+    ]);
+
+    render(
+      <DiscoverDevicesButton
+        label="Discover August devices"
+        action={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "Discovered 43 devices. 41 enriched. 2 detail lookups failed.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("omits the enriched/detail-failure text entirely for Nest's plain discovered-count result", () => {
+    mockUseActionState.mockReturnValue([
+      { status: "success", discovered: 4 },
+      noopFormAction,
+      false,
+    ]);
+
+    render(
+      <DiscoverDevicesButton label="Discover Nest devices" action={vi.fn()} />,
+    );
+
+    expect(screen.getByText("Discovered 4 devices.")).toBeTruthy();
+  });
+
   it("renders a clear, verbatim failure message and leaves the button enabled (never stuck disabled after a failure)", () => {
     mockUseActionState.mockReturnValue([
       { status: "failure", error: "August isn't configured yet." },
