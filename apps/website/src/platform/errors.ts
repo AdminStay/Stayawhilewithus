@@ -33,6 +33,17 @@ export class ExternalServiceError extends AppError {
   }
 }
 
+/** Thrown by getCurrentUser() when a resolved User row is DEACTIVATED (or soft-deleted) — blocks every route/action uniformly at the authentication boundary, before any assertPermission call runs. */
+export class AccountDeactivatedError extends AppError {
+  constructor() {
+    super(
+      "This account has been deactivated. Contact an administrator.",
+      403,
+      "ACCOUNT_DEACTIVATED",
+    );
+  }
+}
+
 /** Maps any thrown error to a safe {data, error} JSON envelope. Never leaks raw Prisma/internal errors to clients. */
 export function toErrorResponse(err: unknown): {
   status: number;

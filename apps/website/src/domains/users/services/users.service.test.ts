@@ -5,6 +5,8 @@ vi.mock("@stayw/database", () => ({
     user: {
       findMany: vi.fn(),
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
+      update: vi.fn(),
     },
     role: {
       findMany: vi.fn(),
@@ -31,17 +33,32 @@ vi.mock("@/platform/audit/record-audit", () => ({
   recordAudit: vi.fn(),
 }));
 
+vi.mock("@/platform/identity/invite-clerk-user", () => ({
+  createClerkInvitation: vi.fn(),
+  listPendingClerkInvitations: vi.fn(),
+  revokeClerkInvitation: vi.fn(),
+}));
+
 import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
 
 import {
   assignUserRole,
+  deactivateTeamMember,
+  inviteTeamMember,
   listAssignableRoles,
+  listPendingInvitations,
   listUsersWithRoles,
+  revokeInvitation,
   revokeUserRole,
 } from "./users.service";
 
 import { recordAudit } from "@/platform/audit/record-audit";
+import {
+  createClerkInvitation,
+  listPendingClerkInvitations,
+  revokeClerkInvitation,
+} from "@/platform/identity/invite-clerk-user";
 
 const actor = { userId: "admin-1" };
 
@@ -69,16 +86,30 @@ describe("listUsersWithRoles", () => {
 });
 
 describe("listAssignableRoles", () => {
-  it("returns roles when granted roles:read", async () => {
+  it("returns roles with their granted permissions when granted roles:read", async () => {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
-    vi.mocked(prisma.role.findMany).mockResolvedValueOnce([
-      { id: "r1", name: "admin" },
-    ] as never);
+    const rolesWithPermissions = [
+      {
+        id: "r1",
+        name: "admin",
+        rolePermissions: [
+          { permission: { key: "properties:read" } },
+          { permission: { key: "properties:manage" } },
+        ],
+      },
+    ];
+    vi.mocked(prisma.role.findMany).mockResolvedValueOnce(
+      rolesWithPermissions as never,
+    );
 
     const result = await listAssignableRoles(actor);
 
     expect(assertPermission).toHaveBeenCalledWith(actor, "roles:read");
-    expect(result).toEqual([{ id: "r1", name: "admin" }]);
+    expect(prisma.role.findMany).toHaveBeenCalledWith({
+      orderBy: { name: "asc" },
+      include: { rolePermissions: { include: { permission: true } } },
+    });
+    expect(result).toEqual(rolesWithPermissions);
   });
 
   it("propagates ForbiddenError when the actor lacks roles:read", async () => {
@@ -365,6 +396,317 @@ describe("revokeUserRole", () => {
     await expect(revokeUserRole(actor, "ur1")).rejects.toThrow();
     expect(prisma.userRole.findUnique).not.toHaveBeenCalled();
     expect(prisma.userRole.delete).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+});
+
+describe("inviteTeamMember", () => {
+  it("sends a Clerk invitation and audits it when granted users:create", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.user.findFirst).mockResolvedValueOnce(null);
+    const invitation = {
+      id: "inv1",
+      emailAddress: "new@stayawhilewithus.com",
+      status: "pending" as const,
+      url: "https://clerk.example/accept/inv1",
+    };
+    vi.mocked(createClerkInvitation).mockResolvedValueOnce(invitation);
+
+    const result = await inviteTeamMember(actor, {
+      email: "New@StayAWhileWithUs.com",
+    });
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "users:create");
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({
+      where: {
+        email: { equals: "new@stayawhilewithus.com", mode: "insensitive" },
+      },
+    });
+    expect(createClerkInvitation).toHaveBeenCalledWith(
+      "new@stayawhilewithus.com",
+      undefined,
+    );
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: actor.userId,
+        action: "team_member.invited",
+        entityType: "ClerkInvitation",
+        entityId: "inv1",
+      }),
+    );
+    expect(result).toEqual(invitation);
+  });
+
+  it("validates and carries a pending role selection onto the invitation when roleId is given", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.user.findFirst).mockResolvedValueOnce(null);
+    vi.mocked(prisma.role.findUnique).mockResolvedValueOnce({
+      id: "role-1",
+      name: "ops_manager",
+    } as never);
+    vi.mocked(prisma.property.findUnique).mockResolvedValueOnce({
+      id: "prop-1",
+    } as never);
+    const invitation = {
+      id: "inv2",
+      emailAddress: "new@stayawhilewithus.com",
+      status: "pending" as const,
+    };
+    vi.mocked(createClerkInvitation).mockResolvedValueOnce(invitation);
+
+    await inviteTeamMember(actor, {
+      email: "new@stayawhilewithus.com",
+      roleId: "role-1",
+      propertyId: "prop-1",
+    });
+
+    expect(prisma.role.findUnique).toHaveBeenCalledWith({
+      where: { id: "role-1" },
+    });
+    expect(prisma.property.findUnique).toHaveBeenCalledWith({
+      where: { id: "prop-1" },
+    });
+    expect(createClerkInvitation).toHaveBeenCalledWith(
+      "new@stayawhilewithus.com",
+      { roleId: "role-1", propertyId: "prop-1", invitedByUserId: actor.userId },
+    );
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: {
+          email: "new@stayawhilewithus.com",
+          roleId: "role-1",
+          propertyId: "prop-1",
+        },
+      }),
+    );
+  });
+
+  it("throws NotFoundError and sends no invitation when the given roleId doesn't exist", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.user.findFirst).mockResolvedValueOnce(null);
+    vi.mocked(prisma.role.findUnique).mockResolvedValueOnce(null);
+
+    await expect(
+      inviteTeamMember(actor, {
+        email: "new@stayawhilewithus.com",
+        roleId: "missing-role",
+      }),
+    ).rejects.toThrow(/not found/i);
+    expect(createClerkInvitation).not.toHaveBeenCalled();
+  });
+
+  it("throws NotFoundError and sends no invitation when the given propertyId doesn't exist", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.user.findFirst).mockResolvedValueOnce(null);
+    vi.mocked(prisma.role.findUnique).mockResolvedValueOnce({
+      id: "role-1",
+    } as never);
+    vi.mocked(prisma.property.findUnique).mockResolvedValueOnce(null);
+
+    await expect(
+      inviteTeamMember(actor, {
+        email: "new@stayawhilewithus.com",
+        roleId: "role-1",
+        propertyId: "missing-property",
+      }),
+    ).rejects.toThrow(/not found/i);
+    expect(createClerkInvitation).not.toHaveBeenCalled();
+  });
+
+  it("throws ConflictError and sends no invitation when a user with that email already exists", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.user.findFirst).mockResolvedValueOnce({
+      id: "u1",
+    } as never);
+
+    await expect(
+      inviteTeamMember(actor, { email: "existing@stayawhilewithus.com" }),
+    ).rejects.toThrow(/already exists/i);
+    expect(createClerkInvitation).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("denies inviting and sends no invitation when the actor lacks users:create", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(
+      inviteTeamMember(actor, { email: "new@stayawhilewithus.com" }),
+    ).rejects.toThrow();
+    expect(prisma.user.findFirst).not.toHaveBeenCalled();
+    expect(createClerkInvitation).not.toHaveBeenCalled();
+  });
+});
+
+describe("listPendingInvitations", () => {
+  it("returns pending invitations when granted users:read", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(listPendingClerkInvitations).mockResolvedValueOnce([
+      { id: "inv1", emailAddress: "a@b.com", status: "pending" },
+    ]);
+
+    const result = await listPendingInvitations(actor);
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "users:read");
+    expect(result).toEqual([
+      { id: "inv1", emailAddress: "a@b.com", status: "pending" },
+    ]);
+  });
+
+  it("propagates ForbiddenError when the actor lacks users:read", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(listPendingInvitations(actor)).rejects.toThrow();
+    expect(listPendingClerkInvitations).not.toHaveBeenCalled();
+  });
+});
+
+describe("revokeInvitation", () => {
+  it("revokes the invitation and audits it when granted users:delete", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(revokeClerkInvitation).mockResolvedValueOnce(undefined);
+
+    await revokeInvitation(actor, "inv1");
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "users:delete");
+    expect(revokeClerkInvitation).toHaveBeenCalledWith("inv1");
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: actor.userId,
+        action: "team_member.invitation_revoked",
+        entityType: "ClerkInvitation",
+        entityId: "inv1",
+      }),
+    );
+  });
+
+  it("denies revocation and performs no writes when the actor lacks users:delete", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(revokeInvitation(actor, "inv1")).rejects.toThrow();
+    expect(revokeClerkInvitation).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+});
+
+describe("deactivateTeamMember", () => {
+  it("deactivates a non-admin user (status only, not deletedAt) and audits it", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.user.findUnique).mockResolvedValueOnce({
+      id: "u1",
+      userRoles: [
+        { roleId: "ops-role", propertyId: null, role: { name: "ops_manager" } },
+      ],
+    } as never);
+    const deactivated = { id: "u1", status: "DEACTIVATED" };
+    vi.mocked(prisma.user.update).mockResolvedValueOnce(deactivated as never);
+
+    const result = await deactivateTeamMember(actor, "u1");
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "users:delete");
+    expect(prisma.userRole.count).not.toHaveBeenCalled();
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: "u1" },
+      data: { status: "DEACTIVATED" },
+    });
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: actor.userId,
+        action: "team_member.deactivated",
+        entityType: "User",
+        entityId: "u1",
+      }),
+    );
+    expect(result).toEqual(deactivated);
+  });
+
+  it("allows deactivating a global admin when another global admin remains", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.user.findUnique).mockResolvedValueOnce({
+      id: "u1",
+      userRoles: [
+        { roleId: "admin-role", propertyId: null, role: { name: "admin" } },
+      ],
+    } as never);
+    vi.mocked(prisma.userRole.count).mockResolvedValueOnce(1);
+    vi.mocked(prisma.user.update).mockResolvedValueOnce({
+      id: "u1",
+      status: "DEACTIVATED",
+    } as never);
+
+    await deactivateTeamMember(actor, "u1");
+
+    expect(prisma.userRole.count).toHaveBeenCalledWith({
+      where: { roleId: "admin-role", propertyId: null, userId: { not: "u1" } },
+    });
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: "u1" },
+      data: { status: "DEACTIVATED" },
+    });
+  });
+
+  it("throws ConflictError and performs no update when deactivating the last global admin", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.user.findUnique).mockResolvedValueOnce({
+      id: "u1",
+      userRoles: [
+        { roleId: "admin-role", propertyId: null, role: { name: "admin" } },
+      ],
+    } as never);
+    vi.mocked(prisma.userRole.count).mockResolvedValueOnce(0);
+
+    await expect(deactivateTeamMember(actor, "u1")).rejects.toThrow(
+      /last global admin/i,
+    );
+    expect(prisma.user.update).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("allows deactivating a user whose admin grant is property-scoped, without the last-admin check", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.user.findUnique).mockResolvedValueOnce({
+      id: "u1",
+      userRoles: [
+        { roleId: "admin-role", propertyId: "p1", role: { name: "admin" } },
+      ],
+    } as never);
+    vi.mocked(prisma.user.update).mockResolvedValueOnce({
+      id: "u1",
+      status: "DEACTIVATED",
+    } as never);
+
+    await deactivateTeamMember(actor, "u1");
+
+    expect(prisma.userRole.count).not.toHaveBeenCalled();
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: "u1" },
+      data: { status: "DEACTIVATED" },
+    });
+  });
+
+  it("throws NotFoundError when the target user doesn't exist", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.user.findUnique).mockResolvedValueOnce(null as never);
+
+    await expect(deactivateTeamMember(actor, "missing")).rejects.toThrow(
+      /not found/i,
+    );
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it("denies deactivation and performs no writes when the actor lacks users:delete", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(deactivateTeamMember(actor, "u1")).rejects.toThrow();
+    expect(prisma.user.findUnique).not.toHaveBeenCalled();
+    expect(prisma.user.update).not.toHaveBeenCalled();
     expect(recordAudit).not.toHaveBeenCalled();
   });
 });

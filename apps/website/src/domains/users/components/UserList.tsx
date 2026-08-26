@@ -16,7 +16,11 @@ import {
 } from "@stayw/ui";
 import { UserCog } from "lucide-react";
 
-import { assignUserRoleAction, revokeUserRoleAction } from "../actions";
+import {
+  assignUserRoleAction,
+  deactivateTeamMemberAction,
+  revokeUserRoleAction,
+} from "../actions";
 import type { Role, User, UserRole } from "../services/users.service";
 
 import type { Property } from "@/domains/properties/services/properties.service";
@@ -59,6 +63,7 @@ export function UserList({
         <TableHeaderCell>Status</TableHeaderCell>
         <TableHeaderCell>Current roles</TableHeaderCell>
         <TableHeaderCell className="text-right">Assign a role</TableHeaderCell>
+        <TableHeaderCell className="text-right">Access</TableHeaderCell>
       </TableHead>
       <TableBody>
         {users.map((u) => (
@@ -135,6 +140,26 @@ export function UserList({
                   Assign
                 </Button>
               </form>
+            </TableCell>
+            <TableCell className="text-right">
+              {u.status === "DEACTIVATED" ? (
+                <Badge tone="neutral">Deactivated</Badge>
+              ) : (
+                <form
+                  action={deactivateTeamMemberAction}
+                  className="inline-flex"
+                >
+                  <input type="hidden" name="userId" value={u.id} />
+                  <ConfirmButton
+                    type="submit"
+                    variant="danger"
+                    size="sm"
+                    confirmMessage={`Deactivate ${u.email}? They will immediately lose access to the application. This does not delete their audit history and can be undone by an administrator directly in the database.`}
+                  >
+                    Deactivate
+                  </ConfirmButton>
+                </form>
+              )}
             </TableCell>
           </TableRow>
         ))}
