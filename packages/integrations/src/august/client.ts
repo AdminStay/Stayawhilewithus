@@ -101,6 +101,21 @@ function deriveConnectivity(
 }
 
 /**
+ * August's real API reports a negative fraction (observed: -1, which
+ * becomes -100 once scaled to a percentage below) as its "no battery
+ * reading available" sentinel — confirmed live against Production locks
+ * with a dead/never-reported battery. A negative percentage isn't a
+ * meaningful reading of any kind, so it's normalized to null (same
+ * "unknown, not a fabricated value" convention as every other nullable
+ * field on AugustLockDetail) rather than rendered literally.
+ */
+function parseBatteryLevel(battery: number | undefined): number | null {
+  if (typeof battery !== "number") return null;
+  const percent = Math.round(battery * 100);
+  return percent < 0 ? null : percent;
+}
+
+/**
  * August integration client — real HTTP calls against the verified (if
  * unofficial — August has no public developer API) api-production.august.com
  * endpoints, ported from py-august's august/api_common.py and august/lock.py.
@@ -213,8 +228,7 @@ export class AugustClient
       id: raw.LockID,
       name: raw.LockName,
       houseId: raw.HouseID,
-      batteryLevel:
-        typeof raw.battery === "number" ? Math.round(raw.battery * 100) : null,
+      batteryLevel: parseBatteryLevel(raw.battery),
       connectivity: deriveConnectivity(raw.Bridge),
       lockState: validLockStatus ? (lockStatus?.status ?? null) : null,
       telemetryUpdatedAt: raw.batteryInfo?.infoUpdatedDate ?? null,

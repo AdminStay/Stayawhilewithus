@@ -20,6 +20,7 @@ import {
   type NestCommandResult,
 } from "./services/nest-commands.service";
 import {
+  discoverAugustDevices,
   discoverNestDevices,
   mapProviderDeviceToProperty,
   setProviderDeviceEnabled,
@@ -36,6 +37,12 @@ export type NestCommandActionState = { status: "idle" } | NestCommandResult;
 export async function discoverNestDevicesAction() {
   const actor = await getCurrentUser();
   await discoverNestDevices(actor);
+  revalidatePath(DEVICES_PAGE_PATH);
+}
+
+export async function discoverAugustDevicesAction() {
+  const actor = await getCurrentUser();
+  await discoverAugustDevices(actor);
   revalidatePath(DEVICES_PAGE_PATH);
 }
 

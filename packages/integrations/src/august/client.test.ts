@@ -99,6 +99,35 @@ describe("AugustClient", () => {
     });
   });
 
+  it("getLockDetail() normalizes a negative battery fraction (August's 'no reading' sentinel, observed as -1 -> -100%) to null instead of rendering it literally", async () => {
+    mockRequest.mockResolvedValueOnce({
+      LockID: "lock-dead-battery",
+      LockName: "Dead Battery Door",
+      HouseID: "house-1",
+      battery: -1,
+      Bridge: { operative: true },
+    });
+    const client = new AugustClient(credentials);
+
+    const detail = await client.getLockDetail("lock-dead-battery");
+
+    expect(detail.batteryLevel).toBeNull();
+  });
+
+  it("getLockDetail() leaves a missing battery reading as null (not 0)", async () => {
+    mockRequest.mockResolvedValueOnce({
+      LockID: "lock-no-battery-field",
+      LockName: "No Battery Field Door",
+      HouseID: "house-1",
+      Bridge: { operative: true },
+    });
+    const client = new AugustClient(credentials);
+
+    const detail = await client.getLockDetail("lock-no-battery-field");
+
+    expect(detail.batteryLevel).toBeNull();
+  });
+
   it("getLockDetail() prefers bridge.status.current === 'online' when a status object is present, and reports OFFLINE (not UNKNOWN) when the provider explicitly says offline", async () => {
     mockRequest.mockResolvedValueOnce({
       LockID: "lock-2",

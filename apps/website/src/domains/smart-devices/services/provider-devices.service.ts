@@ -6,6 +6,11 @@ import type {
   IntegrationProvider,
   SmartDeviceProvider,
 } from "@stayw/database/enums";
+import {
+  AugustClient,
+  isAugustBrand,
+  type AugustLockDetail,
+} from "@stayw/integrations/august";
 import { NestClient, type NestDevice } from "@stayw/integrations/nest";
 
 export type { ProviderDevice };
@@ -94,6 +99,48 @@ export function toSmartDeviceMetadata(
 }
 
 /**
+ * August equivalent of toSmartDeviceMetadata() above — same "only ever set
+ * a key the provider actually reported" discipline. batteryLevel/lockState
+ * are already null-normalized by AugustClient.getLockDetail() itself (see
+ * that file's parseBatteryLevel()), so no further sentinel-handling is
+ * needed here. `observedAt` follows the identical rule as the Nest
+ * version: a fresh post-discovery read may honestly pass `new Date()`;
+ * copying an existing ProviderDevice snapshot out later (setProviderDeviceEnabled())
+ * must pass that snapshot's own lastSeenAt instead.
+ */
+export function toAugustSmartDeviceMetadata(
+  lock: AugustLockDetail,
+  observedAt: Date,
+): Record<string, unknown> {
+  return {
+    ...(lock.batteryLevel != null && { batteryLevel: lock.batteryLevel }),
+    ...(lock.lockState != null && { lockState: lock.lockState }),
+    telemetryUpdatedAt: observedAt.toISOString(),
+  };
+}
+
+/**
+ * setProviderDeviceEnabled()'s one provider-aware step: picks the right
+ * raw-metadata-to-SmartDevice-metadata mapper for whichever provider this
+ * ProviderDevice actually came from. Every other line of that function is
+ * fully provider-agnostic — this is deliberately the single, narrow branch
+ * point rather than duplicating the enable/upsert logic per provider.
+ */
+function computeEnabledSmartDeviceMetadata(
+  provider: IntegrationProvider,
+  rawMetadata: unknown,
+  observedAt: Date,
+): Record<string, unknown> {
+  if (provider === "AUGUST") {
+    return toAugustSmartDeviceMetadata(
+      rawMetadata as AugustLockDetail,
+      observedAt,
+    );
+  }
+  return toSmartDeviceMetadata(rawMetadata as NestDevice, observedAt);
+}
+
+/**
  * Discovery-only: upserts every device Nest's real API reports into the
  * ProviderDevice staging table, keyed on [integrationConnectionId,
  * externalDeviceId]. NEVER touches propertyId/enabled/mappedAt/
@@ -164,6 +211,86 @@ export async function discoverNestDevices(
   });
 
   return { discovered: devices.length };
+}
+
+/**
+ * August equivalent of discoverNestDevices() above — same discovery-only
+ * contract: upserts every lock the real August API reports into the
+ * ProviderDevice staging table, keyed on [integrationConnectionId,
+ * externalDeviceId] (the lock's own id — never houseId, so two locks that
+ * share a house, e.g. "Island Tides - Front Door" and "Island Tides - Man
+ * Cave", persist as two independent rows, each independently mappable).
+ * NEVER touches propertyId/enabled/mappedAt/mappedByUserId/smartDeviceId —
+ * every discovered lock starts life Unmapped. This is purely additive
+ * alongside the existing AUGUST_PROPERTY_MAP-driven syncAugustDevices() —
+ * it does not read that env var, does not call it, and does not affect any
+ * SmartDevice row that sync already created.
+ *
+ * listLocks() only returns id/name/houseId — battery/connectivity/lockState
+ * require a separate getLockDetail() call per lock, same as
+ * syncAugustDevices() and the read-only check.ts script already do.
+ */
+export async function discoverAugustDevices(
+  actor: AuthContext,
+): Promise<DiscoverySyncResult> {
+  await assertPermission(actor, "smart_devices:update");
+
+  const identifier = process.env.AUGUST_IDENTIFIER;
+  const installId = process.env.AUGUST_INSTALL_ID;
+  const accessToken = process.env.AUGUST_ACCESS_TOKEN;
+  const brand = process.env.AUGUST_BRAND;
+  if (!identifier || !installId || !accessToken) {
+    throw new Error(
+      "August isn't configured yet — run the login script (see packages/integrations/src/august/README.md).",
+    );
+  }
+
+  await ensureConnectionRows();
+  const connection = await prisma.integrationConnection.findUniqueOrThrow({
+    where: { provider: "AUGUST" },
+  });
+
+  const client = new AugustClient({
+    identifier,
+    installId,
+    accessToken,
+    brand: brand && isAugustBrand(brand) ? brand : "august",
+  });
+  const locks = await client.listLocks();
+
+  for (const lock of locks) {
+    const detail = await client.getLockDetail(lock.id);
+
+    await prisma.providerDevice.upsert({
+      where: {
+        integrationConnectionId_externalDeviceId: {
+          integrationConnectionId: connection.id,
+          externalDeviceId: detail.id,
+        },
+      },
+      update: {
+        discoveredName: detail.name,
+        connectivityStatus: detail.connectivity,
+        rawMetadata: detail as unknown as Prisma.InputJsonValue,
+        lastSeenAt: new Date(),
+      },
+      create: {
+        integrationConnectionId: connection.id,
+        externalDeviceId: detail.id,
+        deviceType: "LOCK",
+        discoveredName: detail.name,
+        connectivityStatus: detail.connectivity,
+        rawMetadata: detail as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+
+  await prisma.integrationConnection.update({
+    where: { id: connection.id },
+    data: { lastSyncedAt: new Date(), status: "CONNECTED" },
+  });
+
+  return { discovered: locks.length };
 }
 
 export async function listDiscoveredDevices(
@@ -298,18 +425,18 @@ export async function setProviderDeviceEnabled(
 
   const updated = await prisma.$transaction(async (tx) => {
     if (input.enabled && smartDeviceProvider && providerDevice.propertyId) {
-      const rawMetadata = providerDevice.rawMetadata as unknown as NestDevice;
       const smartDeviceData = {
         propertyId: providerDevice.propertyId,
         name: providerDevice.discoveredName,
         status: providerDevice.connectivityStatus,
         // lastSeenAt, not "now" — this metadata is copied from an existing
-        // discovery snapshot, not a fresh read (enabling makes zero Nest
-        // API calls). Passing the real snapshot time keeps /thermostats'
-        // "Last telemetry" column honest instead of claiming a reading
-        // taken at discovery time is fresh at enable time.
-        metadata: toSmartDeviceMetadata(
-          rawMetadata,
+        // discovery snapshot, not a fresh read (enabling makes zero
+        // provider API calls). Passing the real snapshot time keeps the
+        // dashboard's "Last telemetry" column honest instead of claiming a
+        // reading taken at discovery time is fresh at enable time.
+        metadata: computeEnabledSmartDeviceMetadata(
+          providerDevice.integrationConnection.provider,
+          providerDevice.rawMetadata,
           providerDevice.lastSeenAt,
         ) as Prisma.InputJsonValue,
       };
