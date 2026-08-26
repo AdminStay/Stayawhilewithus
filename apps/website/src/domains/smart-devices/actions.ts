@@ -1,5 +1,6 @@
 "use server";
 
+import type { AuthContext } from "@stayw/auth";
 import { revalidatePath } from "next/cache";
 
 import { fahrenheitToCelsius } from "./lib/temperature";
@@ -25,6 +26,7 @@ import {
   mapProviderDeviceToProperty,
   setProviderDeviceEnabled,
   unmapProviderDevice,
+  type DiscoverySyncResult,
 } from "./services/provider-devices.service";
 
 import { getCurrentUser } from "@/platform/auth/get-current-user";
@@ -34,16 +36,53 @@ const THERMOSTATS_PAGE_PATH = "/thermostats";
 
 export type NestCommandActionState = { status: "idle" } | NestCommandResult;
 
-export async function discoverNestDevicesAction() {
-  const actor = await getCurrentUser();
-  await discoverNestDevices(actor);
-  revalidatePath(DEVICES_PAGE_PATH);
+/**
+ * Mirrors SyncActionState (domains/integrations/actions.ts) exactly — same
+ * three-state shape, same "the action itself never throws" contract, so a
+ * real failure (missing credentials, RBAC denial, provider error) renders
+ * inline via DiscoverDevicesButton instead of only being visible as the
+ * page-level "Something went wrong" error boundary. `discovered` is the
+ * exact count the discovery service call itself reported — never a
+ * guessed/rounded value.
+ */
+export type DiscoverActionState =
+  | { status: "idle" }
+  | { status: "success"; discovered: number }
+  | { status: "failure"; error: string };
+
+/**
+ * Shared body for the two provider-specific discovery actions below —
+ * discovery itself (discoverNestDevices/discoverAugustDevices) and the
+ * ProviderDevice upsert logic they call are completely unchanged by this;
+ * this is purely the "catch and report" wrapper so a thrown error becomes
+ * a renderable state instead of crashing to the page-level error boundary.
+ */
+async function runDiscovery(
+  discover: (actor: AuthContext) => Promise<DiscoverySyncResult>,
+): Promise<DiscoverActionState> {
+  try {
+    const actor = await getCurrentUser();
+    const result = await discover(actor);
+    revalidatePath(DEVICES_PAGE_PATH);
+    return { status: "success", discovered: result.discovered };
+  } catch (err) {
+    return {
+      status: "failure",
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
-export async function discoverAugustDevicesAction() {
-  const actor = await getCurrentUser();
-  await discoverAugustDevices(actor);
-  revalidatePath(DEVICES_PAGE_PATH);
+export async function discoverNestDevicesAction(
+  _prevState: DiscoverActionState,
+): Promise<DiscoverActionState> {
+  return runDiscovery(discoverNestDevices);
+}
+
+export async function discoverAugustDevicesAction(
+  _prevState: DiscoverActionState,
+): Promise<DiscoverActionState> {
+  return runDiscovery(discoverAugustDevices);
 }
 
 export async function mapProviderDeviceToPropertyAction(formData: FormData) {

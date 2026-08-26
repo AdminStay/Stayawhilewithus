@@ -1,10 +1,11 @@
-import { Button, PageHeader } from "@stayw/ui";
+import { PageHeader } from "@stayw/ui";
 
 import { listProperties } from "@/domains/properties/services/properties.service";
 import {
   discoverAugustDevicesAction,
   discoverNestDevicesAction,
 } from "@/domains/smart-devices/actions";
+import { DiscoverDevicesButton } from "@/domains/smart-devices/components/DiscoverDevicesButton";
 import { DiscoveredDevicesList } from "@/domains/smart-devices/components/DiscoveredDevicesList";
 import { listDiscoveredDevices } from "@/domains/smart-devices/services/provider-devices.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
@@ -24,16 +25,14 @@ export default async function DiscoveredDevicesPage() {
       />
 
       <div className="mb-6 flex gap-3">
-        <form action={discoverNestDevicesAction}>
-          <Button type="submit" variant="primary" size="sm">
-            Discover Nest devices
-          </Button>
-        </form>
-        <form action={discoverAugustDevicesAction}>
-          <Button type="submit" variant="primary" size="sm">
-            Discover August devices
-          </Button>
-        </form>
+        <DiscoverDevicesButton
+          label="Discover Nest devices"
+          action={discoverNestDevicesAction}
+        />
+        <DiscoverDevicesButton
+          label="Discover August devices"
+          action={discoverAugustDevicesAction}
+        />
       </div>
 
       <DiscoveredDevicesList devices={devices} properties={properties} />
