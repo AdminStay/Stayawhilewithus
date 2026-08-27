@@ -28,7 +28,27 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 CURRENT STATE — 2026-08-28 (READ THIS FIRST — supersedes the 2026-08-27 summary below)
+# 🔖 CURRENT STATE — 2026-08-28, later same day (READ THIS FIRST — supersedes the earlier 2026-08-28 summary below)
+
+**Authoritative current state as of `## Increment 61` (2026-08-28), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-28 summary immediately below, now historical), this summary governs. Full detail in `## Increment 61` at the bottom of this file. **Nothing in Increment 60's findings below this banner is superseded or invalidated** — the 43-August/33-Nest mapping analysis, the SAFE NOW/legacy/no-match lists, and the OwnerRez property-count root cause all still stand exactly as recorded; this increment is a deployment-verification investigation only, still in progress.
+
+1. **Production deployment `cea3e1b` (which contains `6ae5f91`) is confirmed Ready by the user.**
+2. **OwnerRez Production API confirmed genuinely working**: `/ownerrez` (a separate, older page — see item 4) displays the real live portfolio, 58 total / 38 active / 20 inactive, matching Increment 54/55's figures exactly.
+3. **`/properties` currently shows 7 StayWhile properties** — unchanged, matches Increment 60's root-cause finding exactly.
+4. **Two separate OwnerRez-related pages exist — do not conflate them:**
+   - `/ownerrez` (nav label "OwnerRez") — the older portfolio-overview page (`OwnerRezOverview` component, `getOwnerRezProperties`/`getOwnerRezHighlights`). **Never touched by `6ae5f91`. Onboarding does not belong here and was never supposed to appear here.**
+   - `/properties/ownerrez` (nav label "OwnerRez Match Report") — the page `6ae5f91` actually modified. Renders, top to bottom: `OwnerRezConfirmLinkPanel` (Phase B, pre-existing) → **`OwnerRezOnboardingPanel` (new, `6ae5f91`)** → `OwnerRezMatchReportPreview` (pre-existing, read-only).
+5. **The deployed `cea3e1b` source was directly inspected** (`git show cea3e1b:"apps/website/app/(dashboard)/properties/ownerrez/page.tsx"`), not just the working tree — confirmed `OwnerRezOnboardingPanel` is imported and rendered there, gated only on `result.configured && onboardingReport`, both of which must already be true whenever the sibling Confirm-Link panel is also rendering (same `matchOwnerRezProperties()` call, same `result.configured` flag). `git merge-base --is-ancestor 6ae5f91 cea3e1b` confirmed true.
+6. **The user's "OwnerRez Match Report" screenshot showed only the upper "Approved OwnerRez links" section** (`OwnerRezConfirmLinkPanel`) — **it is not yet confirmed whether the onboarding section is simply further down the same page** (the panel unconditionally renders visible header text — "OwnerRez properties not yet in StayWhile" / "Active (N)" / "Inactive (N)" — even with zero unmatched properties, so if it's genuinely absent after scrolling, that would rule out an empty-data explanation).
+7. **No code-level defect was found** in this investigation across RBAC, the render-gate condition, and empty-state logic — each was traced against the actual shipped source and ruled out as an explanation for a _partial_ page (the other sections rendering while only this one is missing), since none of them can discriminate between the sibling sections the way the symptom would require. **No fix has been proposed, approved, or applied** — correctly so, since the missing-UI report has not yet been confirmed as a real defect rather than a not-yet-scrolled-to section.
+8. **Immediate next action (blocks everything else in this file)**: the user will scroll further down `/properties/ownerrez` and look specifically for the heading **"OwnerRez properties not yet in StayWhile"** and a **"Create StayWhile Property"** button. Do not resume Locks/Thermostats/Notion work, and do not propose or apply any code fix, until this UI check is reported back.
+9. **No Production property has been created. No August/Nest device has been Mapped/Enabled/Unmapped.** The 5 SAFE NOW August locks (Increment 60) remain unexecuted, pending this UI check first.
+10. **The four legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain untouched**, per every prior increment's standing rule.
+11. **Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-28, later same day" above] CURRENT STATE — 2026-08-28
 
 **Authoritative current state as of `## Increment 60` (2026-08-28), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the 2026-08-27 summary immediately below, now historical), this summary governs. Full detail in `## Increment 60` at the bottom of this file.
 
@@ -2717,3 +2737,45 @@ No property created, no device Mapped/Enabled/Unmapped, no discovery rerun, no l
 7. n8n and Cielo remain untouched.
 
 **Standing safety rules reaffirmed**: the 4 legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain excluded from any ProviderDevice Map/Enable action; no lock/unlock/PIN/access-code capability exists or was enabled anywhere in this increment's work; `pgbouncer=true`/`connection_limit=1` was not touched; no bulk property creation exists anywhere in the new onboarding feature — only one-at-a-time, human-confirmed creation; no automatic device↔property or OwnerRez↔StayWhile matching occurred at any point.
+
+---
+
+## Increment 61 — 2026-08-28 (later same day): Production deployment `cea3e1b` confirmed Ready; investigated a user report that the new OwnerRez onboarding section wasn't visible — no code defect found, real cause not yet confirmed, resolution blocked on the user scrolling further down the page
+
+**This is a read-only investigation increment — no code changed, no Production data touched, nothing committed except this file.**
+
+### What the user confirmed in Production
+
+- Deployment `cea3e1b` (which contains `6ae5f91` — verified via `git merge-base --is-ancestor 6ae5f91 cea3e1b`) is Ready.
+- `/ownerrez` genuinely works against the real OwnerRez API: 58 total / 38 active / 20 inactive, matching Increment 54/55's already-verified figures exactly.
+- `/properties` still shows 7 StayWhile properties — matches Increment 60's root-cause finding exactly, unchanged.
+- A screenshot of the page nav-labeled "OwnerRez Match Report" showed the existing "Approved OwnerRez links" panel (`OwnerRezConfirmLinkPanel`, pre-existing Phase B) rendering correctly — but the new onboarding section was not visible in that screenshot.
+
+### Investigation performed (git/code inspection only, no Production access available in this session)
+
+- **Confirmed there are two separate, unrelated OwnerRez pages** — this was the first thing checked, since the user's description of routes ("/ownerrez", "/integrations/ownerrez-match") didn't cleanly match either real path in the codebase:
+  - `/ownerrez` (`apps/website/app/(dashboard)/ownerrez/page.tsx`, nav label "OwnerRez") — an older page, calls `integrations.service.ts`'s `getOwnerRezProperties()`/`getOwnerRezHighlights()`, renders `OwnerRezOverview`. **Never touched by commit `6ae5f91`.** This is exactly the page showing 58/38/20 — correct, expected behavior, not a bug.
+  - `/properties/ownerrez` (`apps/website/app/(dashboard)/properties/ownerrez/page.tsx`, nav label "OwnerRez Match Report") — the page `6ae5f91` actually modified. There is no route anywhere in this codebase matching "/integrations/ownerrez-match" (confirmed via a full search of `apps/website/app`) — the user's screenshot showing "the existing approved-link workflow" is almost certainly this route, just described from memory rather than the literal address bar.
+- **Inspected the actual deployed source, not the working tree**: `git show cea3e1b:"apps/website/app/(dashboard)/properties/ownerrez/page.tsx"` confirmed `OwnerRezOnboardingPanel` is imported and rendered, positioned between `OwnerRezConfirmLinkPanel` and `OwnerRezMatchReportPreview`, gated only on `result.configured && onboardingReport`.
+- **Traced every mechanism the user asked about and ruled each out as an explanation for a _partial_ page** (the sibling sections rendering successfully while only this one is absent):
+  - RBAC: `enrichUnmatchedOwnerRezProperties()` asserts the identical `properties:read` permission `matchOwnerRezProperties()` already asserted successfully, same actor, same request — cannot discriminate between the two.
+  - The render gate: `onboardingReport` is computed unconditionally whenever `result.configured` is true, and `result.configured` must already be true for the sibling Confirm-Link panel to be rendering at all (same shared `result` object) — there is no code path where one renders and the other doesn't via this gate.
+  - Empty-state/data-shape: `OwnerRezOnboardingPanel` unconditionally renders its heading and "Active (N)"/"Inactive (N)" sub-headings regardless of how many unmatched OwnerRez properties exist — it cannot render as fully invisible purely from real OwnerRez data content, even in the degenerate zero-unmatched case.
+  - A genuine uncaught server-side throw inside the new detail-fetch path was considered, but `page.tsx` has no `try/catch` around it — an uncaught throw there fails the _entire_ page render (Next.js error boundary/digest), not a partial page with sibling sections looking normal. Doesn't fit what was reported.
+
+### What was not, and could not be, checked from this session
+
+No Vercel CLI/dashboard access exists in this environment (same limitation documented since the 2026-08-21 checkpoint earlier in this file) — real Production Function Logs for this route were not and could not be checked. If the next step (below) doesn't resolve this, that log check is the correct next diagnostic, same pattern already used for the Nest permission discrepancy (Increment 38).
+
+### Conclusion
+
+No code defect was found that explains a partial page (some sections rendering, one specific section silently missing). The leading, not-yet-confirmed explanation is that the user's screenshot simply didn't scroll far enough down `/properties/ownerrez` to reach the new section, which renders below the pre-existing "Approved OwnerRez links" panel. **This has not been confirmed either way yet.**
+
+### Blocking next step
+
+The user will scroll further down `/properties/ownerrez` and report back whether they can find the heading **"OwnerRez properties not yet in StayWhile"** and a **"Create StayWhile Property"** button.
+
+- If found: this increment closes as a non-issue, and work resumes at Increment 60's "Current next priorities" list (onboard properties for device clusters one at a time, execute the 5 SAFE NOW August locks, etc.).
+- If genuinely not found after scrolling: the next step is requesting real Vercel Function Logs for `/properties/ownerrez` for a Production-only runtime error, since local test coverage (508/508 website, 153/153 integrations, both green) cannot reproduce a real-OwnerRez-API-shape issue that only manifests against the true 58-property portfolio.
+
+**No code change, Production write, property creation, device mapping, or discovery run occurred in this increment.** The 5 SAFE NOW August locks and any OwnerRez property creation remain exactly as pending as they were at the end of Increment 60. The four legacy August houses remain untouched. Priority order unchanged: Locks → Thermostats → Notion.
