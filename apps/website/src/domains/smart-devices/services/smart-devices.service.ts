@@ -411,18 +411,4 @@ export function isTelemetryStale(
   );
 }
 
-const PROVIDER_DISPLAY_NAMES: Partial<Record<SmartDevice["provider"], string>> =
-  {
-    AUGUST: "August",
-    YALE: "Yale",
-    CIELO: "Cielo",
-    NEST: "Nest",
-    ECOBEE: "Ecobee",
-    HONEYWELL: "Honeywell",
-  };
-
-export function getProviderDisplayName(
-  device: Pick<SmartDevice, "provider">,
-): string {
-  return PROVIDER_DISPLAY_NAMES[device.provider] ?? device.provider;
-}
+export { getProviderDisplayName } from "../lib/provider-display-name";

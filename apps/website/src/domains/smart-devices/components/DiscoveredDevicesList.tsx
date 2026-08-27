@@ -20,18 +20,16 @@ import {
   setProviderDeviceEnabledAction,
   unmapProviderDeviceAction,
 } from "../actions";
-import type { ProviderDevice } from "../services/provider-devices.service";
+import {
+  getAugustHouseId,
+  type DiscoveredDevice,
+  type Property,
+} from "../lib/discovered-device";
 import { getProviderDisplayName } from "../services/smart-devices.service";
 
-interface Property {
-  id: string;
-  name: string;
-}
+import { CopyInventoryButton } from "./CopyInventoryButton";
 
-type DiscoveredDevice = ProviderDevice & {
-  property: Property | null;
-  integrationConnection: { provider: string };
-};
+export type { DiscoveredDevice, Property };
 
 /**
  * Read-only display only — no control affordance here. Derived from the
@@ -96,129 +94,146 @@ export function DiscoveredDevicesList({
   }
 
   return (
-    <Table>
-      <TableHead>
-        <TableHeaderCell>Device</TableHeaderCell>
-        <TableHeaderCell>Provider</TableHeaderCell>
-        <TableHeaderCell>Connectivity</TableHeaderCell>
-        <TableHeaderCell>Property</TableHeaderCell>
-        <TableHeaderCell>Status</TableHeaderCell>
-        <TableHeaderCell>Capabilities (read-only)</TableHeaderCell>
-        <TableHeaderCell>Actions</TableHeaderCell>
-      </TableHead>
-      <TableBody>
-        {devices.map((device) => (
-          <TableRow key={device.id}>
-            <TableCell className="font-medium text-ink">
-              {device.discoveredName}
-            </TableCell>
-            <TableCell className="text-ink-muted">
-              {getProviderDisplayName({
-                provider: device.integrationConnection.provider as never,
-              })}
-            </TableCell>
-            <TableCell>
-              <StatusIndicator
-                label={device.connectivityStatus}
-                tone={
-                  device.connectivityStatus === "ONLINE" ? "success" : "neutral"
-                }
-              />
-            </TableCell>
-            <TableCell className="text-ink-muted">
-              {device.property?.name ?? "Unmapped"}
-            </TableCell>
-            <TableCell>
-              <Badge tone={device.enabled ? "success" : "neutral"}>
-                {device.enabled ? "Enabled" : "Discovered"}
-              </Badge>
-            </TableCell>
-            <TableCell>
-              <CapabilitySummary device={device} />
-            </TableCell>
-            <TableCell>
-              <div className="flex flex-wrap items-center gap-2">
-                {!device.propertyId && (
-                  <form
-                    action={mapProviderDeviceToPropertyAction}
-                    className="flex items-center gap-2"
-                  >
-                    <input
-                      type="hidden"
-                      name="providerDeviceId"
-                      value={device.id}
-                    />
-                    <Select name="propertyId" required defaultValue="">
-                      <option value="" disabled>
-                        Choose property…
-                      </option>
-                      {properties.map((property) => (
-                        <option key={property.id} value={property.id}>
-                          {property.name}
+    <>
+      <div className="mb-3 flex justify-end">
+        <CopyInventoryButton devices={devices} />
+      </div>
+      <Table>
+        <TableHead>
+          <TableHeaderCell>Device</TableHeaderCell>
+          <TableHeaderCell>Provider</TableHeaderCell>
+          <TableHeaderCell>External ID</TableHeaderCell>
+          <TableHeaderCell>House ID</TableHeaderCell>
+          <TableHeaderCell>Connectivity</TableHeaderCell>
+          <TableHeaderCell>Property</TableHeaderCell>
+          <TableHeaderCell>Status</TableHeaderCell>
+          <TableHeaderCell>Capabilities (read-only)</TableHeaderCell>
+          <TableHeaderCell>Actions</TableHeaderCell>
+        </TableHead>
+        <TableBody>
+          {devices.map((device) => (
+            <TableRow key={device.id}>
+              <TableCell className="font-medium text-ink">
+                {device.discoveredName}
+              </TableCell>
+              <TableCell className="text-ink-muted">
+                {getProviderDisplayName({
+                  provider: device.integrationConnection.provider as never,
+                })}
+              </TableCell>
+              <TableCell className="text-ink-muted">
+                {device.externalDeviceId}
+              </TableCell>
+              <TableCell className="text-ink-muted">
+                {getAugustHouseId(device) ?? "—"}
+              </TableCell>
+              <TableCell>
+                <StatusIndicator
+                  label={device.connectivityStatus}
+                  tone={
+                    device.connectivityStatus === "ONLINE"
+                      ? "success"
+                      : "neutral"
+                  }
+                />
+              </TableCell>
+              <TableCell className="text-ink-muted">
+                {device.property
+                  ? `${device.property.name} (${device.property.internalCode})`
+                  : "Unmapped"}
+              </TableCell>
+              <TableCell>
+                <Badge tone={device.enabled ? "success" : "neutral"}>
+                  {device.enabled ? "Enabled" : "Discovered"}
+                </Badge>
+              </TableCell>
+              <TableCell>
+                <CapabilitySummary device={device} />
+              </TableCell>
+              <TableCell>
+                <div className="flex flex-wrap items-center gap-2">
+                  {!device.propertyId && (
+                    <form
+                      action={mapProviderDeviceToPropertyAction}
+                      className="flex items-center gap-2"
+                    >
+                      <input
+                        type="hidden"
+                        name="providerDeviceId"
+                        value={device.id}
+                      />
+                      <Select name="propertyId" required defaultValue="">
+                        <option value="" disabled>
+                          Choose property…
                         </option>
-                      ))}
-                    </Select>
-                    <Button type="submit" size="sm" variant="secondary">
-                      Map
-                    </Button>
-                  </form>
-                )}
+                        {properties.map((property) => (
+                          <option key={property.id} value={property.id}>
+                            {property.name}
+                          </option>
+                        ))}
+                      </Select>
+                      <Button type="submit" size="sm" variant="secondary">
+                        Map
+                      </Button>
+                    </form>
+                  )}
 
-                {device.propertyId && !device.enabled && (
-                  <form action={setProviderDeviceEnabledAction}>
-                    <input
-                      type="hidden"
-                      name="providerDeviceId"
-                      value={device.id}
-                    />
-                    <input type="hidden" name="enabled" value="true" />
-                    <ConfirmButton
-                      type="submit"
-                      size="sm"
-                      variant="primary"
-                      confirmMessage={`Enable "${device.discoveredName}"? It will start appearing on the dashboard as a real device.`}
-                    >
-                      Enable
-                    </ConfirmButton>
-                  </form>
-                )}
+                  {device.propertyId && !device.enabled && (
+                    <form action={setProviderDeviceEnabledAction}>
+                      <input
+                        type="hidden"
+                        name="providerDeviceId"
+                        value={device.id}
+                      />
+                      <input type="hidden" name="enabled" value="true" />
+                      <ConfirmButton
+                        type="submit"
+                        size="sm"
+                        variant="primary"
+                        confirmMessage={`Enable "${device.discoveredName}"? It will start appearing on the dashboard as a real device.`}
+                      >
+                        Enable
+                      </ConfirmButton>
+                    </form>
+                  )}
 
-                {device.propertyId && device.enabled && (
-                  <form action={setProviderDeviceEnabledAction}>
-                    <input
-                      type="hidden"
-                      name="providerDeviceId"
-                      value={device.id}
-                    />
-                    <input type="hidden" name="enabled" value="false" />
-                    <Button type="submit" size="sm" variant="secondary">
-                      Disable
-                    </Button>
-                  </form>
-                )}
+                  {device.propertyId && device.enabled && (
+                    <form action={setProviderDeviceEnabledAction}>
+                      <input
+                        type="hidden"
+                        name="providerDeviceId"
+                        value={device.id}
+                      />
+                      <input type="hidden" name="enabled" value="false" />
+                      <Button type="submit" size="sm" variant="secondary">
+                        Disable
+                      </Button>
+                    </form>
+                  )}
 
-                {device.propertyId && (
-                  <form action={unmapProviderDeviceAction}>
-                    <input
-                      type="hidden"
-                      name="providerDeviceId"
-                      value={device.id}
-                    />
-                    <ConfirmButton
-                      type="submit"
-                      size="sm"
-                      variant="secondary"
-                      confirmMessage={`Unmap "${device.discoveredName}" from ${device.property?.name}? This clears its property mapping and disables it.`}
-                    >
-                      Unmap
-                    </ConfirmButton>
-                  </form>
-                )}
-              </div>
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+                  {device.propertyId && (
+                    <form action={unmapProviderDeviceAction}>
+                      <input
+                        type="hidden"
+                        name="providerDeviceId"
+                        value={device.id}
+                      />
+                      <ConfirmButton
+                        type="submit"
+                        size="sm"
+                        variant="secondary"
+                        confirmMessage={`Unmap "${device.discoveredName}" from ${device.property?.name}? This clears its property mapping and disables it.`}
+                      >
+                        Unmap
+                      </ConfirmButton>
+                    </form>
+                  )}
+                </div>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </>
   );
 }
