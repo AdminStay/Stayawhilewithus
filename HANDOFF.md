@@ -28,22 +28,61 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 CURRENT STATE — 2026-08-26 (READ THIS FIRST — supersedes the 2026-08-24 pivot below)
+# 🔖 CURRENT STATE — 2026-08-28 (READ THIS FIRST — supersedes the 2026-08-27 summary below)
 
-**Authoritative current state as of `## Increment 58` (2026-08-26), the latest increment in this file.** The "PRIORITY PIVOT — 2026-08-24" section immediately below is kept for history — several of the items it lists as pending are now complete. Read this summary first; where it conflicts with anything below (including that section), this summary governs. Full detail for every line below is in `## Increment 58` at the bottom of this file.
+**Authoritative current state as of `## Increment 60` (2026-08-28), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the 2026-08-27 summary immediately below, now historical), this summary governs. Full detail in `## Increment 60` at the bottom of this file.
+
+1. **August discovery performance fix** (Increment 59's two-phase rewrite) — ✅ **COMPLETE, committed (`cc8daea`), pushed, Vercel-deployed.** No longer "not yet committed" — that line in the 2026-08-27 summary below is stale. Production discovery has still not been rerun since (the 43 already-discovered `ProviderDevice` rows remain as they were) — not needed, since this was a performance fix, not a data-refresh action.
+2. **Smart-device inventory visibility/export** (`/integrations/devices` gained External ID, House ID, `Property (INTERNAL-CODE)` columns, and a "Copy inventory as CSV" button) — ✅ **COMPLETE, committed (`50cb770`), pushed, Vercel-deployed, Production-verified** — the user used this exact feature to export the real, current 43-August/33-Nest inventory used in the mapping analysis below.
+3. **Full read-only mapping analysis performed against the real Production export** (not the superseded 2026-08-20 44-lock historical list). Every one of the 43 August locks and 33 Nest thermostats was classified. Key findings:
+   - **5 August locks are SAFE NOW to Map+Enable** (non-legacy, high confidence): Bahamas - Front Door → Bahamas; Ocean Pearl - Front Door, Garage Door, and Spa lock (all three share houseId `b4960a25-c4bd-4e1e-a39f-51c383df4d14`) → Ocean Pearl; Sandy Nudes Front Door → Sandy Nudes. **Approved by the user but not yet clicked — still pending in Production**, see item 6 below.
+   - **The 4 legacy houses remain excluded**: Aqua Palm (`c98c1d75-...`), Bonjour AMI (`81b55799-...`), Island Tides (`1ee6ffaf-...`), Miramar Bliss (`834a41d3-...`) — their locks stay owned by `AUGUST_PROPERTY_MAP`; mapping them via ProviderDevice would be silently reverted by the next legacy "Sync Now" run (real conflict, confirmed by code trace, not hypothetical).
+   - **31 August locks and 28 Nest thermostats have no corresponding StayWhile property at all** — not a mapping-confidence problem, a **property-onboarding gap** (see item 4).
+   - **Row-count discrepancy flagged, not silently resolved**: the pasted CSV contained 33 Nest rows, not the stated 31 (two devices both named "Royal Palm" with different external IDs, cause unconfirmed) — user asked to verify on their end, unresolved as of this writing.
+4. **Root cause of the property gap identified**: OwnerRez's real portfolio is **58 properties** (38 active, 20 inactive — already Production-verified pagination, Increment 54/55); StayWhile's `Property` table has only **7**, all created manually, historically, purely to support August/Cielo mapping — **OwnerRez has never been the source of a StayWhile property row on `main`.** A full write-capable sync exists only in an isolated, unmerged worktree (`worktree-ownerrez-property-sync`) that Increment 58 already flagged as unsafe-as-built (mixed read/write in one file) — deliberately not resurrected.
+5. **OwnerRez property onboarding (narrow, freshly-built, not reused from the worktree)** — ✅ **COMPLETE, committed (`6ae5f91`), pushed — Vercel deploy status not yet confirmed by the user as of this writing.** Adds a read-only Active/Inactive list of OwnerRez properties with no StayWhile row (`/properties/ownerrez`), enriched with real address/bedroom/bathroom/timezone via a new `OwnerrezClient.getProperty(id)` detail call (bounded to 5-concurrent, same lesson as item 1's fix), plus a one-at-a-time "Create StayWhile Property" action — human-confirmed, RBAC (`properties:create`) + audited, forces `PropertyStatus.ONBOARDING` (never `ACTIVE`), rejects rather than fabricates any missing required field, rejects duplicate `ownerRezPropertyId`/`internalCode`. No schema migration needed (`ownerRezPropertyId`/`ONBOARDING` already existed). **No property has been created with it yet** — zero Production writes from this feature so far.
+6. **Nothing has been Mapped, Enabled, or Unmapped in Production this entire increment.** The 5 SAFE NOW August locks (item 3) and any OwnerRez property creation (item 5) are both still pending the user's own click-through, once Vercel confirms Ready.
+7. **Next step, exact order**: once Vercel is Ready, open `/properties/ownerrez`, review the Active OwnerRez properties list, onboard only the properties actually needed for current August/Nest device clusters (Champion, Driftwood, Mahalo, Majestic, Moonlit, Royal Eden, etc. — real OwnerRez record required for each, never inferred from a device name alone), one property at a time — verify each, then map+enable its locks/thermostats, then move to the next. Locks → Thermostats → Notion remains the priority order.
+8. **Thermostats, Notion** — unchanged, still pending behind the Locks work above.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-28" above] CURRENT STATE — 2026-08-27
+
+**Authoritative current state as of `## Increment 59` (2026-08-27), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the 2026-08-26 summary immediately below, now historical), this summary governs. Full detail for every line below is in `## Increment 59` at the bottom of this file.
+
+1. **Dashboard team invitation / role management** — ✅ **COMPLETE, committed (`7218362`), pushed, Vercel-deployed.** A real invitation was sent to `info@stayawhilewithus.com` as Admin. Role is applied exactly once via Clerk `publicMetadata`, on first `User` row creation only.
+2. **OwnerRez Phase B — one-at-a-time "Confirm Link" write capability** — ✅ **COMPLETE, committed (`f3caf31`), pushed, Vercel-deployed.** Only the 6 human-approved pairs are linkable (Aqua Palm, Bahamas, Bonjour AMI, Island Tides, Ocean Pearl, Sandy Nudes); Miramar Bliss is deliberately absent from the allow-list and cannot be linked through this UI.
+3. **Aqua Palm** — the user has stated they manually confirmed this link themselves directly in the Production dashboard. **This session has not independently verified that write via a database query or audit-log read — treat it as reported-by-the-user, not session-verified**, until someone actually checks.
+4. **Remaining five approved mappings** (Bahamas, Bonjour AMI, Island Tides, Ocean Pearl, Sandy Nudes) — **still pending explicit human confirmation, one at a time.** Nothing else has been linked.
+5. **Miramar Bliss** — **still unresolved/genuinely ambiguous** (3 OwnerRez candidates, none preferred or defaulted) — unchanged from Increment 58, and structurally excluded from Phase B's allow-list so it cannot be linked by accident.
+6. **August dynamic `ProviderDevice` discovery/mapping** — ✅ **COMPLETE, committed (`9448fc1`), pushed, Vercel-deployed.** A fresh read-only discovery run found **43 real locks** (supersedes Increment 36's unpersisted "44" figure). Production's "Discover August devices" button was clicked and reported **"43 devices discovered."** Treat those 43 `ProviderDevice` rows as already discovered/persisted — do not rerun Production discovery merely to repopulate them.
+7. **Discovery-feedback UX** (pending/success/failure inline messaging for both Nest's and August's discovery buttons) — ✅ **COMPLETE, committed (`59e8f2a`), pushed, Vercel-deployed, and verified working directly in Production by the user.**
+8. **Production incident (root-caused, real Vercel logs)** — after the "43 devices discovered" success state rendered, a later request returned a server-side application error. Vercel logs showed two distinct errors: a `PrismaClientKnownRequestError P2024` (connection-pool timeout under Production's required `connection_limit=1`) and a separate `Task timed out after 300 seconds` runtime timeout. Root cause: the original `discoverAugustDevices()` ran 44 fully sequential HTTP+DB round trips in one Server Action invocation, holding the app's one permitted DB connection busy long enough to starve concurrent requests and approach the platform's execution cap. See Increment 59 for the full trace.
+9. **`pgbouncer=true&connection_limit=1` on Production's `DATABASE_URL` is intentional and required** (Increment 24 — works around a real Supabase/Prisma transaction-pooler `42P05` conflict). **Do not remove or change it** — the fix below works within this constraint, not around it.
+10. **August discovery performance fix** — a two-phase rewrite of `discoverAugustDevices()` (fast batched base-inventory write, then bounded-concurrency ≤5-at-a-time detail enrichment tolerating per-lock failures) has been **implemented and fully verified locally (459/459 website tests, 151/151 integrations tests, both typechecks clean, clean production build) but is NOT YET committed, pushed, or deployed**, and Production discovery has not been rerun since. See Increment 59 for exact files and verification output.
+11. **No lock/unlock/PIN/access-code capability has been enabled anywhere in this work.** August remains monitoring/discovery-only. The legacy `AUGUST_PROPERTY_MAP`-driven sync (`syncAugustDevices`) remains completely untouched throughout all of the above.
+12. **Thermostats** (Nest's 33-device fleet, Honeywell/Ecobee registrations) remain the next major pending integration, to resume once the August Production path (item 10) is committed, deployed, and confirmed stable.
+13. **n8n, Cielo** — untouched, remain later priorities behind everything above.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-27" above] CURRENT STATE — 2026-08-26
+
+**Authoritative current state as of `## Increment 58` (2026-08-26), the latest increment in this file at the time this section was written.** The "PRIORITY PIVOT — 2026-08-24" section immediately below is kept for history — several of the items it lists as pending are now complete.
 
 1. **OwnerRez pagination / full portfolio retrieval** — ✅ **COMPLETE, Production-verified.** Real portfolio is 58 total properties (38 active, 20 inactive); pagination and OwnerRez's default `active=true` filtering are both handled correctly. See Increments 54/55.
 2. **Notion read / listing / search** — ✅ **COMPLETE, Production-verified.** 35 real "View of Listings" records load with name/keyword/region search, strictly read-only. See Increments 53/56/57.
 3. **OwnerRez Phase A — read-only match report** — ✅ **COMPLETE, Production-verified.** 0 properties linked. No Confirm/Create/Apply controls or write paths are present on merged `main` or the Production Phase A match-report route. The older write-capable `ownerrez-property-sync` worktree remains isolated and unmerged. See Increment 58.
-4. **Six OwnerRez candidate mappings** (Aqua Palm, Bahamas, Bonjour AMI, Island Tides, Ocean Pearl, Sandy Nudes) — **awaiting explicit human confirmation, one at a time.** Nothing linked yet. See Increment 58.
-5. **Miramar Bliss** — **unresolved, genuinely ambiguous** (3 OwnerRez candidates, none preferred or defaulted). Requires stronger evidence than name similarity before any decision. See Increment 58.
-6. **Phase B — one-at-a-time "Confirm Link" write capability** — **not yet enabled.** To be designed/built inside the isolated `ownerrez-property-sync` worktree only, after the six candidates above are explicitly approved.
-7. **Old write-capable `ownerrez-property-sync` worktree** (commit `46c4d6e`) — **remains isolated**: not merged to `main`, not deployed, not activated.
-8. **n8n, Nest, August, Cielo** — untouched, remain later priorities behind everything above.
+4. **Six OwnerRez candidate mappings** (Aqua Palm, Bahamas, Bonjour AMI, Island Tides, Ocean Pearl, Sandy Nudes) — **awaiting explicit human confirmation, one at a time.** Nothing linked yet. See Increment 58. — **superseded by item 3/4 above: Phase B has since shipped and Aqua Palm has since been reported linked.**
+5. **Miramar Bliss** — **unresolved, genuinely ambiguous** (3 OwnerRez candidates, none preferred or defaulted). Requires stronger evidence than name similarity before any decision. See Increment 58. — **still true, see item 5 above.**
+6. **Phase B — one-at-a-time "Confirm Link" write capability** — **not yet enabled.** To be designed/built inside the isolated `ownerrez-property-sync` worktree only, after the six candidates above are explicitly approved. — **superseded: Phase B shipped directly on `main`, not inside that worktree — see item 2 above.**
+7. **Old write-capable `ownerrez-property-sync` worktree** (commit `46c4d6e`) — **remains isolated**: not merged to `main`, not deployed, not activated. — **still true.**
+8. **n8n, Nest, August, Cielo** — untouched, remain later priorities behind everything above. — **superseded for August, see items 6–11 above.**
 
 ---
 
-# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-26" above] PRIORITY PIVOT — 2026-08-24
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-27" above] PRIORITY PIVOT — 2026-08-24
 
 **New active priority, set 2026-08-24 by the client, via the user.** OwnerRez + Notion must become genuinely production-verified BEFORE any further Nest/August/Cielo work resumes. This is a business-driven reordering, not a technical blocker on the device work — the device-control pivot below (2026-08-21) is paused, not abandoned.
 
@@ -2538,3 +2577,143 @@ Island Tides has one near-neighbor in the full dataset — **Island SOS (355022,
 5. n8n, Nest, August, and Cielo remain untouched.
 
 **Standing safety rule reaffirmed**: candidate identification is not link approval. No automatic name-based matching, no fuzzy-matching auto-decisions, no bulk linking, no writes of any kind until a human explicitly confirms each individual mapping.
+
+---
+
+## Increment 59 — 2026-08-27: Dashboard invitations, OwnerRez Phase B, and dynamic August discovery all shipped and Production-verified; a real Production P2024/timeout incident was root-caused via live Vercel logs; the fix is implemented and locally verified but NOT yet committed
+
+### Dashboard team invitation / role management — ✅ COMPLETE, committed, pushed, Production-deployed
+
+- **Commit `7218362`** — "Add dashboard team invitation and role management." 17 files (`users/actions.ts`, `UserList.tsx`, new `InviteTeamMemberForm.tsx`/`PendingInvitationsList.tsx`/`RolePermissionsList.tsx`, `users.service.ts`, `users.schema.ts`, `get-current-user.ts`, `errors.ts`, new `invite-clerk-user.ts`, `sync-clerk-user.ts`, plus matching test files).
+- Optional role selection at invite time is stored in the Clerk invitation's `publicMetadata` (`pendingRoleId`/`pendingPropertyId`/`pendingRoleInvitedByUserId`) and applied via `applyPendingRoleFromInvitation()` **exactly once** — only inside the `user.created` webhook's brand-new-row branch and the JIT-provisioning create branch, never on update or claim-by-email.
+- Pushed; Vercel auto-deployed. A real invitation was sent to `info@stayawhilewithus.com` as Admin — confirmed by the user directly, not by this session querying Clerk.
+
+### OwnerRez Phase B — one-at-a-time "Confirm Link" — ✅ COMPLETE, committed, pushed, Production-deployed
+
+- **Commit `f3caf31`** — "Add one-at-a-time OwnerRez link confirmation." 9 files: new `ownerrez-approved-links.ts` (hard-coded allow-list of exactly the 6 human-approved pairs — Aqua Palm→386471, Bahamas→377839, Bonjour AMI→432997, Island Tides→355021, Ocean Pearl→431354, Sandy Nudes→355024), new `ownerrez-link.schema.ts`/`ownerrez-link.service.ts` (`confirmOwnerRezLink`: RBAC-checked, rejects any property/id pair not on the allow-list, rejects a property that already has an `ownerRezPropertyId`, rejects a cross-property `ownerRezPropertyId` conflict, records an audit entry), new `OwnerRezConfirmLinkPanel.tsx` (the only write-UI surface — `OwnerRezMatchReportPreview.tsx` stayed completely read-only/unchanged), and the `/properties/ownerrez` page/actions wiring.
+- **Miramar Bliss is deliberately absent from the allow-list** — verified by direct grep of the committed file — so it structurally cannot be linked through this UI regardless of any future dashboard interaction, until it is separately resolved and explicitly added.
+- Pushed; Vercel auto-deployed.
+- **Aqua Palm**: the user reported, in chat, that they manually clicked "Confirm Link" for Aqua Palm themselves directly in the Production dashboard (this session's own attempt to do it via browser automation found the Claude-in-Chrome extension not connected, and per explicit instruction did not fall back to any other method — a database write, script, or API call). **This session has not independently verified that write** — no audit-log read, no database query, no re-fetch of the Production match report was performed to confirm `Property.ownerRezPropertyId` is actually set for Aqua Palm. Treat it as user-reported, not session-verified, until someone actually checks.
+- **Bahamas, Bonjour AMI, Island Tides, Ocean Pearl, Sandy Nudes remain pending explicit human confirmation, one at a time** — nothing else has been linked.
+- **Miramar Bliss remains unresolved/genuinely ambiguous** (3 candidates: 389173/410682/480401, see Increment 58) — unchanged this session.
+
+### August dynamic `ProviderDevice` discovery/mapping — ✅ COMPLETE, committed, pushed, Production-deployed and tested
+
+- A fresh, read-only discovery run against the real Production August account found **43 real locks** — this supersedes Increment 36's "44 locks" figure, which was confirmed there to have never been persisted (it came from a zero-write diagnostic script's terminal output only).
+- **Commit `9448fc1`** — "Add August device discovery and dynamic mapping." 6 files: `discoverAugustDevices()` added to `provider-devices.service.ts` (mirrors Nest's existing `ProviderDevice`-staging pattern — `listLocks()` + per-lock `getLockDetail()`, upserted keyed on `[integrationConnectionId, externalDeviceId]`, never auto-mapped), a `parseBatteryLevel()` normalizer added to `packages/integrations/src/august/client.ts` (August's negative-fraction "no reading" sentinel, e.g. `-1`, now normalizes to `null` instead of a nonsensical negative percentage), and the `/integrations/devices` page wired to a second `DiscoverDevicesButton` for August.
+- Pushed; Vercel auto-deployed. **Production test performed by the user**: clicking "Discover August devices" on the deployed `/integrations/devices` page successfully reported **"43 devices discovered."**
+- **These 43 `ProviderDevice` rows should be treated as already discovered and persisted in Production.** Do not rerun Production discovery merely to repopulate them — re-running discovery is exactly the action that later triggered the incident documented below.
+- This is purely additive alongside the existing `AUGUST_PROPERTY_MAP`-driven `syncAugustDevices()` — that legacy sync function was not read, called, or modified by any of this session's work, and no `SmartDevice` row it created was touched.
+- **No lock/unlock/PIN/access-code capability was added or enabled anywhere in this work.** August remains monitoring/discovery-only, exactly as it was before this session (see Increment 39's capability audit — no lock/unlock/PIN code exists anywhere in this codebase, not stubbed, never written).
+
+### Discovery-feedback UX — ✅ COMPLETE, committed, pushed, Production-deployed, verified working
+
+- **Commit `59e8f2a`** — "Add discovery feedback for smart devices." 5 files: new shared `DiscoverDevicesButton.tsx` (client component, `useActionState`-driven pending/success/failure inline rendering, reused for both Nest and August with zero provider-specific logic), `actions.ts`'s `DiscoverActionState`/`runDiscovery()` (the discovery action itself never throws — a real failure renders inline instead of crashing to the page-level error boundary), and the `/integrations/devices` page wired to use it for both providers.
+- This closed the real UX gap the user found in Production: previously, clicking either discovery button gave no visible pending/success/failure feedback at all (the Discovered Devices table populated correctly underneath, but the click itself looked like nothing happened).
+- Pushed; Vercel auto-deployed. **Verified working directly by the user in Production** — this is exactly how the "43 devices discovered" success message referenced above was seen at all.
+
+### Production incident — P2024 connection-pool timeout + 300-second runtime timeout (root-caused via real Vercel logs)
+
+After the "43 devices discovered" success state was seen rendering correctly in Production, a **later** request to the same route returned a genuine server-side application error (`Application error... Digest: 3556616185`), reported directly by the user with a screenshot.
+
+- **Investigation history, honestly recorded**: the first line of investigation (render-path/Suspense-boundary analysis of `DiscoveredDevicesList.tsx`/`listDiscoveredDevices()`, on the hypothesis that malformed August `ProviderDevice` data was breaking a later render) found no bug and was a dead end — the user explicitly redirected ("Stop investigating August row rendering") once they obtained the actual Vercel Production logs.
+- **Confirmed root cause from real Vercel logs** (not inferred): two distinct errors — `PrismaClientKnownRequestError P2024` ("Timed out fetching a new connection from the connection pool... (connection limit: 1)"), and, separately, `Vercel Runtime Timeout Error: Task timed out after 300 seconds`.
+- **Mechanism**: the original `discoverAugustDevices()` called `listLocks()` once, then looped over all 43 locks **sequentially**, awaiting `client.getLockDetail(lock.id)` and then a full `prisma.providerDevice.upsert(...)` before moving to the next lock — 44 total network+DB round trips, fully serialized, inside one Server Action invocation. Production's `DATABASE_URL` is deliberately configured with `pgbouncer=true&connection_limit=1` (see below) — this single long-running invocation held the app's one permitted DB connection busy for an abnormally long window, starving other concurrent requests' own `prisma.user.findUnique()` connection checkouts past Prisma's pool timeout (P2024), and separately risked exceeding Vercel's hard 300-second function execution cap on slow/rate-limited runs against August's real API.
+- **`pgbouncer=true&connection_limit=1` on Production's `DATABASE_URL` is intentional and required** — confirmed via this file's own Increment 24, which documents it as the fix for a real Supabase/Prisma transaction-pooler `42P05` prepared-statement conflict. **This must not be changed or removed** as part of fixing the above; the fix below works entirely within this constraint.
+
+### August discovery performance fix — implemented and locally verified, NOT yet committed/deployed
+
+Approved design: **two-phase discovery**, replacing the old single sequential loop.
+
+- **Phase 1 (fast, always runs)**: one `client.listLocks()` call, then one batched `prisma.$transaction([...])` upserting every lock's base identity (`id`/`name`/`houseId`, `connectivityStatus: "UNKNOWN"`) — sufficient for every lock to appear Unmapped and mappable immediately, with no detail call required to reach this state.
+- **Phase 2 (best-effort enrichment)**: locks are processed in chunks of `AUGUST_DETAIL_CONCURRENCY = 5` at a time; each chunk's `getLockDetail()` calls run concurrently via `Promise.allSettled` (never inside a `$transaction` — each chunk's HTTP calls fully settle before that chunk's DB write); each chunk's successful results are written in one further batched `$transaction([...])`. A failed `getLockDetail()` affects only that one lock (counted in a new `detailFailures` field) — it never fails the run or its batch-mates.
+- Result shape extended: `DiscoverySyncResult` now carries optional `enriched`/`detailFailures` alongside `discovered` — Nest's `discoverNestDevices()` is untouched and never sets these fields (it has nothing to separately enrich).
+- `actions.ts`'s `DiscoverActionState`/`runDiscovery()` and `DiscoverDevicesButton.tsx`'s success message were extended to surface `enriched`/`detailFailures` when present, without changing Nest's plain "Discovered N devices." message at all.
+- **Files changed (6, all currently uncommitted working-tree edits)**: `apps/website/src/domains/smart-devices/services/provider-devices.service.ts`, `.../provider-devices.service.test.ts`, `apps/website/src/domains/smart-devices/actions.ts`, `.../actions.test.ts`, `apps/website/src/domains/smart-devices/components/DiscoverDevicesButton.tsx`, `.../DiscoverDevicesButton.test.tsx`.
+- `DATABASE_URL`/`DIRECT_URL`/`pgbouncer=true`/`connection_limit=1` were not touched by this fix anywhere — no `.env*` or Prisma config file appears in this change.
+
+**Verification results (this session, local only)**:
+
+- Focused new/updated tests: **39/39 passed** (23 in `provider-devices.service.test.ts` — including new tests for Phase 1 persisting even when every detail call fails, bounded concurrency empirically capped at 5 in-flight, one failed detail request not affecting its batch-mates, shared-`houseId` separation, idempotency, and no-auto-mapping; 6 in `actions.test.ts`; 10 in `DiscoverDevicesButton.test.tsx`).
+- Full `website` suite: **459/459 passed** across 43 test files.
+- Full `@stayw/integrations` suite: **151/151 passed** across 11 test files.
+- `website` typecheck (`tsc --noEmit`): **clean.**
+- `@stayw/integrations` typecheck (`tsc --noEmit`): **clean.**
+- `git diff --check`: **clean** (no whitespace errors).
+- Production build (`next build`, with temporary fake `N8N_BASE_URL`/`N8N_WEBHOOK_SHARED_SECRET`/`N8N_INBOUND_WEBHOOK_SHARED_SECRET` passed via shell environment only, never written to any file, working around a known unrelated pre-existing n8n env-validation build gap): **succeeded** — only pre-existing, unrelated ESLint import-order warnings in test files.
+
+**Not staged, not committed, not pushed, not deployed.** Production discovery has not been rerun since this fix was written — the 43 already-discovered `ProviderDevice` rows in Production (see above) remain exactly as they were, untouched by this session. A commit SHA for this fix will be recorded in a future increment once a commit actually exists — none exists yet.
+
+### Current next priorities, in order (supersedes Increment 58's list)
+
+1. **Get explicit approval for the August discovery performance fix above**, then stage/commit/push/deploy it, and re-verify "Discover August devices" in Production without triggering another P2024/timeout.
+2. **Present the five remaining approved OwnerRez candidates** (Bahamas, Bonjour AMI, Island Tides, Ocean Pearl, Sandy Nudes) for explicit human confirmation, one at a time, via the shipped Phase B UI.
+3. **Independently verify the Aqua Palm link** (a real audit-log read or database check, not another chat report) before treating it as confirmed in any future increment.
+4. **Investigate Miramar Bliss separately**, using stronger authoritative evidence than name similarity — still not linked, still deliberately excluded from the Phase B allow-list.
+5. **Thermostats** (Nest's 33-device fleet, Honeywell/Ecobee provider registrations) resume as the next major integration priority once item 1 above is committed, deployed, and confirmed stable in Production.
+6. n8n and Cielo remain untouched.
+
+**Standing safety rules reaffirmed**: no lock/unlock/PIN/access-code capability exists or was enabled anywhere in this session's work; the legacy `AUGUST_PROPERTY_MAP` sync path was not read, called, or modified; `pgbouncer=true`/`connection_limit=1` was not changed; no automatic device↔property mapping occurred at any point; Miramar Bliss remains unlinkable by design until separately resolved.
+
+---
+
+## Increment 60 — 2026-08-28: August discovery perf fix and inventory visibility/export both deployed and Production-verified; full read-only mapping analysis run against the real 43-lock/33-thermostat export; root-caused why 51 OwnerRez properties are missing from the dashboard; narrow OwnerRez property-onboarding feature built, committed, and pushed
+
+### August discovery performance fix — ✅ COMPLETE, committed, pushed, deployed
+
+**Commit `cc8daea`** — "Optimize August device discovery." Exactly the 6 files Increment 59 described (two-phase `discoverAugustDevices()` rewrite, `provider-devices.service.ts`/`actions.ts`/`DiscoverDevicesButton.tsx` + their tests). Verified before commit: 459/459 website tests, 151/151 integrations tests, both typechecks clean, `git diff --check` clean, production build succeeded. Pushed; local `main` and `origin/main` confirmed at the same SHA. Production discovery has not been rerun since — not needed, this was a performance fix to existing discovered rows' write path, not a data-refresh action.
+
+### Smart-device inventory visibility/export — ✅ COMPLETE, committed, pushed, deployed, Production-verified
+
+**Commit `50cb770`** — "Add smart-device inventory visibility and export." 8 files: `DiscoveredDevicesList.tsx` gained External ID / House ID / `Property (INTERNAL-CODE)` columns; new `CopyInventoryButton.tsx` (client-side CSV of exactly 8 non-sensitive fields — Provider, Device/Lock Name, External Device ID, House ID, Connectivity, Mapped Property, Property Internal Code, Enabled/Disabled — RFC-4180 escaped, never serializes `rawMetadata` wholesale); new `lib/discovered-device.ts` (the `getAugustHouseId`/`DiscoveredDevice`/`Property` types, deliberately dependency-free so the client component doesn't drag in a `"server-only"`-guarded service — this exact class of bug was hit and fixed during this work, mirroring the Nest `capabilities.ts` split precedent) and `lib/provider-display-name.ts` (same reason — `getProviderDisplayName` moved out of `smart-devices.service.ts` for the same server/client boundary fix, re-exported so no existing caller broke). 481/481 website tests, 151/151 integrations tests, both typechecks clean, production build succeeded. **The user used this exact feature in Production** to export the real, current device inventory used in the mapping analysis below.
+
+### Full read-only mapping analysis against the real Production export (no writes)
+
+The user pasted the complete "Copy inventory as CSV" output (43 August + 33 Nest rows) in chunks; analysis only began after an explicit "END OF CSV" marker, per the user's own request — this avoided analyzing a partial/truncated paste.
+
+**August — all 43 locks classified, grouped by houseId:**
+
+- **7 locks, 4 houses — LEGACY, excluded from any ProviderDevice action**: Aqua Palm - Front Door (`c98c1d75-cc3e-4315-be7a-16d6d37a97c8`); Bonjour - Front Door + Bonjour - In Law (`81b55799-18f6-48c2-88ec-a8272b5b3b65`); Island Tides - Front Door + Island Tides - Man Cave (`1ee6ffaf-6fe7-42e1-9d4a-bc9e66a677c5`); Miramar Bliss - Front Door + Mother In Law - Door (`834a41d3-a673-43e8-a2ea-9d50ab5c6d75`). Confirmed by code trace (not just historical record): `syncAugustDevices()` unconditionally re-sets `propertyId` from `AUGUST_PROPERTY_MAP[houseId]` on every "Sync Now" run, upserting the identical `SmartDevice` row (`[provider, externalDeviceId]`) that `setProviderDeviceEnabled()` would also write — so mapping any of these 7 via ProviderDevice would be silently reverted on the next legacy sync. This is a real, confirmed conflict, not a hypothetical one.
+- **5 locks, 3 properties — SAFE NOW (approved by the user, not yet clicked in Production)**: Bahamas - Front Door (`5AA08B0442EF407DB7243D4623EE2968`, houseId `5474d4be-ca3d-4e78-b4a4-79c70e2ecfe7`) → Bahamas; Ocean Pearl - Front Door (`57E7BFB0AA51438A847F9204A4A00F27`), Garage Door (`A1A3EBF86529420C828F7C49FAA0F318`), and Spa lock (`6D1169C0234B43D49CE19ADB2C5A9850`) — all three share houseId `b4960a25-c4bd-4e1e-a39f-51c383df4d14` — → Ocean Pearl; Sandy Nudes Front Door (`EDF601CE38C1452AA250F5A5F2C8FFA8`, houseId `66304b46-6a75-4b5c-a84b-50fab9fb9c36`) → Sandy Nudes. Confidence basis: real StayWhile property + OwnerRez-approved-pending link + (for all 3) an existing live Cielo thermostat already proven correct at the same property — never name alone.
+- **31 locks — NO MATCH, no current StayWhile property exists**: Aloha Backup, BOP, Camingo, Casa Blanca, Casa Del Mar, Champion Retreat, Coca Vista, Dolphin, Driftwood, Flor Sun, Lake Shore, Las Sirenas, Lucky Charm, Magnolia, Mahalo, Maison, Majestic Isla, Moonlit, Moroccan Moon, Orion, OUAP, Palm Haven, Paradise Awaits, Picasa, Riverside Chateau, Robinsons, Roseate Madre, Royal Eden ×2, Royal Palms, SOS. Corroborating Nest devices exist at the same conceptual properties for most of these (see below) — evidence the property is real and simply not onboarded yet, never grounds to guess a mapping.
+
+**Nest — all 33 rows classified** (see row-count discrepancy note below):
+
+- **2 already mapped, unchanged per explicit instruction**: Aqua Palm - Living room → Aqua Palm, Enabled; Aqua Palm - dbl room → Aqua Palm, Disabled.
+- **3 candidates for a future Thermostats-phase pass** (not acted on now, sequence is Locks first): Bonjour - Kitchen, Bonjour - MIL, Bonjour - Upstairs → Bonjour AMI. Not blocked by the August legacy exclusion (different provider, different `SmartDevice` composite key) — just out of sequence.
+- **28 — NO MATCH**, same not-yet-onboarded-property clusters as their August counterparts (Champion ×3, Driftwood, Florisun, Lakeshore, Lucky Charm, Mahalo ×2, Maison, Majestic ×3, Moonlit ×2, OUAP, Palm Haven, Paradise Awaits ×2, Picasa ×2, Poinciana, Riverside ×2, Royal Eden ×2, Royal Palm ×2).
+- **Row-count discrepancy flagged, not silently resolved**: the pasted CSV contains 33 Nest rows; the user's stated total was 31. Two devices are both named "Royal Palm" with different External Device IDs — the likely source of the extra 2, but **not confirmed** — flagged back to the user rather than silently trimmed to force a match.
+
+### Root cause of the property gap — investigated, not fixed by bulk import
+
+- **OwnerRez's real portfolio is 58 properties** (38 active, 20 inactive) — Production-verified pagination, unchanged fact from Increment 54/55.
+- **StayWhile's `Property` table has only 7 real rows**, confirmed (again, by code trace) to have been created manually via the app's own `createProperty()` action, historically, purely to support August/Cielo device mapping — **not** from any OwnerRez sync. OwnerRez has never been the source of a StayWhile property row on `main`.
+- **A full write-capable OwnerRez property sync (preview/apply/create) already exists**, but only inside the isolated, unmerged `worktree-ownerrez-property-sync` git worktree — Increment 58 already found and flagged that code as unsafe-as-built (mixed read/write in one file, "an unsafe unit to bring toward Production as-is"). **Deliberately not resurrected or cherry-picked wholesale** — a fresh, narrow implementation was built instead (below), same discipline that produced Phase A/B.
+
+### OwnerRez property onboarding — ✅ COMPLETE, committed, pushed; Vercel deploy not yet confirmed Ready
+
+**Commit `6ae5f91`** — "Add OwnerRez property onboarding." 13 files:
+
+- `packages/integrations/src/ownerrez/types.ts`/`client.ts` — new `OwnerrezClient.getProperty(id)` (`GET /properties/{id}`) and `OwnerrezPropertyDetail`/`OwnerrezPropertyAddress` types. Field names (`address.{street1,street2,city,state,postal_code,country}`, `latitude`, `longitude`, `time_zone`, `property_type`, `bedrooms`, `bathrooms_full`, `bathrooms_half`, `max_guests`) were **fetched from OwnerRez's own live API documentation** (`https://api.ownerreservations.com/help/v2/properties/get-properties-id`), not guessed — this project has twice been burned by guessing OwnerRez field names before (`is_active` vs `active`, `next_page` vs `next_page_url`), so this was verified against the real docs first.
+- `ownerrez-match-report.service.ts`/`ownerrez-link.service.ts` — exported two previously-private helpers (`getOwnerRezCredentials`, `isUniqueConstraintViolation`) for reuse; zero behavior change to either file's existing exports.
+- New `ownerrez-onboarding.service.ts` — `enrichUnmatchedOwnerRezProperties()` (read-only; takes the caller's already-fetched `unmatchedOwnerRez` bucket from `matchOwnerRezProperties()` rather than re-fetching OwnerRez's property list a second time; splits active/inactive; fetches full detail only for active properties, in bounded batches of 5 concurrent `getProperty()` calls — the same fix pattern that resolved this file's own August P2024 incident, applied here pre-emptively rather than learned the hard way again) and `createPropertyFromOwnerRez()` (the one-at-a-time write: RBAC `properties:create`, re-fetches fresh detail keyed only by the submitted OwnerRez id — never trusts client-supplied field values for anything — rejects by name every missing required field rather than fabricating one, rejects duplicate `ownerRezPropertyId`/`internalCode` both pre-check and via DB constraint, forces `PropertyStatus.ONBOARDING` regardless of schema's own `ACTIVE` default, records an audit entry). `propertyType` defaults to `OTHER` — the creation-time default this file's own revised OwnerRez field-ownership policy already sanctions, since no human-approved OwnerRez-type → StayWhile-type mapping exists yet.
+- New `OwnerRezOnboardingPanel.tsx` on `/properties/ownerrez` — read-only Active/Inactive lists (real OwnerRez id/name/internal_code/address), one "Create StayWhile Property" `ConfirmButton` per active row whose detail loaded (never offered when the detail fetch failed — avoids a guaranteed-to-fail submission). Inactive properties are visible but get no Create action in this pass (deliberate — matches "prioritize active" instruction; easy one-line addition later if wanted). This page's own `page.tsx` still imports neither `ConfirmButton` nor any write function directly — the pre-existing safety-net test guarding against exactly that (written to prevent resurrecting the old worktree's mixed design) was extended, not weakened.
+- **No schema migration** — `Property.ownerRezPropertyId` and `PropertyStatus.ONBOARDING` already existed.
+- Verification before commit: 153/153 `@stayw/integrations` tests (26 new), 508/508 website tests (27 new), both typechecks clean, `git diff --check` clean, production build succeeded (`/properties/ownerrez` compiles with no server/client boundary error — the exact class of bug this same session hit and fixed once already, in the inventory-visibility work above).
+- Pushed; local `main` and `origin/main` confirmed at `6ae5f91`. **Vercel Ready status not yet confirmed by the user as of this writing.**
+
+### Nothing written to Production this entire increment
+
+No property created, no device Mapped/Enabled/Unmapped, no discovery rerun, no lock/unlock/PIN action, no thermostat command. Both real, user-approved next actions (the 5 SAFE NOW August locks; any OwnerRez property creation) are still pending manual execution once Vercel confirms Ready.
+
+### Current next priorities, in order
+
+1. **User confirms Vercel is Ready** for commit `6ae5f91`.
+2. Open `/properties/ownerrez`, review the Active OwnerRez properties list, **onboard only the properties needed for current August/Nest device clusters** (Champion, Driftwood, Mahalo, Majestic, Moonlit, Royal Eden, etc.) — one property at a time, verify each against its real OwnerRez record, never inferred from a device name alone.
+3. After each property is onboarded: map + enable its August ProviderDevices, verify on `/locks`; map + enable its Nest ProviderDevices, verify on `/thermostats`.
+4. Execute the 5 SAFE NOW August locks (Bahamas, Ocean Pearl ×3, Sandy Nudes) — independent of the OwnerRez onboarding work, since all 3 properties already exist.
+5. **Thermostats** (Nest's 33/31-count discrepancy still unresolved, Honeywell/Ecobee registrations) resume as the next major integration priority once the Locks path above is stable in Production.
+6. **Notion** end-to-end Production-readiness validation follows Thermostats, per the standing Locks → Thermostats → Notion priority order.
+7. n8n and Cielo remain untouched.
+
+**Standing safety rules reaffirmed**: the 4 legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain excluded from any ProviderDevice Map/Enable action; no lock/unlock/PIN/access-code capability exists or was enabled anywhere in this increment's work; `pgbouncer=true`/`connection_limit=1` was not touched; no bulk property creation exists anywhere in the new onboarding feature — only one-at-a-time, human-confirmed creation; no automatic device↔property or OwnerRez↔StayWhile matching occurred at any point.
