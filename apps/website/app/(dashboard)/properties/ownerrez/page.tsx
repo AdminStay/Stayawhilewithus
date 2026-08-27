@@ -3,23 +3,35 @@ import { PlugZap } from "lucide-react";
 
 import { OwnerRezConfirmLinkPanel } from "@/domains/properties/components/OwnerRezConfirmLinkPanel";
 import { OwnerRezMatchReportPreview } from "@/domains/properties/components/OwnerRezMatchReportPreview";
+import { OwnerRezOnboardingPanel } from "@/domains/properties/components/OwnerRezOnboardingPanel";
 import { matchOwnerRezProperties } from "@/domains/properties/services/ownerrez-match-report.service";
+import { enrichUnmatchedOwnerRezProperties } from "@/domains/properties/services/ownerrez-onboarding.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
 /**
  * Live OwnerRez <-> StayWhile property match report, plus Phase B's
- * one-at-a-time approved-link confirmation panel. Calls only
- * matchOwnerRezProperties() (read-only — see ownerrez-match-report.service.ts)
- * once, and passes the same result to both sections below.
+ * one-at-a-time approved-link confirmation panel, plus the OwnerRez-only
+ * property onboarding panel. Calls matchOwnerRezProperties() (read-only —
+ * see ownerrez-match-report.service.ts) once; its unmatchedOwnerRez bucket
+ * is passed straight into enrichUnmatchedOwnerRezProperties() rather than
+ * re-fetching OwnerRez's property list a second time.
  * OwnerRezMatchReportPreview remains exactly the read-only, display-only
- * component it always was — unchanged by Phase B. The only write affordance
- * on this page lives in OwnerRezConfirmLinkPanel, which renders a Confirm
- * control solely for the closed, human-approved set in
- * APPROVED_OWNERREZ_LINKS.
+ * component it always was — unchanged by any of this. The only write
+ * affordances on this page live inside OwnerRezConfirmLinkPanel (approved
+ * links only) and OwnerRezOnboardingPanel (one-at-a-time property
+ * creation from an OwnerRez record) — this page itself renders neither a
+ * ConfirmButton nor a write server action directly.
  */
 export default async function OwnerRezMatchReportPage() {
   const actor = await getCurrentUser();
   const result = await matchOwnerRezProperties(actor);
+
+  const onboardingReport = result.configured
+    ? await enrichUnmatchedOwnerRezProperties(
+        actor,
+        result.report.unmatchedOwnerRez,
+      )
+    : null;
 
   return (
     <div className="space-y-10">
@@ -27,9 +39,10 @@ export default async function OwnerRezMatchReportPage() {
         title="OwnerRez Match Report"
         subtitle="Live match report against OwnerRez's real property list, plus one-at-a-time confirmation for the properties a human has already approved for linking."
       />
-      {result.configured ? (
+      {result.configured && onboardingReport ? (
         <>
           <OwnerRezConfirmLinkPanel report={result.report} />
+          <OwnerRezOnboardingPanel report={onboardingReport} />
           <OwnerRezMatchReportPreview report={result.report} />
         </>
       ) : (

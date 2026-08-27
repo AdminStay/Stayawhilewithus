@@ -3,12 +3,14 @@
 import { revalidatePath } from "next/cache";
 
 import { confirmOwnerRezLinkSchema } from "./schemas/ownerrez-link.schema";
+import { createPropertyFromOwnerRezSchema } from "./schemas/ownerrez-onboarding.schema";
 import {
   createPropertySchema,
   updatePropertyOccupancySchema,
   updatePropertyStatusSchema,
 } from "./schemas/properties.schema";
 import { confirmOwnerRezLink } from "./services/ownerrez-link.service";
+import { createPropertyFromOwnerRez } from "./services/ownerrez-onboarding.service";
 import {
   createProperty,
   deleteProperty,
@@ -90,5 +92,23 @@ export async function confirmOwnerRezLinkAction(formData: FormData) {
   });
 
   await confirmOwnerRezLink(actor, input);
+  revalidatePath("/properties/ownerrez");
+}
+
+/**
+ * One creation per submission — no array/bulk input shape exists here or
+ * in createPropertyFromOwnerRezSchema. The only value this action forwards
+ * is which OwnerRez property to create from; every actual Property field
+ * is derived server-side inside createPropertyFromOwnerRez() from a fresh
+ * OwnerRez fetch, never from this form.
+ */
+export async function createPropertyFromOwnerRezAction(formData: FormData) {
+  const actor = await getCurrentUser();
+
+  const input = createPropertyFromOwnerRezSchema.parse({
+    ownerRezPropertyId: formData.get("ownerRezPropertyId"),
+  });
+
+  await createPropertyFromOwnerRez(actor, input);
   revalidatePath("/properties/ownerrez");
 }

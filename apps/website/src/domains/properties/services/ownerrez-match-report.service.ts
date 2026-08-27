@@ -7,7 +7,11 @@ import {
   type OwnerrezProperty,
 } from "@stayw/integrations/ownerrez";
 
-function getOwnerRezCredentials(): { username: string; token: string } | null {
+/** Exported for reuse by ownerrez-onboarding.service.ts — same credential source, no behavior change. */
+export function getOwnerRezCredentials(): {
+  username: string;
+  token: string;
+} | null {
   const username = process.env.OWNERREZ_USERNAME;
   const token = process.env.OWNERREZ_API_TOKEN;
   if (!username || !token) return null;

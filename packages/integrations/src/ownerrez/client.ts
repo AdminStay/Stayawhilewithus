@@ -14,9 +14,15 @@ import type {
   OwnerrezGuest,
   OwnerrezPage,
   OwnerrezProperty,
+  OwnerrezPropertyDetail,
 } from "./types";
 
-export type { OwnerrezBooking, OwnerrezProperty } from "./types";
+export type {
+  OwnerrezBooking,
+  OwnerrezProperty,
+  OwnerrezPropertyDetail,
+  OwnerrezPropertyAddress,
+} from "./types";
 
 const API_ORIGIN = "https://api.ownerreservations.com";
 const API_BASE_PATH = "/v2";
@@ -237,6 +243,19 @@ export class OwnerrezClient
       byId.set(property.id, property);
     }
     return [...byId.values()];
+  }
+
+  /**
+   * The single-property detail endpoint — richer than listProperties()'s
+   * per-item shape (adds address/bedrooms/bathrooms/max_guests/time_zone/
+   * property_type/lat-long), needed only when actually creating a
+   * StayWhile Property from a specific OwnerRez record. Deliberately not
+   * called for every property in a listing — see
+   * ownerrez-onboarding.service.ts's bounded-concurrency use of this for
+   * why calling it in bulk needs care.
+   */
+  async getProperty(id: number): Promise<OwnerrezPropertyDetail> {
+    return this.http.request<OwnerrezPropertyDetail>(`/properties/${id}`);
   }
 
   async listBookings(params?: {

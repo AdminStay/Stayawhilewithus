@@ -18,9 +18,11 @@ import { recordAudit } from "@/platform/audit/record-audit";
  * error class in tests just to simulate a race. Every real
  * PrismaClientKnownRequestError carries a string `code` property (e.g.
  * "P2002"), so checking that shape directly is sufficient here, scoped to
- * exactly the one `prisma.property.update` call below.
+ * exactly the one `prisma.property.update` call below. Exported for reuse
+ * by ownerrez-onboarding.service.ts's own unique-constraint race (a
+ * different Prisma call, same error shape).
  */
-function isUniqueConstraintViolation(err: unknown): boolean {
+export function isUniqueConstraintViolation(err: unknown): boolean {
   return (
     typeof err === "object" &&
     err !== null &&

@@ -4,11 +4,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockMatchOwnerRezProperties } = vi.hoisted(() => ({
-  mockMatchOwnerRezProperties: vi.fn(),
-}));
+const { mockMatchOwnerRezProperties, mockEnrichUnmatchedOwnerRezProperties } =
+  vi.hoisted(() => ({
+    mockMatchOwnerRezProperties: vi.fn(),
+    mockEnrichUnmatchedOwnerRezProperties: vi.fn(),
+  }));
 
 vi.mock("@/platform/auth/get-current-user", () => ({
   getCurrentUser: vi.fn().mockResolvedValue({ userId: "user-1" }),
@@ -18,16 +20,33 @@ vi.mock("@/domains/properties/services/ownerrez-match-report.service", () => ({
   matchOwnerRezProperties: mockMatchOwnerRezProperties,
 }));
 
-// OwnerRezConfirmLinkPanel wires a real server action (confirmOwnerRezLinkAction),
-// which otherwise transitively imports ownerrez-link.service.ts -> @stayw/database
-// and would try to construct a real PrismaClient during this render-only test.
+vi.mock("@/domains/properties/services/ownerrez-onboarding.service", () => ({
+  enrichUnmatchedOwnerRezProperties: mockEnrichUnmatchedOwnerRezProperties,
+}));
+
+// OwnerRezConfirmLinkPanel/OwnerRezOnboardingPanel each wire a real server
+// action, which otherwise transitively imports a *.service.ts ->
+// @stayw/database and would try to construct a real PrismaClient during
+// this render-only test.
 vi.mock("@/domains/properties/actions", () => ({
   confirmOwnerRezLinkAction: vi.fn(),
+  createPropertyFromOwnerRezAction: vi.fn(),
 }));
 
 import OwnerRezMatchReportPage from "./page";
 
 afterEach(cleanup);
+
+beforeEach(() => {
+  // Every "configured: true" test below exercises OwnerRezConfirmLinkPanel's
+  // behavior, not the onboarding panel's — default it to an empty report so
+  // those tests don't need to know about it. The dedicated onboarding test
+  // further below overrides this per-call.
+  mockEnrichUnmatchedOwnerRezProperties.mockResolvedValue({
+    active: [],
+    inactive: [],
+  });
+});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -46,6 +65,12 @@ describe("OwnerRezMatchReportPage — source-level wiring proof", () => {
   it("imports and renders OwnerRezConfirmLinkPanel — the only write-UI surface added by Phase B", () => {
     expect(code).toMatch(/OwnerRezConfirmLinkPanel/);
     expect(code).toMatch(/<OwnerRezConfirmLinkPanel/);
+  });
+
+  it("imports and renders OwnerRezOnboardingPanel, fed from enrichUnmatchedOwnerRezProperties — the only write-UI surface added by property onboarding", () => {
+    expect(code).toMatch(/OwnerRezOnboardingPanel/);
+    expect(code).toMatch(/<OwnerRezOnboardingPanel/);
+    expect(code).toMatch(/enrichUnmatchedOwnerRezProperties/);
   });
 
   it("does not import OwnerRezMatchReview or the field-change-preview OwnerRezMatchPreview component (the old worktree's UI)", () => {
@@ -246,5 +271,44 @@ describe("OwnerRezMatchReportPage — rendered output", () => {
     expect(screen.getByText("OwnerRez isn't configured")).toBeTruthy();
     expect(document.querySelectorAll("form")).toHaveLength(0);
     expect(document.querySelectorAll("button")).toHaveLength(0);
+    expect(mockEnrichUnmatchedOwnerRezProperties).not.toHaveBeenCalled();
+  });
+
+  it("passes matchOwnerRezProperties' unmatchedOwnerRez straight into enrichUnmatchedOwnerRezProperties, and renders its report via OwnerRezOnboardingPanel", async () => {
+    const unmatchedOwnerRez = [
+      { id: 431354, name: "Ocean Pearl", key: "ocean-pearl", active: true },
+    ];
+    mockMatchOwnerRezProperties.mockResolvedValueOnce({
+      configured: true,
+      report: {
+        alreadyLinked: [],
+        proposedMatches: [],
+        unmatchedOwnerRez,
+        unmatchedStayWhile: [],
+      },
+    });
+    mockEnrichUnmatchedOwnerRezProperties.mockResolvedValueOnce({
+      active: [
+        {
+          ownerRezProperty: unmatchedOwnerRez[0],
+          detail: { ...unmatchedOwnerRez[0], address: { city: "Largo" } },
+        },
+      ],
+      inactive: [],
+    });
+
+    const jsx = await OwnerRezMatchReportPage();
+    render(jsx);
+
+    expect(mockEnrichUnmatchedOwnerRezProperties).toHaveBeenCalledWith(
+      { userId: "user-1" },
+      unmatchedOwnerRez,
+    );
+    expect(
+      screen.getByText("OwnerRez properties not yet in StayWhile"),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Create StayWhile Property" }),
+    ).toBeTruthy();
   });
 });

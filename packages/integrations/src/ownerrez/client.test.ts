@@ -275,6 +275,54 @@ describe("OwnerrezClient", () => {
     });
   });
 
+  describe("getProperty", () => {
+    it("fetches the single-property detail endpoint by id", async () => {
+      mockRequest.mockResolvedValueOnce({
+        id: 431354,
+        name: "Ocean Pearl",
+        key: "ocean-pearl",
+        active: true,
+        internal_code: "OCEAN-PEARL",
+        address: {
+          street1: "2330 Kings Point Dr",
+          city: "Largo",
+          state: "FL",
+          postal_code: "33774",
+          country: "US",
+        },
+        bedrooms: 6,
+        bathrooms_full: 4,
+        bathrooms_half: 1,
+        max_guests: 14,
+        time_zone: "America/New_York",
+        property_type: "House",
+      });
+      const client = new OwnerrezClient(credentials);
+
+      const detail = await client.getProperty(431354);
+
+      expect(mockRequest).toHaveBeenCalledWith("/properties/431354");
+      expect(detail.address?.city).toBe("Largo");
+      expect(detail.bathrooms_full).toBe(4);
+      expect(detail.time_zone).toBe("America/New_York");
+    });
+
+    it("sends a plain GET with no write-shaped call (single URL arg only)", async () => {
+      mockRequest.mockResolvedValueOnce({
+        id: 1,
+        name: "Cabin A",
+        key: "cabin-a",
+        active: true,
+      });
+      const client = new OwnerrezClient(credentials);
+
+      await client.getProperty(1);
+
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(mockRequest.mock.calls[0]).toHaveLength(1);
+    });
+  });
+
   describe("listBookings", () => {
     it("passes since_utc as a query param when provided, overriding the default", async () => {
       mockRequest.mockResolvedValueOnce({ items: [] });

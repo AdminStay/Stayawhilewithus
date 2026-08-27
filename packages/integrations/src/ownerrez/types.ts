@@ -26,6 +26,38 @@ export interface OwnerrezProperty {
   internal_code?: string;
 }
 
+// GET /properties/{id} (the single-property detail endpoint) returns a much
+// richer PropertyViewModel than the list endpoint above. Field names
+// confirmed 2026-08-28 against OwnerRez's own live API documentation
+// (https://api.ownerreservations.com/help/v2/properties/get-properties-id)
+// — not guessed, per this file's own established discipline (`active` vs
+// `is_active`, `next_page_url` vs `next_page` were both previously wrong
+// guesses caught only by checking real docs/data). Every field here is
+// optional: this type only documents what the endpoint can return, not a
+// guarantee any specific property has all of them populated — a caller
+// creating a StayWhile Property from this data must check for missing
+// required fields itself, never assume presence.
+export interface OwnerrezPropertyAddress {
+  street1?: string;
+  street2?: string;
+  city?: string;
+  state?: string;
+  postal_code?: string;
+  country?: string;
+}
+
+export interface OwnerrezPropertyDetail extends OwnerrezProperty {
+  address?: OwnerrezPropertyAddress;
+  latitude?: number;
+  longitude?: number;
+  time_zone?: string;
+  property_type?: string;
+  bedrooms?: number;
+  bathrooms_full?: number;
+  bathrooms_half?: number;
+  max_guests?: number;
+}
+
 export interface OwnerrezBooking {
   id: number;
   property_id: number;
