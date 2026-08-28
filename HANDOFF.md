@@ -28,23 +28,39 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 CURRENT STATE — 2026-08-28, latest (READ THIS FIRST — supersedes every earlier 2026-08-28 summary below)
+# 🔖 CURRENT STATE — 2026-08-29 (READ THIS FIRST — supersedes every earlier summary below)
 
-**Authoritative current state as of `## Increment 62` (2026-08-28), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the "later same day" 2026-08-28 summary immediately below, now historical), this summary governs. Full detail in `## Increment 62` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated** — the 43-August/33-Nest mapping analysis, the SAFE NOW/legacy/no-match lists, and the OwnerRez property-count root cause all still stand exactly as recorded.
+**Authoritative current state as of `## Increment 63` (2026-08-29), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the 2026-08-28 summary immediately below, now historical), this summary governs. Full detail in `## Increment 63` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated** — the 43-August/33-Nest mapping analysis, the SAFE NOW/legacy/no-match lists, and the OwnerRez property-count root cause all still stand exactly as recorded.
+
+1. **Complete 37-row Active OwnerRez cross-reference produced** (superseding Increment 62's 4-example partial pass): 29 properties classified CREATE NOW, 6 are real OwnerRez records for 5 existing properties (pending Confirm-Link) plus the still-protected Miramar-Bliss, 1 needs human confirmation (Surfside Solace), 1 deferred (Starfish Waterfront, no device evidence). Two orphan devices flagged with no OwnerRez match found at all: August's "Dolphin" and Nest's "Poinciana".
+2. **Pilot approach approved**: prove the full Create→Map→Enable→`/locks` pipeline on **Camingo alone** (OwnerRez ID 480307) before scaling to the other 28.
+3. **Camingo's first real Production create attempt FAILED**, digest/reference `595223608`. **Production verification confirmed Camingo was NOT created**: `/properties` remained at the original 7; `/properties/ownerrez` recovered normally (not a persistent page failure) and still showed Active (37) with Camingo 480307 still unmatched.
+4. **Root cause not confirmed** — no Vercel log/Production DB access in this session, and the user's own Vercel log search afterward did not turn up a matching error. Leading candidate (not proven): a required OwnerRez detail field (bedrooms/bathrooms/max_guests/time_zone — none shown in the UI before the click) is genuinely null/absent for Camingo's real record.
+5. **Inline create-error handling — ✅ COMPLETE, committed (`38a3194`), pushed.** `createPropertyFromOwnerRezAction` now returns a success/failure state instead of throwing — a real Prisma error is replaced with a generic safe message, every deliberate business-logic message is surfaced verbatim inline on the row. No validation/creation logic was changed. 533/533 tests, typecheck, and build all clean.
+6. **Camingo has NOT been retried since the failed attempt.** No property has been created, no device Mapped/Enabled/Unmapped, no discovery rerun, at any point in this increment.
+7. **Immediate next action**: once Vercel confirms `38a3194` Ready, retry Camingo **once**, read the inline result — success → proceed with the approved Map/Enable pilot sequence; failure → the message will now name the real cause, **stop before any Map/Enable action** and report it back first.
+8. **The four legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain untouched**, and Miramar-Bliss (OwnerRez ID 480401) remains explicitly protected from creation.
+9. **Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-29" above] CURRENT STATE — 2026-08-28, latest
+
+**Authoritative current state as of `## Increment 62` (2026-08-28).** Full detail in `## Increment 62`.
 
 1. **Increment 61's open question is resolved, non-issue**: the user scrolled further down `/properties/ownerrez` and confirmed the `OwnerRezOnboardingPanel` ("OwnerRez properties not yet in StayWhile") **is visible and working correctly** — real OwnerRez records with ID, internal code/name, address, and "Create StayWhile Property" buttons. No code defect ever existed; the earlier concern was only that the screenshot hadn't scrolled far enough.
 2. **Production shows Active (37) unmatched OwnerRez properties** on that panel.
-3. **No OwnerRez property has been created yet.** A partial, report-only mapping pass against 4 example records found Camingo (ID 480307) and Las Sirenas (ID 477351) high-confidence matches to real August lock clusters, but **both remain intentionally uncreated** — per explicit instruction, creation waits for the complete 37-record cross-reference, not piecemeal examples.
-4. **Miramar-Bliss (OwnerRez ID 480401, internal code "Miramar Bliss 2") is explicitly protected from creation** — it matches one of the 3 still-ambiguous OwnerRez candidates for the existing StayWhile "Miramar Bliss" property (unresolved since Increment 58); creating it would duplicate an existing property.
-5. **New feature — "Copy Active as CSV" — ✅ COMPLETE, committed (`02c3047`), pushed.** A read-only client-side button on `OwnerRezOnboardingPanel` that exports the currently-loaded Active(37) list (OwnerRez ID, Name, Internal Code, Address, Active) as CSV — no new OwnerRez API call, no DB read, no write path. Built specifically so the user can hand over the complete Active(37) dataset in one paste instead of transcribing records by hand, the same pattern that produced Increment 60's 43-August/33-Nest inventory.
-6. **Immediate next action**: once Vercel confirms `02c3047` Ready, the user clicks "Copy Active as CSV" on `/properties/ownerrez` and pastes the complete output here, to be cross-referenced against the authoritative 43-August/33-Nest inventory (Increment 60) for a complete, authoritative onboarding/mapping checklist — not just the 4 examples analyzed so far.
-7. **No Production property has been created. No August/Nest device has been Mapped/Enabled/Unmapped. No discovery has been rerun.** The 5 SAFE NOW August locks (Increment 60) remain unexecuted.
+3. **No OwnerRez property has been created yet.** A partial, report-only mapping pass against 4 example records found Camingo (ID 480307) and Las Sirenas (ID 477351) high-confidence matches to real August lock clusters, but **both remain intentionally uncreated** — per explicit instruction, creation waits for the complete 37-record cross-reference, not piecemeal examples. — **superseded: the complete cross-reference has since been produced, see Increment 63.**
+4. **Miramar-Bliss (OwnerRez ID 480401, internal code "Miramar Bliss 2") is explicitly protected from creation** — it matches one of the 3 still-ambiguous OwnerRez candidates for the existing StayWhile "Miramar Bliss" property (unresolved since Increment 58); creating it would duplicate an existing property. — **still true, see Increment 63.**
+5. **New feature — "Copy Active as CSV" — ✅ COMPLETE, committed (`02c3047`), pushed.** A read-only client-side button on `OwnerRezOnboardingPanel` that exports the currently-loaded Active(37) list (OwnerRez ID, Name, Internal Code, Address, Active) as CSV — no new OwnerRez API call, no DB read, no write path.
+6. **Immediate next action**: once Vercel confirms `02c3047` Ready, the user clicks "Copy Active as CSV" on `/properties/ownerrez` and pastes the complete output here, to be cross-referenced against the authoritative 43-August/33-Nest inventory (Increment 60) for a complete, authoritative onboarding/mapping checklist — not just the 4 examples analyzed so far. — **done, see Increment 63.**
+7. **No Production property has been created. No August/Nest device has been Mapped/Enabled/Unmapped. No discovery has been rerun.** The 5 SAFE NOW August locks (Increment 60) remain unexecuted. — **still true, see Increment 63.**
 8. **The four legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain untouched**, per every prior increment's standing rule.
 9. **Priority order unchanged: Locks → Thermostats → Notion.**
 
 ---
 
-# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-28, latest" above] CURRENT STATE — 2026-08-28, later same day
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-29" above] CURRENT STATE — 2026-08-28, later same day
 
 **Authoritative current state as of `## Increment 61` (2026-08-28).** Full detail in `## Increment 61`.
 
@@ -2839,3 +2855,50 @@ No property created, no device Mapped/Enabled/Unmapped, no discovery rerun. The 
 6. **Thermostats**, then **Notion**, remain next after Locks — priority order unchanged: **Locks → Thermostats → Notion**.
 
 **Standing safety rules reaffirmed**: the 4 legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain excluded from any ProviderDevice Map/Enable action; the Miramar-Bliss (ID 480401) OwnerRez record remains explicitly protected from property creation pending resolution of its 3-candidate ambiguity; no automatic device↔property or OwnerRez↔StayWhile matching occurred anywhere; no lock/unlock/PIN/access-code capability exists or was touched.
+
+---
+
+## Increment 63 — 2026-08-29: complete 37-row Active OwnerRez cross-reference produced; single-property Camingo pilot approved but its first real Production create attempt failed (digest `595223608`); investigated, root cause not confirmed (Vercel logs inconclusive); inline create-error handling built, committed, and pushed so the retry will self-diagnose
+
+### Complete Active(37) cross-reference — report only, superseded Increment 62's 4-example partial pass
+
+The user pasted the real, complete "Copy Active as CSV" output (37 rows) from Production. Cross-referenced against Increment 60's 43-August/33-Nest inventory and the 7 existing StayWhile properties: **29 properties classified CREATE NOW** (Camingo, Las Sirenas, Orion's Landing, Moonlit Cove, Moroccan Moon, Bird of Paradise, Mahalo, Riverside Château, Robinson Recluse, Champion Retreat, Magnolia, Picasa, Lakeshore, Lucky Charm, Royal Eden, Maon de la Mer, Casa Del Mar, Royal Palms, Florisun, Palm Haven, Driftwood Cottage, Majestic Isla, Casa Blanca, Roseate Madre, Once Upon a Pond, Coco Vista, Island SOS, Aloha by the Sea, Paradise Awaits); **6 are the real OwnerRez records for 5 existing properties plus the still-ambiguous Miramar-Bliss** (Bonjour AMI 432997, Ocean Pearl 431354, The Bahamas 377839, Sandy Nudes 355024, Island Tides 355021 — all pending Confirm-Link, never Create; Miramar-Bliss 480401 explicitly protected, do not create or link yet); **1 needs human confirmation** (Surfside Solace, possible "Dolphin" lock via street-address match only); **1 has no current device evidence** (Starfish Waterfront, deferred). Two orphan devices flagged with no OwnerRez correspondence found at all: August's "Dolphin" lock and Nest's "Poinciana" thermostat. **Nothing created, mapped, or enabled from this report.**
+
+### Pilot strategy approved: prove the full pipeline on Camingo alone, not all 29 at once
+
+User approved piloting the complete OwnerRez Create → Property ONBOARDING → August Map → Enable → `/locks` verification pipeline on **Camingo only** (OwnerRez ID 480307) before scaling to the other 28. A full code trace of every step was produced and approved before the user clicked anything, confirming: Map and Enable are separate, ordered actions; Enable makes zero provider API calls (upserts from the existing discovery snapshot only); the legacy `AUGUST_PROPERTY_MAP` sync cannot touch Camingo (not a legacy house); and none of the four steps can issue a physical lock/unlock/PIN command.
+
+### First real Camingo Create attempt — FAILED in Production, digest `595223608`
+
+The user clicked "Create StayWhile Property" for Camingo. Production returned Next.js's generic "Something went wrong" error screen (reference/digest `595223608`).
+
+**Production verification performed by the user immediately after, confirming Camingo was NOT created**:
+
+- `/properties` — unchanged, still exactly the original 7 StayWhile properties, no Camingo row.
+- `/properties/ownerrez` — recovered normally on reload (not a persistent page-level failure), still showed **Active (37)**, and OwnerRez ID 480307 (Camingo) was still listed as unmatched with its "Create StayWhile Property" button.
+
+This evidence definitively narrowed the failure to somewhere at or before `prisma.property.create()` inside `createPropertyFromOwnerRez()` (`ownerrez-onboarding.service.ts`) — ruling out `recordAudit()`, the post-action page re-render, and both duplicate-check throws (the user's own evidence shows no `Property` row anywhere already claims OwnerRez id 480307 or internal code "Camingo").
+
+### Root-cause investigation — no Production log/DB access in this session; root cause not confirmed
+
+Neither Vercel Function Logs nor Production DB access were available in this session (same standing limitation as every prior increment back to 2026-08-21) — a Claude-in-Chrome browser check was also attempted and found not connected. **The user's own search of Vercel's logs afterward did not turn up a useful/matching corresponding error for this request.** Deep code-level analysis (including fetching OwnerRez's own live API documentation for the `GET /v2/properties/{id}` shape) narrowed the candidates to three, ranked by evidence:
+
+1. **Most likely**: a required field genuinely null/absent in OwnerRez's real detail response for Camingo — specifically one of `bedrooms`/`bathrooms_full`/`bathrooms_half`/`max_guests`/`time_zone`, none of which are ever displayed anywhere in the onboarding panel's UI before the click, so a real gap in OwnerRez's own record would be invisible until the create attempt's own required-field check ran.
+2. A Prisma-level type/shape mismatch (e.g., a numeric field returned as a string) throwing an uncaught `PrismaClientValidationError` at the `.create()` call.
+3. A transient OwnerRez API failure on the live re-fetch inside `createPropertyFromOwnerRez()` itself.
+   **Root cause remains unconfirmed** — the Vercel log check that would have distinguished these did not surface a matching error.
+
+### Inline create-error handling — ✅ COMPLETE, committed (`38a3194`), pushed
+
+Built specifically so the _next_ Camingo attempt is self-diagnosing regardless of which candidate above is real. 5 files: `actions.ts` (`createPropertyFromOwnerRezAction` now returns a `useActionState`-compatible success/failure state instead of throwing — a genuine Prisma client error is duck-typed on its constructor name, matching this domain's existing `isUniqueConstraintViolation()` convention, and replaced with a fixed generic message; every other thrown `Error` — i.e. every deliberate business-logic message `createPropertyFromOwnerRez()` already writes — is surfaced verbatim), new `CreatePropertyFromOwnerRezButton.tsx` (client component, same pending/success/failure pattern as `DiscoverDevicesButton`, `disabled={isPending}` prevents a double submit), `OwnerRezOnboardingPanel.tsx` (wires the new button in), plus `actions.test.ts` and `CreatePropertyFromOwnerRezButton.test.tsx` (23 new/changed tests total). **No validation, duplicate-check, or Property-creation logic was changed or weakened** — this only changes how a result reaches the screen. 533/533 website tests, typecheck clean, production build succeeded (`/properties/ownerrez` compiles at 1.43 kB, no server/client boundary error).
+
+### Current state — nothing created, nothing retried
+
+**Camingo has NOT been retried since the failed attempt.** No property has been created, no August/Nest device has been Mapped/Enabled/Unmapped, no discovery has been rerun, since the failed attempt or at any point in this increment. The 4 legacy August houses remain untouched.
+
+**Next action, exact order**: once Vercel confirms `38a3194` Ready, retry Camingo **once** via "Create StayWhile Property" and read the resulting inline state:
+
+- **Success** → proceed with the approved pilot sequence (Map → Enable → verify on `/locks`), per the already-approved click-by-click plan.
+- **Failure** → the inline message itself will now name the real cause (a specific missing field, or the generic safe message for an unexpected/Prisma-level error) — **stop before any Map/Enable action** and report the exact message back before deciding next steps. Do not retry a second time without a fresh read on the cause.
+
+**Priority order unchanged: Locks → Thermostats → Notion.**
