@@ -28,9 +28,25 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 CURRENT STATE — 2026-08-28, later same day (READ THIS FIRST — supersedes the earlier 2026-08-28 summary below)
+# 🔖 CURRENT STATE — 2026-08-28, latest (READ THIS FIRST — supersedes every earlier 2026-08-28 summary below)
 
-**Authoritative current state as of `## Increment 61` (2026-08-28), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-28 summary immediately below, now historical), this summary governs. Full detail in `## Increment 61` at the bottom of this file. **Nothing in Increment 60's findings below this banner is superseded or invalidated** — the 43-August/33-Nest mapping analysis, the SAFE NOW/legacy/no-match lists, and the OwnerRez property-count root cause all still stand exactly as recorded; this increment is a deployment-verification investigation only, still in progress.
+**Authoritative current state as of `## Increment 62` (2026-08-28), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the "later same day" 2026-08-28 summary immediately below, now historical), this summary governs. Full detail in `## Increment 62` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated** — the 43-August/33-Nest mapping analysis, the SAFE NOW/legacy/no-match lists, and the OwnerRez property-count root cause all still stand exactly as recorded.
+
+1. **Increment 61's open question is resolved, non-issue**: the user scrolled further down `/properties/ownerrez` and confirmed the `OwnerRezOnboardingPanel` ("OwnerRez properties not yet in StayWhile") **is visible and working correctly** — real OwnerRez records with ID, internal code/name, address, and "Create StayWhile Property" buttons. No code defect ever existed; the earlier concern was only that the screenshot hadn't scrolled far enough.
+2. **Production shows Active (37) unmatched OwnerRez properties** on that panel.
+3. **No OwnerRez property has been created yet.** A partial, report-only mapping pass against 4 example records found Camingo (ID 480307) and Las Sirenas (ID 477351) high-confidence matches to real August lock clusters, but **both remain intentionally uncreated** — per explicit instruction, creation waits for the complete 37-record cross-reference, not piecemeal examples.
+4. **Miramar-Bliss (OwnerRez ID 480401, internal code "Miramar Bliss 2") is explicitly protected from creation** — it matches one of the 3 still-ambiguous OwnerRez candidates for the existing StayWhile "Miramar Bliss" property (unresolved since Increment 58); creating it would duplicate an existing property.
+5. **New feature — "Copy Active as CSV" — ✅ COMPLETE, committed (`02c3047`), pushed.** A read-only client-side button on `OwnerRezOnboardingPanel` that exports the currently-loaded Active(37) list (OwnerRez ID, Name, Internal Code, Address, Active) as CSV — no new OwnerRez API call, no DB read, no write path. Built specifically so the user can hand over the complete Active(37) dataset in one paste instead of transcribing records by hand, the same pattern that produced Increment 60's 43-August/33-Nest inventory.
+6. **Immediate next action**: once Vercel confirms `02c3047` Ready, the user clicks "Copy Active as CSV" on `/properties/ownerrez` and pastes the complete output here, to be cross-referenced against the authoritative 43-August/33-Nest inventory (Increment 60) for a complete, authoritative onboarding/mapping checklist — not just the 4 examples analyzed so far.
+7. **No Production property has been created. No August/Nest device has been Mapped/Enabled/Unmapped. No discovery has been rerun.** The 5 SAFE NOW August locks (Increment 60) remain unexecuted.
+8. **The four legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain untouched**, per every prior increment's standing rule.
+9. **Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-28, latest" above] CURRENT STATE — 2026-08-28, later same day
+
+**Authoritative current state as of `## Increment 61` (2026-08-28).** Full detail in `## Increment 61`.
 
 1. **Production deployment `cea3e1b` (which contains `6ae5f91`) is confirmed Ready by the user.**
 2. **OwnerRez Production API confirmed genuinely working**: `/ownerrez` (a separate, older page — see item 4) displays the real live portfolio, 58 total / 38 active / 20 inactive, matching Increment 54/55's figures exactly.
@@ -40,8 +56,8 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
    - `/properties/ownerrez` (nav label "OwnerRez Match Report") — the page `6ae5f91` actually modified. Renders, top to bottom: `OwnerRezConfirmLinkPanel` (Phase B, pre-existing) → **`OwnerRezOnboardingPanel` (new, `6ae5f91`)** → `OwnerRezMatchReportPreview` (pre-existing, read-only).
 5. **The deployed `cea3e1b` source was directly inspected** (`git show cea3e1b:"apps/website/app/(dashboard)/properties/ownerrez/page.tsx"`), not just the working tree — confirmed `OwnerRezOnboardingPanel` is imported and rendered there, gated only on `result.configured && onboardingReport`, both of which must already be true whenever the sibling Confirm-Link panel is also rendering (same `matchOwnerRezProperties()` call, same `result.configured` flag). `git merge-base --is-ancestor 6ae5f91 cea3e1b` confirmed true.
 6. **The user's "OwnerRez Match Report" screenshot showed only the upper "Approved OwnerRez links" section** (`OwnerRezConfirmLinkPanel`) — **it is not yet confirmed whether the onboarding section is simply further down the same page** (the panel unconditionally renders visible header text — "OwnerRez properties not yet in StayWhile" / "Active (N)" / "Inactive (N)" — even with zero unmatched properties, so if it's genuinely absent after scrolling, that would rule out an empty-data explanation).
-7. **No code-level defect was found** in this investigation across RBAC, the render-gate condition, and empty-state logic — each was traced against the actual shipped source and ruled out as an explanation for a _partial_ page (the other sections rendering while only this one is missing), since none of them can discriminate between the sibling sections the way the symptom would require. **No fix has been proposed, approved, or applied** — correctly so, since the missing-UI report has not yet been confirmed as a real defect rather than a not-yet-scrolled-to section.
-8. **Immediate next action (blocks everything else in this file)**: the user will scroll further down `/properties/ownerrez` and look specifically for the heading **"OwnerRez properties not yet in StayWhile"** and a **"Create StayWhile Property"** button. Do not resume Locks/Thermostats/Notion work, and do not propose or apply any code fix, until this UI check is reported back.
+7. **No code-level defect was found** in this investigation across RBAC, the render-gate condition, and empty-state logic — each was traced against the actual shipped source and ruled out as an explanation for a _partial_ page (the other sections rendering while only this one is missing), since none of them can discriminate between the sibling sections the way the symptom would require. **No fix has been proposed, approved, or applied** — correctly so, since the missing-UI report has not yet been confirmed as a real defect rather than a not-yet-scrolled-to section. — **superseded: confirmed non-issue in Increment 62, see banner above.**
+8. **Immediate next action (blocks everything else in this file)**: the user will scroll further down `/properties/ownerrez` and look specifically for the heading **"OwnerRez properties not yet in StayWhile"** and a **"Create StayWhile Property"** button. Do not resume Locks/Thermostats/Notion work, and do not propose or apply any code fix, until this UI check is reported back. — **superseded, see Increment 62.**
 9. **No Production property has been created. No August/Nest device has been Mapped/Enabled/Unmapped.** The 5 SAFE NOW August locks (Increment 60) remain unexecuted, pending this UI check first.
 10. **The four legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain untouched**, per every prior increment's standing rule.
 11. **Priority order unchanged: Locks → Thermostats → Notion.**
@@ -2779,3 +2795,47 @@ The user will scroll further down `/properties/ownerrez` and report back whether
 - If genuinely not found after scrolling: the next step is requesting real Vercel Function Logs for `/properties/ownerrez` for a Production-only runtime error, since local test coverage (508/508 website, 153/153 integrations, both green) cannot reproduce a real-OwnerRez-API-shape issue that only manifests against the true 58-property portfolio.
 
 **No code change, Production write, property creation, device mapping, or discovery run occurred in this increment.** The 5 SAFE NOW August locks and any OwnerRez property creation remain exactly as pending as they were at the end of Increment 60. The four legacy August houses remain untouched. Priority order unchanged: Locks → Thermostats → Notion.
+
+---
+
+## Increment 62 — 2026-08-28 (later same day): Increment 61's UI concern resolved (non-issue — user simply hadn't scrolled far enough); read-only mapping report produced from 4 example OwnerRez records; "Copy Active as CSV" export built, committed, and pushed to close the gap for a complete cross-reference
+
+### Increment 61's blocking question — resolved, non-issue
+
+The user scrolled further down `/properties/ownerrez` and confirmed the "OwnerRez properties not yet in StayWhile" section (`OwnerRezOnboardingPanel`, shipped in `6ae5f91`) **is visible and working correctly** — real OwnerRez records with ID, internal code/name, address, and "Create StayWhile Property" buttons, exactly as designed. **No code defect existed.** The earlier concern was purely that the user's screenshot hadn't scrolled far enough to reach it, confirming Increment 61's leading (not-yet-confirmed-at-the-time) explanation. Production shows **Active (37)** unmatched OwnerRez properties on this panel.
+
+### Read-only mapping report against 4 example OwnerRez records (not a complete cross-reference)
+
+The user supplied 4 example rows from the Active(37) list (Miramar-Bliss/ID 480401/internal code "Miramar Bliss 2", Camingo/ID 480307, Las Sirenas/ID 477351, Orion's Landing/ID 476861) — not the full 37. Cross-referenced against Increment 60's authoritative 43-August/33-Nest inventory and the existing 7 StayWhile properties (Aqua Palm, Bahamas, Bonjour AMI, Island Tides, Miramar Bliss, Ocean Pearl, Sandy Nudes):
+
+- **Miramar-Bliss (ID 480401, internal code "Miramar Bliss 2") — flagged DO NOT CREATE.** This matches the "close-but-not-exact" OwnerRez record already on record since Increment 58 as one of **3 ambiguous OwnerRez candidates** for the existing StayWhile "Miramar Bliss" property (one of the 4 legacy houses) — that ambiguity is still unresolved. Creating a new property from this record would duplicate an existing property rather than resolve the real pending link decision. **Explicitly protected from creation, per standing instruction.**
+- **Camingo (ID 480307) and Las Sirenas (ID 477351)** — exact, unique name matches to real August lock clusters in Increment 60's 31-no-match list; no existing StayWhile property or known-ambiguous conflict. Read-only assessment only — **the user has explicitly instructed these are NOT to be created yet**, pending the complete 37-record cross-reference below.
+- **Orion's Landing (ID 476861)** — flagged NEEDS CONFIRMATION, not a clean match. August's no-match list has a cluster named "Orion," not "Orion's Landing" — a close-but-not-exact name mismatch, the same shape of discrepancy that made Miramar Bliss genuinely ambiguous rather than safely automatic.
+- The remaining ~33 active records, and the rest of Increment 60's no-match clusters (Champion, Driftwood, Mahalo, Majestic, Moonlit, Royal Eden, Poinciana, Florisun, Lakeshore, Paradise Awaits, Picasa, Robinsons, Roseate Madre, Palm Haven, Casa Blanca, Casa Del Mar, Coca Vista, Dolphin, Flor Sun, Lucky Charm, Magnolia, Maison, Moroccan Moon, OUAP, SOS, Aloha Backup, BOP, Royal Palms), **could not be cross-referenced** — no OwnerRez ID exists for them in this session, and matching by device-cluster name alone is exactly the standing no-guessing rule this project enforces. This is why the CSV export below was requested instead of continuing to paste examples by hand.
+
+**No property was created, no device was mapped/enabled, from this analysis. This was a report-only exercise, explicitly scoped to not touch Production.**
+
+### "Copy Active as CSV" export — ✅ COMPLETE, committed (`02c3047`), pushed
+
+Built to let the user hand over the complete Active(37) dataset in one paste (the same pattern that worked for the 43-August/33-Nest export in Increment 60), rather than transcribing records by hand. 5 files:
+
+- New `apps/website/src/domains/properties/components/CopyActiveOwnerRezCsvButton.tsx` — client-side only, builds CSV directly from `report.active` (the same array `OwnerRezOnboardingPanel` already has as a prop) — no new OwnerRez API call, no DB read, no write path. Columns: `OwnerRez ID,Name,Internal Code,Address,Active`. RFC-4180 escaping, same proven logic as Increment 60's `CopyInventoryButton`. Only these 5 fields are ever serialized — never latitude/longitude/bedrooms/bathrooms/time_zone/property_type, which the real `OwnerrezPropertyDetail` object also carries.
+- New `apps/website/src/domains/properties/lib/owner-rez-onboarding-display.ts` — `formatAddress()` extracted out of `OwnerRezOnboardingPanel.tsx` into its own dependency-free file, so the new client button doesn't drag in `../actions`' server-only service chain into its bundle/tests. This is the exact same server/client-boundary bug class Increment 60 already hit and fixed once (`smart-devices/lib/discovered-device.ts`/`provider-display-name.ts`) — caught here by a real test failure (`Failed to resolve import "server-only"`) before it could reach a real bundle, not by inspection alone.
+- `OwnerRezOnboardingPanel.tsx` updated to import `formatAddress` from the new lib file and render the new button next to the "Active (N)" heading. The existing one-at-a-time "Create StayWhile Property" flow is completely unchanged — verified by a dedicated test asserting both controls render independently.
+- Verification before commit: 518/518 website tests (17 new/changed), typecheck clean, production build succeeded (`/properties/ownerrez` compiles at 882 B, no server/client boundary error — the local build's first attempt failed only on a pre-existing, unrelated local-env gap, missing `N8N_*` vars for the `/api/webhooks/n8n` route; confirmed by a throwaway-value build check, nothing written to any `.env` file).
+- Pushed as its own commit, `02c3047` ("Add OwnerRez active property CSV export"), containing exactly these 5 files. The pre-existing uncommitted working-tree changes (`.env.example`, `.gitignore`, `apps/website/app/(dashboard)/layout.tsx` sign-out button, the `packages/database/*.mjs` diagnostic scripts, the untracked thermostat-permission-gating test) were **not staged, not touched, and remain exactly as they were** — confirmed via `git status` before and after staging.
+
+### Nothing written to Production this entire increment
+
+No property created, no device Mapped/Enabled/Unmapped, no discovery rerun. The 4 example records' recommendations above (including the explicit Camingo/Las Sirenas hold) are report-only.
+
+### Immediate next step
+
+1. User confirms Vercel is Ready for commit `02c3047`.
+2. User clicks "Copy Active as CSV" on `/properties/ownerrez` and pastes the complete Active(37) output.
+3. Once the complete dataset is in hand, produce the authoritative click checklist cross-referencing all 37 active unmatched OwnerRez records against the full 43-August/31-locks-no-match / 28-Nest-no-match clusters from Increment 60 — properly resolving Champion, Driftwood, Mahalo, Majestic, Moonlit, Royal Eden, and the rest, not just the 4 examples above.
+4. **Camingo and Las Sirenas remain intentionally uncreated** until that complete cross-reference is finished, even though this increment's partial analysis found them high-confidence — per explicit instruction, no property creation happens piecemeal.
+5. Execute the 5 SAFE NOW August locks (Bahamas, Ocean Pearl ×3, Sandy Nudes) remains available independent of the above, still pending the user's own click-through.
+6. **Thermostats**, then **Notion**, remain next after Locks — priority order unchanged: **Locks → Thermostats → Notion**.
+
+**Standing safety rules reaffirmed**: the 4 legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain excluded from any ProviderDevice Map/Enable action; the Miramar-Bliss (ID 480401) OwnerRez record remains explicitly protected from property creation pending resolution of its 3-candidate ambiguity; no automatic device↔property or OwnerRez↔StayWhile matching occurred anywhere; no lock/unlock/PIN/access-code capability exists or was touched.
