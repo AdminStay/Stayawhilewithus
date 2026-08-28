@@ -30,16 +30,29 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 # 🔖 CURRENT STATE — 2026-08-29, latest (READ THIS FIRST — supersedes every earlier summary below)
 
-**Authoritative current state as of `## Increment 64` (2026-08-29), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-29 summary immediately below, now historical), this summary governs. Full detail in `## Increment 64` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated.**
+**Authoritative current state as of `## Increment 65` (2026-08-29), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-29 summary immediately below, now historical), this summary governs. Full detail in `## Increment 65` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated.**
+
+1. **Camingo's Production pilot PASSED end-to-end.** `/properties` 7→8 (Camingo, ONBOARDING, Bradenton FL, max occupancy 12, timezone explicitly selected as America/New_York). Its August lock "Camingo - Front Door" was Mapped then Enabled. `/locks` 7→8, showing the real device (45% battery, telemetry stale as expected since Enable never re-syncs). No physical lock command issued, no discovery rerun, no other device touched.
+2. **The complete OwnerRez Create → explicit-timezone-fallback → August Map → Enable → `/locks` pipeline is now proven in Production**, not just in theory.
+3. **A controlled rollout plan for the remaining properties was prepared and reported to the user — nothing executed.** Batch 0 (zero property creation): Bahamas/Ocean Pearl/Sandy Nudes's 5 already-vetted SAFE-NOW August locks. Then the 28 remaining Increment-63 CREATE NOW properties, sequenced by evidence strength (16 with Nest corroboration first, 12 August-only next).
+4. **No property has been created, no device Mapped/Enabled/Disabled/Unlinked, no discovery run, since the Camingo pilot.** Awaiting explicit approval before executing any part of the rollout plan.
+5. **Miramar-Bliss (480401) remains explicitly protected from creation.** Bonjour AMI, Island Tides, and Aqua Palm (legacy) remain excluded from the new ProviderDevice Map/Enable path. Surfside Solace remains NEEDS HUMAN CONFIRMATION. Starfish Waterfront remains deferred.
+6. **Nest untouched** — this round is August-only, per explicit instruction.
+7. **Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-29, latest" above] CURRENT STATE — 2026-08-29, earlier same day
+
+**Authoritative current state as of `## Increment 64` (2026-08-29).** Full detail in `## Increment 64`.
 
 1. **Camingo's original failure is definitively diagnosed**: Increment 63's own inline error handling, once retried, surfaced the real message — `missing required field(s): time_zone` — confirming digest `595223608` was always the missing-`time_zone` validation rejection, not a Prisma error or a timeout.
-2. **Root cause is expected OwnerRez behavior, not a Camingo-specific defect**: OwnerRez's own API documentation explicitly permits a null per-property `time_zone` and describes an account/user-level fallback that isn't reachable through any documented API endpoint. Whether this affects other properties in the portfolio remains unknown — no OwnerRez API credentials exist in this session to check the other 36.
-3. **StayWhile's `Property.timezone` remains `String` (NOT NULL)** — not made nullable, no schema migration. No timezone is ever inferred from city/state/address anywhere, confirmed by a dedicated regression test.
-4. **Fix — explicit admin-selected timezone fallback — ✅ COMPLETE, committed (`ddd5aef`), pushed.** Used _only_ when OwnerRez's own `time_zone` is absent — a required `<select>` (curated allowlist, no free text) appears on that row with the message "OwnerRez timezone is not set. Select the property timezone before creating." Current allowlist: **`America/New_York`, `America/Chicago`**. **A real OwnerRez `time_zone`, whenever present, always takes precedence and is never checked against this allowlist.** Every other OwnerRez required-field check is unchanged and exactly as strict as before. 542/542 tests, typecheck, and build all clean.
-5. **Camingo remains uncreated — has NOT been retried.** No property has been created, no device Mapped/Enabled/Unmapped, no discovery rerun, at any point in this increment.
-6. **Immediate next action**: once Vercel confirms `ddd5aef` Ready, the next Production action is **Camingo only**: explicitly select its correct real timezone, click Create **once**, verify creation succeeded — then **stop before any device Map/Enable action** for review, before proceeding to the already-approved Map → Enable → `/locks` pilot sequence.
-7. **The four legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain untouched**, and Miramar-Bliss (OwnerRez ID 480401) remains explicitly protected from creation.
-8. **Priority order unchanged: Locks → Thermostats → Notion.**
+2. **Root cause is expected OwnerRez behavior, not a Camingo-specific defect**: OwnerRez's own API documentation explicitly permits a null per-property `time_zone` and describes an account/user-level fallback that isn't reachable through any documented API endpoint.
+3. **StayWhile's `Property.timezone` remains `String` (NOT NULL)** — not made nullable, no schema migration. No timezone is ever inferred from city/state/address anywhere.
+4. **Fix — explicit admin-selected timezone fallback — ✅ COMPLETE, committed (`ddd5aef`), pushed.** Current allowlist: **`America/New_York`, `America/Chicago`**. A real OwnerRez `time_zone`, whenever present, always takes precedence.
+5. **Camingo had NOT been retried as of this increment.** — superseded: retried and PASSED per Increment 65, see current banner above.
+6. **The four legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain untouched**, and Miramar-Bliss (OwnerRez ID 480401) remains explicitly protected from creation.
+7. **Priority order unchanged: Locks → Thermostats → Notion.**
 
 ---
 
@@ -2963,3 +2976,33 @@ Investigated read-only, no code change, no retry, no property/device write:
 4. **Stop before any Map/Enable action** — report the result back for review before proceeding to the approved Map → Enable → `/locks` pilot sequence.
 
 **Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+## Increment 65 — 2026-08-29 (same day): Camingo pilot PASSED end-to-end in Production — the complete OwnerRez Create → explicit timezone fallback → August Map → Enable → `/locks` pipeline is now proven; controlled rollout plan prepared for the remaining properties, nothing executed yet
+
+### Camingo pilot — ✅ COMPLETE, Production-verified, full pipeline proven
+
+The admin explicitly selected **America/New_York** on Camingo's row (OwnerRez ID 480307) and clicked Create. Production verification:
+
+- **`/properties` increased from 7 → 8.** Camingo exists: name **Camingo**, internalCode **Camingo**, location Bradenton, Florida, status **ONBOARDING**, max occupancy 12.
+- The already-discovered August `ProviderDevice` **"Camingo - Front Door"** was manually Mapped to the new Camingo property — succeeded.
+- It was then manually Enabled.
+- **`/locks` increased from 7 → 8.** New row: Property **Camingo**, Lock **Camingo - Front Door**, Provider **August**, Battery 45%, Connectivity "Connectivity not reported", Lock state unknown (—), flagged "Attention needed — telemetry stale" (expected — Enable never re-syncs telemetry, it reuses the last discovery snapshot, per `setProviderDeviceEnabled()`'s own documented behavior).
+- **No physical Lock/Unlock/PIN/access-code command was issued** (confirmed by design — Enable makes zero provider API calls). **No discovery was rerun. No other device was mapped/enabled.**
+
+**This is the first real, end-to-end proof of the entire onboarding pipeline this project has been building toward since Increment 60**: OwnerRez Create → Property ONBOARDING → explicit timezone fallback (when needed) → August ProviderDevice Map → Enable → real device visible on `/locks`. Every standing safety rule held throughout (one-at-a-time, human-confirmed, no inference, no physical commands, legacy houses untouched).
+
+### Controlled rollout plan — prepared only, nothing executed
+
+At the user's request, a full classification and execution-batch plan was prepared for the remaining Active(37) properties and the 3 already-existing SAFE-NOW properties, reusing Increment 60's and Increment 63's already-documented evidence rather than re-investigating each property from scratch. **No property was created, no device was mapped/enabled/disabled/unlinked, and no discovery was run while preparing this plan.** Full classification and per-property tables were reported to the user in-conversation (not duplicated here to avoid HANDOFF drift if the plan changes before execution) — summary:
+
+- **Batch 0 (fastest, zero property creation)**: Bahamas, Ocean Pearl, Sandy Nudes — Map+Enable their 5 already-discovered, already-vetted "SAFE NOW" August locks (Increment 60) directly onto their existing StayWhile properties.
+- **28 remaining CREATE NOW properties** (Increment 63's list minus Camingo, now piloted) — classified SAFE TO ONBOARD + MAP AUGUST, sequenced by evidence strength: 16 with corroborating Nest discovery (higher confidence) recommended first, 12 August-only next.
+- **Miramar-Bliss (480401)** — remains explicitly protected from creation.
+- **Bonjour AMI, Island Tides, Aqua Palm** (legacy) — their August locks remain excluded from the new ProviderDevice Map/Enable path; only the legacy `AUGUST_PROPERTY_MAP` sync may touch them.
+- **Surfside Solace (456042)** — remains NEEDS HUMAN CONFIRMATION (possible "Dolphin" lock, address-only evidence).
+- **Starfish Waterfront (471634)** — remains deferred, no device evidence.
+- **Nest untouched** throughout this plan, per explicit instruction — this round is August-only.
+
+**Awaiting explicit approval before any execution.** Priority order unchanged: **Locks → Thermostats → Notion.**
