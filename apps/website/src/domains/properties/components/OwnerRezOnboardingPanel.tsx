@@ -1,9 +1,9 @@
-import { Badge, Card, ConfirmButton } from "@stayw/ui";
+import { Badge, Card } from "@stayw/ui";
 
-import { createPropertyFromOwnerRezAction } from "../actions";
 import { formatAddress } from "../lib/owner-rez-onboarding-display";
 
 import { CopyActiveOwnerRezCsvButton } from "./CopyActiveOwnerRezCsvButton";
+import { CreatePropertyFromOwnerRezButton } from "./CreatePropertyFromOwnerRezButton";
 
 import type { OwnerRezOnboardingReport } from "../services/ownerrez-onboarding.service";
 
@@ -70,21 +70,10 @@ export function OwnerRezOnboardingPanel({
             </div>
 
             {detail ? (
-              <form action={createPropertyFromOwnerRezAction}>
-                <input
-                  type="hidden"
-                  name="ownerRezPropertyId"
-                  value={String(ownerRezProperty.id)}
-                />
-                <ConfirmButton
-                  type="submit"
-                  variant="primary"
-                  size="sm"
-                  confirmMessage={`Create a StayWhile property from OwnerRez property "${ownerRezProperty.name}" (ID ${ownerRezProperty.id})? It will be created at Onboarding status. This cannot be undone from this page.`}
-                >
-                  Create StayWhile Property
-                </ConfirmButton>
-              </form>
+              <CreatePropertyFromOwnerRezButton
+                ownerRezPropertyId={ownerRezProperty.id}
+                ownerRezPropertyName={ownerRezProperty.name}
+              />
             ) : (
               <Badge tone="neutral">Detail unavailable</Badge>
             )}
