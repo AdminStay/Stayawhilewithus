@@ -28,23 +28,37 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 CURRENT STATE — 2026-08-29 (READ THIS FIRST — supersedes every earlier summary below)
+# 🔖 CURRENT STATE — 2026-08-29, latest (READ THIS FIRST — supersedes every earlier summary below)
 
-**Authoritative current state as of `## Increment 63` (2026-08-29), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the 2026-08-28 summary immediately below, now historical), this summary governs. Full detail in `## Increment 63` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated** — the 43-August/33-Nest mapping analysis, the SAFE NOW/legacy/no-match lists, and the OwnerRez property-count root cause all still stand exactly as recorded.
+**Authoritative current state as of `## Increment 64` (2026-08-29), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-29 summary immediately below, now historical), this summary governs. Full detail in `## Increment 64` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated.**
+
+1. **Camingo's original failure is definitively diagnosed**: Increment 63's own inline error handling, once retried, surfaced the real message — `missing required field(s): time_zone` — confirming digest `595223608` was always the missing-`time_zone` validation rejection, not a Prisma error or a timeout.
+2. **Root cause is expected OwnerRez behavior, not a Camingo-specific defect**: OwnerRez's own API documentation explicitly permits a null per-property `time_zone` and describes an account/user-level fallback that isn't reachable through any documented API endpoint. Whether this affects other properties in the portfolio remains unknown — no OwnerRez API credentials exist in this session to check the other 36.
+3. **StayWhile's `Property.timezone` remains `String` (NOT NULL)** — not made nullable, no schema migration. No timezone is ever inferred from city/state/address anywhere, confirmed by a dedicated regression test.
+4. **Fix — explicit admin-selected timezone fallback — ✅ COMPLETE, committed (`ddd5aef`), pushed.** Used _only_ when OwnerRez's own `time_zone` is absent — a required `<select>` (curated allowlist, no free text) appears on that row with the message "OwnerRez timezone is not set. Select the property timezone before creating." Current allowlist: **`America/New_York`, `America/Chicago`**. **A real OwnerRez `time_zone`, whenever present, always takes precedence and is never checked against this allowlist.** Every other OwnerRez required-field check is unchanged and exactly as strict as before. 542/542 tests, typecheck, and build all clean.
+5. **Camingo remains uncreated — has NOT been retried.** No property has been created, no device Mapped/Enabled/Unmapped, no discovery rerun, at any point in this increment.
+6. **Immediate next action**: once Vercel confirms `ddd5aef` Ready, the next Production action is **Camingo only**: explicitly select its correct real timezone, click Create **once**, verify creation succeeded — then **stop before any device Map/Enable action** for review, before proceeding to the already-approved Map → Enable → `/locks` pilot sequence.
+7. **The four legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain untouched**, and Miramar-Bliss (OwnerRez ID 480401) remains explicitly protected from creation.
+8. **Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-29, latest" above] CURRENT STATE — 2026-08-29
+
+**Authoritative current state as of `## Increment 63` (2026-08-29).** Full detail in `## Increment 63`.
 
 1. **Complete 37-row Active OwnerRez cross-reference produced** (superseding Increment 62's 4-example partial pass): 29 properties classified CREATE NOW, 6 are real OwnerRez records for 5 existing properties (pending Confirm-Link) plus the still-protected Miramar-Bliss, 1 needs human confirmation (Surfside Solace), 1 deferred (Starfish Waterfront, no device evidence). Two orphan devices flagged with no OwnerRez match found at all: August's "Dolphin" and Nest's "Poinciana".
 2. **Pilot approach approved**: prove the full Create→Map→Enable→`/locks` pipeline on **Camingo alone** (OwnerRez ID 480307) before scaling to the other 28.
 3. **Camingo's first real Production create attempt FAILED**, digest/reference `595223608`. **Production verification confirmed Camingo was NOT created**: `/properties` remained at the original 7; `/properties/ownerrez` recovered normally (not a persistent page failure) and still showed Active (37) with Camingo 480307 still unmatched.
-4. **Root cause not confirmed** — no Vercel log/Production DB access in this session, and the user's own Vercel log search afterward did not turn up a matching error. Leading candidate (not proven): a required OwnerRez detail field (bedrooms/bathrooms/max_guests/time_zone — none shown in the UI before the click) is genuinely null/absent for Camingo's real record.
+4. **Root cause not confirmed at the time** — see Increment 64: now definitively confirmed as the missing `time_zone` field.
 5. **Inline create-error handling — ✅ COMPLETE, committed (`38a3194`), pushed.** `createPropertyFromOwnerRezAction` now returns a success/failure state instead of throwing — a real Prisma error is replaced with a generic safe message, every deliberate business-logic message is surfaced verbatim inline on the row. No validation/creation logic was changed. 533/533 tests, typecheck, and build all clean.
-6. **Camingo has NOT been retried since the failed attempt.** No property has been created, no device Mapped/Enabled/Unmapped, no discovery rerun, at any point in this increment.
-7. **Immediate next action**: once Vercel confirms `38a3194` Ready, retry Camingo **once**, read the inline result — success → proceed with the approved Map/Enable pilot sequence; failure → the message will now name the real cause, **stop before any Map/Enable action** and report it back first.
-8. **The four legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain untouched**, and Miramar-Bliss (OwnerRez ID 480401) remains explicitly protected from creation.
-9. **Priority order unchanged: Locks → Thermostats → Notion.**
+6. **Camingo had NOT been retried as of this increment.** — superseded: retried per Increment 64, see current banner above.
+7. **The four legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain untouched**, and Miramar-Bliss (OwnerRez ID 480401) remains explicitly protected from creation.
+8. **Priority order unchanged: Locks → Thermostats → Notion.**
 
 ---
 
-# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-29" above] CURRENT STATE — 2026-08-28, latest
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-29, latest" above] CURRENT STATE — 2026-08-28, latest
 
 **Authoritative current state as of `## Increment 62` (2026-08-28).** Full detail in `## Increment 62`.
 
@@ -2900,5 +2914,52 @@ Built specifically so the _next_ Camingo attempt is self-diagnosing regardless o
 
 - **Success** → proceed with the approved pilot sequence (Map → Enable → verify on `/locks`), per the already-approved click-by-click plan.
 - **Failure** → the inline message itself will now name the real cause (a specific missing field, or the generic safe message for an unexpected/Prisma-level error) — **stop before any Map/Enable action** and report the exact message back before deciding next steps. Do not retry a second time without a fresh read on the cause.
+
+**Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+## Increment 64 — 2026-08-29 (same day): Camingo's failure definitively diagnosed via Increment 63's own inline error handling — missing OwnerRez `time_zone`, not Prisma or a timeout; root-caused as expected OwnerRez behavior, not a data defect; explicit admin-selected timezone fallback built, committed, and pushed
+
+### Digest `595223608` — definitively resolved
+
+The redeployed inline error handling (Increment 63, `38a3194`) worked exactly as designed: retrying Camingo's Create surfaced the real message inline —
+
+> `Cannot create a StayWhile property from OwnerRez property 480307 — missing required field(s): time_zone. This property needs manual review instead.`
+
+**This retroactively confirms digest `595223608`'s real cause was the missing-`time_zone` validation rejection all along** — not a Prisma error, not a timeout, and not the post-action page re-render (both already ruled out by the Production evidence in Increment 63). Increment 63's ranked candidate #1 was correct.
+
+### Root cause — expected OwnerRez behavior, not a Camingo-specific data defect
+
+Investigated read-only, no code change, no retry, no property/device write:
+
+- OwnerRez's own API documentation for `GET /v2/properties/{id}` was fetched fresh and confirmed: **every field this app's `REQUIRED_FIELD_CHECKS` enforced is documented by OwnerRez itself as "Not Required"** — including `time_zone`, whose docs state verbatim: _"If null, the user's time zone should be used as a fallback."_ A null per-property `time_zone` is normal, anticipated OwnerRez behavior, not a data-quality anomaly isolated to Camingo. **No other OwnerRez endpoint exposes a property's timezone** — the documented account/user-level fallback isn't reachable through any documented API call, ruling out "read it from elsewhere in OwnerRez" as a fix.
+- **StayWhile's `Property.timezone` remains `String` (NOT NULL)** in `schema.prisma` — confirmed unchanged, no migration performed or proposed.
+- A full codebase search found **zero downstream reads of `Property.timezone` anywhere** in the app — it's written at creation time only, never consumed by any scheduling/display/integration logic today (caveat: only this repo's TS/TSX source was searched; an external consumer, e.g. an n8n workflow, can't be ruled out from this session).
+- The other 36 Active-unmatched OwnerRez records' field-completeness **could not be checked** — no OwnerRez API credentials exist in this session. Whether this gap is isolated to Camingo or systemic across the portfolio remains genuinely unknown.
+
+### Fix — explicit admin-selected timezone fallback, only when OwnerRez's own value is absent — ✅ COMPLETE, committed (`ddd5aef`), pushed
+
+**We did not make `Property.timezone` nullable, and no schema migration was performed.** We do not infer a timezone from city/state/address anywhere — confirmed directly by a dedicated regression test using a full, real Bradenton, FL address that still requires an explicit human choice. 8 files:
+
+- New `apps/website/src/domains/properties/lib/onboarding-timezones.ts` — the single, shared, curated allowlist: **`America/New_York` and `America/Chicago`** (the two zones the real, current portfolio actually needs — Florida's peninsula is Eastern, while the Florida panhandle and South Padre Island, TX are both Central; state alone doesn't determine the zone, which is exactly why this must always be an explicit human choice).
+- `ownerrez-onboarding.schema.ts` — added optional `timezoneOverride`.
+- `ownerrez-onboarding.service.ts` — `time_zone` removed from the generic `REQUIRED_FIELD_CHECKS` list; a dedicated resolution step now does `detail.time_zone || input.timezoneOverride`, rejecting clearly if neither exists, and rejecting an override that isn't on the curated allowlist. **A real OwnerRez `time_zone`, whenever present, always takes precedence and is never checked against the fallback allowlist** — the allowlist only constrains the human-submitted override, never OwnerRez's own authoritative value.
+- `actions.ts` — forwards `timezoneOverride` from the form, normalizing empty/absent to `undefined`.
+- `CreatePropertyFromOwnerRezButton.tsx` — when OwnerRez's own timezone is missing, shows **"OwnerRez timezone is not set. Select the property timezone before creating."** above a required `<select>` (disabled placeholder + the two curated zones only, no free text) before the Create button. Never rendered at all when OwnerRez already has a real value.
+- `OwnerRezOnboardingPanel.tsx` — wires the new prop through.
+- All other OwnerRez required-field validation (name, internal_code, full address, bedrooms, bathrooms, max_guests) is unchanged and exactly as strict as before — confirmed by regression tests.
+- Verification before commit: 542/542 website tests (9 new), typecheck clean, production build succeeded (`/properties/ownerrez` compiles at 1.63 kB, no server/client boundary error).
+
+### Camingo — still uncreated, not retried
+
+**No Production property has been created. Camingo has not been retried since Increment 63's failed attempt.** No August/Nest device has been Mapped/Enabled/Unmapped, no discovery has been rerun, at any point in this increment.
+
+### Next action, exact order
+
+1. Once Vercel confirms `ddd5aef` Ready, open `/properties/ownerrez` and find Camingo's row — it should now show the timezone warning and selector instead of silently failing.
+2. **Explicitly select Camingo's correct real timezone** (the admin's own judgment call — this app will never guess it) and click Create **once**.
+3. Verify creation succeeded (inline success message, and/or check `/properties` for the new Camingo row at ONBOARDING status).
+4. **Stop before any Map/Enable action** — report the result back for review before proceeding to the approved Map → Enable → `/locks` pilot sequence.
 
 **Priority order unchanged: Locks → Thermostats → Notion.**
