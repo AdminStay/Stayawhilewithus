@@ -1,19 +1,11 @@
 import { Badge, Card, ConfirmButton } from "@stayw/ui";
 
 import { createPropertyFromOwnerRezAction } from "../actions";
+import { formatAddress } from "../lib/owner-rez-onboarding-display";
+
+import { CopyActiveOwnerRezCsvButton } from "./CopyActiveOwnerRezCsvButton";
 
 import type { OwnerRezOnboardingReport } from "../services/ownerrez-onboarding.service";
-
-function formatAddress(
-  detail: OwnerRezOnboardingReport["active"][number]["detail"],
-): string {
-  if (!detail?.address) return "Address unavailable";
-  const { street1, street2, city, state, postal_code, country } =
-    detail.address;
-  return [street1, street2, city, state, postal_code, country]
-    .filter(Boolean)
-    .join(", ");
-}
 
 /**
  * Read-only Active/Inactive lists of OwnerRez properties with no StayWhile
@@ -46,9 +38,12 @@ export function OwnerRezOnboardingPanel({
         Onboarding status, never Active.
       </p>
 
-      <h3 className="mb-2 text-sm font-medium text-ink">
-        Active ({report.active.length})
-      </h3>
+      <div className="mb-2 flex items-center justify-between gap-4">
+        <h3 className="text-sm font-medium text-ink">
+          Active ({report.active.length})
+        </h3>
+        <CopyActiveOwnerRezCsvButton active={report.active} />
+      </div>
       <div className="mb-6 space-y-3">
         {report.active.length === 0 && (
           <p className="text-xs text-ink-faint">

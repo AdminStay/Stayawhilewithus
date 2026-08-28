@@ -172,4 +172,23 @@ describe("OwnerRezOnboardingPanel", () => {
       screen.getByText("No unmatched inactive OwnerRez properties."),
     ).toBeTruthy();
   });
+
+  it("renders the Copy Active as CSV control next to the Active heading, independent of Create controls", () => {
+    render(
+      <OwnerRezOnboardingPanel
+        report={makeReport({
+          active: [
+            { ownerRezProperty: OCEAN_PEARL_OR, detail: OCEAN_PEARL_DETAIL },
+          ],
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Copy Active as CSV" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Create StayWhile Property" }),
+    ).toBeTruthy();
+  });
 });
