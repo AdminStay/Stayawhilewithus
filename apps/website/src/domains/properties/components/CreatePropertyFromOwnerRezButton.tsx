@@ -1,9 +1,10 @@
 "use client";
 
-import { ConfirmButton } from "@stayw/ui";
+import { ConfirmButton, Select } from "@stayw/ui";
 import { useActionState } from "react";
 
 import { createPropertyFromOwnerRezAction } from "../actions";
+import { SUPPORTED_ONBOARDING_TIMEZONES } from "../lib/onboarding-timezones";
 
 import type { CreatePropertyFromOwnerRezActionState } from "../actions";
 
@@ -24,18 +25,31 @@ const INITIAL_STATE: CreatePropertyFromOwnerRezActionState = { status: "idle" };
  * here never blocks a later attempt: the button returns to its normal,
  * re-clickable state, and nothing about this row's own markup or the rest
  * of the page is affected.
+ *
+ * When OwnerRez's own `time_zone` is missing for this property, a required
+ * <select> (disabled placeholder, curated allowlist only — never free text)
+ * appears instead of silently letting the create proceed or guessing a
+ * value from the property's address. The browser's native required-field
+ * validation blocks submission until a real choice is made; the server
+ * independently re-validates the same allowlist regardless (see
+ * createPropertyFromOwnerRez()), since a client-side check alone is never
+ * trusted. Never rendered at all when OwnerRez already has a real value —
+ * that value is always used as-is, whatever it is.
  */
 export function CreatePropertyFromOwnerRezButton({
   ownerRezPropertyId,
   ownerRezPropertyName,
+  ownerRezTimezone,
 }: {
   ownerRezPropertyId: number;
   ownerRezPropertyName: string;
+  ownerRezTimezone: string | null | undefined;
 }) {
   const [state, formAction, isPending] = useActionState(
     createPropertyFromOwnerRezAction,
     INITIAL_STATE,
   );
+  const needsTimezone = !ownerRezTimezone;
 
   return (
     <form action={formAction}>
@@ -44,6 +58,32 @@ export function CreatePropertyFromOwnerRezButton({
         name="ownerRezPropertyId"
         value={String(ownerRezPropertyId)}
       />
+
+      {needsTimezone && (
+        <div className="mb-2">
+          <p className="text-xs font-medium text-warning-600">
+            OwnerRez timezone is not set. Select the property timezone before
+            creating.
+          </p>
+          <Select
+            name="timezoneOverride"
+            required
+            defaultValue=""
+            className="mt-1"
+            aria-label="Property timezone"
+          >
+            <option value="" disabled>
+              Choose timezone…
+            </option>
+            {SUPPORTED_ONBOARDING_TIMEZONES.map((tz) => (
+              <option key={tz} value={tz}>
+                {tz}
+              </option>
+            ))}
+          </Select>
+        </div>
+      )}
+
       <ConfirmButton
         type="submit"
         variant="primary"

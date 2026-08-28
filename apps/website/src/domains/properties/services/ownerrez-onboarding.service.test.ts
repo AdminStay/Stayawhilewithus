@@ -227,7 +227,6 @@ describe("createPropertyFromOwnerRez", () => {
     ["address.street1", { address: { city: "Largo" } }],
     ["bedrooms", { bedrooms: undefined }],
     ["max_guests", { max_guests: undefined }],
-    ["time_zone", { time_zone: undefined }],
   ])(
     "refuses to create and names the missing field when %s is absent from OwnerRez's detail",
     async (label, overrides) => {
@@ -247,6 +246,109 @@ describe("createPropertyFromOwnerRez", () => {
       restoreEnv();
     },
   );
+
+  describe("timezone fallback", () => {
+    it("uses OwnerRez's own time_zone as-is when present, ignoring any submitted override", async () => {
+      withOwnerRezEnv();
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(prisma.property.findUnique)
+        .mockResolvedValueOnce(null as never)
+        .mockResolvedValueOnce(null as never);
+      mockGetProperty.mockResolvedValueOnce(
+        makeFullDetail({ time_zone: "America/New_York" }),
+      );
+      vi.mocked(prisma.property.create).mockResolvedValueOnce({} as never);
+
+      await createPropertyFromOwnerRez(actor, {
+        ownerRezPropertyId: "431354",
+        timezoneOverride: "America/Chicago",
+      });
+
+      expect(prisma.property.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ timezone: "America/New_York" }),
+        }),
+      );
+      restoreEnv();
+    });
+
+    it("rejects when time_zone is absent and no timezoneOverride was provided, without inferring anything from the property's real address", async () => {
+      withOwnerRezEnv();
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(prisma.property.findUnique).mockResolvedValueOnce(
+        null as never,
+      );
+      // Real, fully-populated address (Bradenton, FL) — proves the
+      // rejection isn't a side effect of missing address data, and that a
+      // real address never gets used to guess a timezone.
+      mockGetProperty.mockResolvedValueOnce(
+        makeFullDetail({
+          time_zone: undefined,
+          address: {
+            street1: "2012 37th St W",
+            city: "Bradenton",
+            state: "FL",
+            postal_code: "34205",
+            country: "US",
+          },
+        }),
+      );
+
+      await expect(
+        createPropertyFromOwnerRez(actor, { ownerRezPropertyId: "431354" }),
+      ).rejects.toThrow(/timezone is not set/i);
+
+      expect(prisma.property.create).not.toHaveBeenCalled();
+      expect(recordAudit).not.toHaveBeenCalled();
+      restoreEnv();
+    });
+
+    it("uses a valid admin-selected timezoneOverride as the fallback when OwnerRez's own time_zone is absent", async () => {
+      withOwnerRezEnv();
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(prisma.property.findUnique)
+        .mockResolvedValueOnce(null as never)
+        .mockResolvedValueOnce(null as never);
+      mockGetProperty.mockResolvedValueOnce(
+        makeFullDetail({ time_zone: undefined }),
+      );
+      vi.mocked(prisma.property.create).mockResolvedValueOnce({} as never);
+
+      await createPropertyFromOwnerRez(actor, {
+        ownerRezPropertyId: "431354",
+        timezoneOverride: "America/Chicago",
+      });
+
+      expect(prisma.property.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ timezone: "America/Chicago" }),
+        }),
+      );
+      restoreEnv();
+    });
+
+    it("rejects an unsupported timezoneOverride value not on the curated allowlist", async () => {
+      withOwnerRezEnv();
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(prisma.property.findUnique).mockResolvedValueOnce(
+        null as never,
+      );
+      mockGetProperty.mockResolvedValueOnce(
+        makeFullDetail({ time_zone: undefined }),
+      );
+
+      await expect(
+        createPropertyFromOwnerRez(actor, {
+          ownerRezPropertyId: "431354",
+          timezoneOverride: "Mars/OlympusMons",
+        }),
+      ).rejects.toThrow(/not a supported onboarding timezone/i);
+
+      expect(prisma.property.create).not.toHaveBeenCalled();
+      expect(recordAudit).not.toHaveBeenCalled();
+      restoreEnv();
+    });
+  });
 
   it("accepts bathrooms_full alone with no bathrooms_half (treats missing half as zero)", async () => {
     withOwnerRezEnv();

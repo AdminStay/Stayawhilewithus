@@ -9,6 +9,10 @@ import {
 } from "@stayw/integrations/ownerrez";
 
 import {
+  SUPPORTED_ONBOARDING_TIMEZONES,
+  isSupportedOnboardingTimezone,
+} from "../lib/onboarding-timezones";
+import {
   createPropertyFromOwnerRezSchema,
   type CreatePropertyFromOwnerRezInput,
 } from "../schemas/ownerrez-onboarding.schema";
@@ -131,7 +135,6 @@ const REQUIRED_FIELD_CHECKS: Array<{
     present: (d) => d.bathrooms_full != null || d.bathrooms_half != null,
   },
   { label: "max_guests", present: (d) => d.max_guests != null },
-  { label: "time_zone", present: (d) => Boolean(d.time_zone) },
 ];
 
 /**
@@ -143,11 +146,22 @@ const REQUIRED_FIELD_CHECKS: Array<{
  *
  * Refuses to create anything if any NOT NULL Property column can't be
  * derived from OwnerRez's own response — never fabricates a missing
- * address/bedroom/bathroom/timezone value. propertyType is the one
- * deliberate exception: HANDOFF's revised OwnerRez field-ownership policy
- * explicitly sanctions `OTHER` as a creation-time default when no
- * human-approved OwnerRez-type -> StayWhile-type mapping exists yet (none
- * does today) — this is a documented default, not a guess.
+ * address/bedroom/bathroom value. propertyType is the one deliberate
+ * exception: HANDOFF's revised OwnerRez field-ownership policy explicitly
+ * sanctions `OTHER` as a creation-time default when no human-approved
+ * OwnerRez-type -> StayWhile-type mapping exists yet (none does today) —
+ * this is a documented default, not a guess.
+ *
+ * `time_zone` is the one field with an explicit, narrow fallback: OwnerRez's
+ * own API documentation states a null per-property time_zone is normal
+ * (falls back to an account-level default OwnerRez doesn't expose via this
+ * API) — real Production data confirmed this for OwnerRez id 480307. When
+ * OwnerRez's own value is present, it's used exactly as-is, no matter what
+ * it is. Only when it's genuinely absent does `input.timezoneOverride` (an
+ * admin's explicit choice from SUPPORTED_ONBOARDING_TIMEZONES, submitted by
+ * CreatePropertyFromOwnerRezButton) get used — never inferred from
+ * city/state/address, and never silently defaulted when no override was
+ * given.
  *
  * Always creates at PropertyStatus.ONBOARDING, never ACTIVE, regardless of
  * what schema.prisma's own default is — an onboarded property needs
@@ -187,6 +201,21 @@ export async function createPropertyFromOwnerRez(
     );
   }
 
+  // OwnerRez's own value always wins, whatever it is — an override is only
+  // ever consulted when OwnerRez's own field is genuinely empty, and is
+  // never allowed to overwrite a real OwnerRez value.
+  const timezone = detail.time_zone || input.timezoneOverride;
+  if (!timezone) {
+    throw new Error(
+      `OwnerRez timezone is not set for property ${input.ownerRezPropertyId}, and no timezone was selected. Select a property timezone before creating.`,
+    );
+  }
+  if (!detail.time_zone && !isSupportedOnboardingTimezone(timezone)) {
+    throw new Error(
+      `"${timezone}" is not a supported onboarding timezone. Choose one of: ${SUPPORTED_ONBOARDING_TIMEZONES.join(", ")}.`,
+    );
+  }
+
   const existingByCode = await prisma.property.findUnique({
     where: { internalCode: detail.internal_code! },
   });
@@ -212,7 +241,7 @@ export async function createPropertyFromOwnerRez(
     bathroomCount:
       (detail.bathrooms_full ?? 0) + (detail.bathrooms_half ?? 0) * 0.5,
     maxOccupancy: detail.max_guests!,
-    timezone: detail.time_zone!,
+    timezone,
     ownerRezPropertyId: input.ownerRezPropertyId,
     status: "ONBOARDING" as const,
   };

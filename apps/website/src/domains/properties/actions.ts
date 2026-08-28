@@ -138,15 +138,19 @@ export type CreatePropertyFromOwnerRezActionState =
 
 /**
  * One creation per submission — no array/bulk input shape exists here or
- * in createPropertyFromOwnerRezSchema. The only value this action forwards
- * is which OwnerRez property to create from; every actual Property field
- * is derived server-side inside createPropertyFromOwnerRez() from a fresh
- * OwnerRez fetch, never from this form. createPropertyFromOwnerRez()'s own
- * validation (duplicate checks, required-field checks, the DB's own unique
- * constraints) is completely unchanged — this wrapper only decides how a
- * thrown error reaches the screen instead of crashing the whole page to
- * Next.js's generic error boundary, the same catch-and-report pattern
- * already proven by runDiscovery() in the smart-devices domain.
+ * in createPropertyFromOwnerRezSchema. The only values this action forwards
+ * are which OwnerRez property to create from, and an optional admin-chosen
+ * timezone; every actual Property field is derived server-side inside
+ * createPropertyFromOwnerRez() from a fresh OwnerRez fetch, never from this
+ * form. createPropertyFromOwnerRez()'s own validation (duplicate checks,
+ * required-field checks, the timezone-fallback allowlist check, the DB's
+ * own unique constraints) is completely unchanged — this wrapper only
+ * decides how a thrown error reaches the screen instead of crashing the
+ * whole page to Next.js's generic error boundary, the same catch-and-report
+ * pattern already proven by runDiscovery() in the smart-devices domain.
+ * An empty/absent `timezoneOverride` is normalized to `undefined` here
+ * (never an empty string) so a row that doesn't need it never trips the
+ * schema's `.min(1)` check with a raw Zod error.
  */
 export async function createPropertyFromOwnerRezAction(
   _prevState: CreatePropertyFromOwnerRezActionState,
@@ -157,6 +161,7 @@ export async function createPropertyFromOwnerRezAction(
 
     const input = createPropertyFromOwnerRezSchema.parse({
       ownerRezPropertyId: formData.get("ownerRezPropertyId"),
+      timezoneOverride: formData.get("timezoneOverride") || undefined,
     });
 
     const property = await createPropertyFromOwnerRez(actor, input);

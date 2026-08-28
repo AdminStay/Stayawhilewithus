@@ -73,6 +73,7 @@ export function OwnerRezOnboardingPanel({
               <CreatePropertyFromOwnerRezButton
                 ownerRezPropertyId={ownerRezProperty.id}
                 ownerRezPropertyName={ownerRezProperty.name}
+                ownerRezTimezone={detail.time_zone}
               />
             ) : (
               <Badge tone="neutral">Detail unavailable</Badge>
