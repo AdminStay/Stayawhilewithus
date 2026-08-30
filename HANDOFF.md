@@ -28,23 +28,34 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 CURRENT STATE — 2026-08-31, later same day (READ THIS FIRST — supersedes every earlier summary below)
+# 🔖 CURRENT STATE — 2026-08-31, latest of the day (READ THIS FIRST — supersedes every earlier summary below)
 
-**Authoritative current state as of `## Increment 68` (2026-08-31), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-31 summary immediately below, now historical), this summary governs. Full detail in `## Increment 68` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated.**
+**Authoritative current state as of `## Increment 69` (2026-08-31), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-31 summary immediately below, now historical), this summary governs. Full detail in `## Increment 69` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated.**
 
-1. **Lucky Charm — the first Group 1 property — PASSED end-to-end in Production.** OwnerRez 393800 created (ONBOARDING), its August lock "Lucky Charm - Front Door" Mapped then Enabled. **`/locks` went 13 → 14** (14 Total / 3 Online / 0 Offline / 11 Unknown / 0 Low Battery). Real August House ID confirmed live: `9f8328e8-8a13-460f-ab87-cc2493b4103b` — checked against all 4 protected legacy house IDs, no match. Nest thermostat untouched. No discovery, no physical command.
-2. **This is the third independent Production proof of the full pipeline** (Camingo → Batch 0 → Lucky Charm).
-3. **User has confirmed the one-property workflow is sufficiently proven and does not want a full investigation cycle repeated per property.** An accelerated multi-property batch plan was prepared and reported in-conversation — full tables not duplicated in HANDOFF to avoid drift before execution.
-4. **Lucky Charm is complete and excluded from all future batches.** Remaining Group 1/Group 2 properties re-sequenced into small batches of single-lock, unambiguous properties first; anything with multiple locks, a naming variant, or a known anomaly (Royal Palms' Nest duplicate-count issue, Riverside Château's diacritic, Maon de la Mer's typo, Coco Vista's spelling variant, Orion's Landing's non-exact match) moved to a separate later review batch.
-5. **Royal Palms' August side is independently cleared to proceed on schedule** — its unresolved Nest duplicate-count anomaly only blocks its future thermostat work, not its August Create/Map/Enable.
-6. **No property created, no device Mapped/Enabled, no discovery run, while preparing this plan.** Awaiting explicit approval before executing any batch.
-7. **Miramar-Bliss (480401) remains explicitly protected from creation.** Bonjour AMI, Island Tides, Aqua Palm (legacy) remain excluded from the new ProviderDevice path. Surfside Solace remains NEEDS HUMAN CONFIRMATION. Starfish Waterfront remains deferred.
-8. **Nest untouched.**
-9. **Priority order unchanged: Locks → Thermostats → Notion.**
+1. **Fast Batch 1 PASSED in Production.** 5 properties created and their single August lock each Mapped/Enabled: Moonlit Cove (460320), Mahalo (432998), Champion Retreat (409977), Picasa (398898), Lakeshore (395329). **`/locks` went 14 → 19** (19 Total / 3 Online / 0 Offline / 16 Unknown / 0 Low Battery). **`/properties` stands at 14.**
+2. **Real naming divergence confirmed for Lakeshore**: Nest search/OwnerRez both use "Lakeshore" (one word); the **August lock required "Lake Shore" (two words)** to find/map. August done; Nest untouched — flagged now for the future thermostat phase.
+3. **Fast Batch 2 prepared, not yet executed**: Palm Haven (377876), Majestic Isla (372241), Paradise Awaits (355018), Las Sirenas (477351), Moroccan Moon (441290) — all exact-name, single-lock, zero naming variant. Expected `/locks` after Batch 2: **24**.
+4. **No property created, no device Mapped/Enabled, no discovery run, since Fast Batch 1 completed.** Awaiting explicit approval before executing Batch 2.
+5. **Fast Batch pool has 17 properties remaining before Batch 2** (12 will remain after it). **Review Batch** (Royal Eden ×2 locks, Maon de la Mer, Coco Vista, Robinson Recluse, Orion's Landing) still untouched.
+6. **Miramar-Bliss (480401) remains explicitly protected from creation.** Bonjour AMI, Island Tides, Aqua Palm (legacy) remain excluded from the new ProviderDevice path. Surfside Solace remains NEEDS HUMAN CONFIRMATION. Starfish Waterfront remains deferred.
+7. **Nest untouched.**
+8. **Priority order unchanged: Locks → Thermostats → Notion.**
 
 ---
 
-# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31, later same day" above] CURRENT STATE — 2026-08-31, latest
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31, latest of the day" above] CURRENT STATE — 2026-08-31, later same day
+
+**Authoritative current state as of `## Increment 68` (2026-08-31).** Full detail in `## Increment 68`.
+
+1. **Lucky Charm — the first Group 1 property — PASSED end-to-end in Production.** OwnerRez 393800 created (ONBOARDING), its August lock Mapped then Enabled. `/locks` went 13 → 14. Real August House ID confirmed live, checked against all 4 protected legacy house IDs — no match.
+2. **User confirmed the one-property workflow is sufficiently proven** and requested an accelerated multi-property batch plan.
+3. **Royal Palms' August side independently cleared** — its Nest duplicate-count anomaly only blocks future thermostat work.
+4. **Miramar-Bliss/legacy houses/Surfside Solace/Starfish Waterfront remain excluded exactly as before. Nest untouched.** — superseded: Fast Batch 1 has since passed, see Increment 69.
+5. **Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31, latest of the day" above] CURRENT STATE — 2026-08-31, latest
 
 **Authoritative current state as of `## Increment 67` (2026-08-31).** Full detail in `## Increment 67`.
 
@@ -3134,5 +3145,33 @@ Full batch tables (OwnerRez ID, property, August/Nest device counts, confidence,
 - All standing exclusions reaffirmed unchanged: Miramar-Bliss (480401) never created; Aqua Palm/Bonjour AMI/Island Tides/Miramar Bliss legacy houses never touched via the new ProviderDevice path; Surfside Solace/Dolphin still needs human confirmation; Starfish Waterfront still deferred; Nest still untouched everywhere.
 
 **No property was created, no device was mapped/enabled, no discovery was run while preparing this plan. Awaiting explicit approval before executing any batch.**
+
+**Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+## Increment 69 — 2026-08-31 (same day): Fast Batch 1 PASSED in Production — 5 more properties onboarded and their August locks Mapped/Enabled; a real August/Nest naming divergence documented for Lakeshore; Fast Batch 2 prepared, nothing executed
+
+### Fast Batch 1 — ✅ COMPLETE, Production-verified
+
+5 properties created (ONBOARDING) and their single August lock each Mapped then Enabled, repeating the proven procedure with no per-property investigation stop:
+
+- Moonlit Cove — OwnerRez 460320
+- Mahalo — OwnerRez 432998
+- Champion Retreat — OwnerRez 409977
+- Picasa — OwnerRez 398898
+- Lakeshore — OwnerRez 395329
+
+**`/locks` went 14 → 19** (+5). Counters: 19 Total / 3 Online / 0 Offline / 16 Unknown / 0 Low Battery. No discovery run, no physical lock command issued.
+
+**Real naming divergence confirmed for Lakeshore, recorded for the future thermostat phase**: the property's Nest search surfaces as **"Lakeshore"** (one word, matching OwnerRez exactly, as already noted in Increment 63), while the **August lock required the "Lake Shore" (two-word) variant** to find/map. August was mapped/enabled as planned; **Nest was not touched**, per standing instruction — this is documented now so the eventual Nest phase doesn't have to rediscover it.
+
+### Fast Batch 2 — prepared, not executed
+
+Next 5 safest remaining properties reported to the user in-conversation (Palm Haven 377876, Majestic Isla 372241, Paradise Awaits 355018, Las Sirenas 477351, Moroccan Moon 441290) — all exact-name, single-August-lock, zero naming variant, per the user's explicit preference to avoid ambiguity in this batch. Expected `/locks` total after Batch 2: **24**. **Not yet executed — awaiting approval.**
+
+### Current state
+
+**19 locks in Production. `/properties` stands at 14** (the original 7, plus 7 newly created via this OwnerRez pipeline: Camingo, Lucky Charm, Moonlit Cove, Mahalo, Champion Retreat, Picasa, Lakeshore — Bahamas/Ocean Pearl/Sandy Nudes were pre-existing and only had devices Mapped/Enabled, not created). Fast Batch pool has 17 properties remaining after Fast Batch 1 (12 will remain after Batch 2's 5 are also done), Review Batch (Royal Eden, Maon de la Mer, Coco Vista, Robinson Recluse, Orion's Landing) untouched, Miramar-Bliss/legacy houses/Surfside Solace/Starfish Waterfront all still excluded exactly as before. Nest untouched throughout.
 
 **Priority order unchanged: Locks → Thermostats → Notion.**
