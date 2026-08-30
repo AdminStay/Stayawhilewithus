@@ -28,21 +28,31 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 CURRENT STATE — 2026-08-31, most recent (READ THIS FIRST — supersedes every earlier summary below)
+# 🔖 CURRENT STATE — 2026-08-31, latest of all (READ THIS FIRST — supersedes every earlier summary below)
 
-**Authoritative current state as of `## Increment 72` (2026-08-31), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-31 summary immediately below, now historical), this summary governs. Full detail in `## Increment 72` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated** — except the "OUAP"/"BOP" search-term labels specifically, which item 1 below now corrects.
+**Authoritative current state as of `## Increment 73` (2026-08-31), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-31 summary immediately below, now historical), this summary governs. Full detail in `## Increment 73` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated.**
 
-1. **Production correction**: "OUAP" (Once Upon a Pond, 355027) and "BOP" (Bird of Paradise, 438847) could not be found under those search terms in the live August inventory. **Root cause**: HANDOFF's Increment 60 record of these two was my own paraphrased classification of a pasted CSV, not a preserved verbatim device name — unlike the SAFE NOW bucket, the 31-lock NO MATCH bucket never had literal names/IDs recorded, and "BOP" in particular was already a familiar alias from unrelated Notion work before that CSV was ever analyzed, creating a real risk the label doesn't reflect the actual `discoveredName` string. No discovery has been rerun since, so nothing could have deleted the underlying devices — this is a recording gap, not a confirmed data loss.
-2. **Both moved from SAFE NOW to REVIEW FIRST/unresolved.** Alternative, evidence-grounded (not confirmed) search terms suggested: for Once Upon a Pond — the full OwnerRez name, or "Pond"; for Bird of Paradise — "Rex" (an unexplained second identifier inside OwnerRez's own `internal_code` "BOP (Rex)"), "Bird of Paradise," "Paradise," or "Birds of Paradise" (a real Notion-confirmed display-name variant for this same property).
-3. **SAFE NOW batch reduced to 4**: Riverside Château, Florisun, Driftwood Cottage, Aloha by the Sea. **Expected `/locks` after these 4: 29 + 4 = 33.**
-4. **No discovery run. No property created. No device Mapped/Enabled. Nest untouched**, throughout this investigation.
-5. **REVIEW FIRST / unresolved now holds 3**: Island SOS, Once Upon a Pond, Bird of Paradise. **Review Batch** (Royal Eden ×2 locks, Maon de la Mer, Coco Vista, Robinson Recluse, Orion's Landing) still separately untouched.
-6. **Miramar-Bliss (480401) remains explicitly protected from creation.** Bonjour AMI, Island Tides, Aqua Palm (legacy) remain excluded from the new ProviderDevice path. Surfside Solace remains NEEDS HUMAN CONFIRMATION. Starfish Waterfront remains deferred.
-7. **Priority order unchanged: Locks → Thermostats → Notion.**
+1. **The 4-property SAFE NOW batch PASSED in Production.** Riverside Château, Florisun, Driftwood Cottage, Aloha by the Sea — all created (ONBOARDING), single August lock each Mapped/Enabled. **`/locks` went 29 → 33**, exactly as predicted (33 Total / 3 Online / 0 Offline / 30 Unknown / 0 Low Battery). **`/properties` stands at 28.**
+2. **A read-only investigation of the remaining 8 review/unresolved August locks was performed and reported to the user in-conversation** (Island SOS, Once Upon a Pond, Bird of Paradise, Royal Eden ×2, Maon de la Mer, Coco Vista, Robinson Recluse, Orion's Landing) — classifying each SAFE TO EXECUTE / NEEDS ONE LIVE CHECK / HOLD. **None found to intersect a protected legacy August house.** Key finding: **none of these 8 has a literal, verbatim-preserved August device name in HANDOFF** — same recording-gap risk already surfaced for OUAP/BOP in Increment 72.
+3. **No property created, no device Mapped/Enabled, no discovery run, while preparing this investigation.**
+4. **Miramar-Bliss (480401) remains explicitly protected from creation.** Bonjour AMI, Island Tides, Aqua Palm (legacy) remain excluded from the new ProviderDevice path. Surfside Solace remains NEEDS HUMAN CONFIRMATION. Starfish Waterfront remains deferred.
+5. **Nest untouched.**
+6. **Priority order unchanged: Locks → Thermostats → Notion.**
 
 ---
 
-# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31, most recent" above] CURRENT STATE — 2026-08-31, previous
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31, latest of all" above] CURRENT STATE — 2026-08-31, most recent
+
+**Authoritative current state as of `## Increment 72` (2026-08-31).** Full detail in `## Increment 72`.
+
+1. **Production correction**: "OUAP" (Once Upon a Pond) and "BOP" (Bird of Paradise) could not be found under those search terms — root-caused to a recording gap in Increment 60's summary, not a confirmed data loss. Both moved to REVIEW FIRST/unresolved.
+2. **SAFE NOW batch reduced to 4**: Riverside Château, Florisun, Driftwood Cottage, Aloha by the Sea. — **superseded: this batch has since passed, see Increment 73.**
+3. **Miramar-Bliss/legacy houses/Surfside Solace/Starfish Waterfront remain excluded. Nest untouched.**
+4. **Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31, latest of all" above] CURRENT STATE — 2026-08-31, previous
 
 **Authoritative current state as of `## Increment 71` (2026-08-31).** Full detail in `## Increment 71`.
 
@@ -3271,3 +3281,21 @@ This matters specifically for these two because **"BOP" was already a known alia
 **REVIEW FIRST / unresolved, now 3**: Island SOS (already held back in Increment 71), **Once Upon a Pond**, **Bird of Paradise** (both newly moved here — no success recorded for either, per explicit instruction).
 
 **No discovery run. No property created. No device Mapped/Enabled. Nest untouched.** Priority order unchanged: **Locks → Thermostats → Notion.**
+
+---
+
+## Increment 73 — 2026-08-31 (same day): the 4-property SAFE NOW batch PASSED in Production — `/locks` 29 → 33; read-only investigation of the remaining 8 review/unresolved August locks, nothing executed
+
+### 4-property batch — ✅ COMPLETE, Production-verified
+
+Riverside Château, Florisun, Driftwood Cottage, and Aloha by the Sea were all created (ONBOARDING) and their single August lock each Mapped then Enabled.
+
+**`/locks` went 29 → 33, exactly as predicted.** Counters: 33 Total / 3 Online / 0 Offline / 30 Unknown / 0 Low Battery. No discovery run, no physical lock command, Nest untouched.
+
+### Read-only investigation of the remaining 8 review/unresolved properties
+
+Full per-property findings (exact OwnerRez property, exact August device name if actually preserved as a literal record, match strength — exact/alias-backed/inferred, known ambiguity, legacy-house intersection check, and a SAFE TO EXECUTE / NEEDS ONE LIVE CHECK / HOLD classification) reported to the user in-conversation — not duplicated here to avoid HANDOFF drift before execution. Summary: **no property in this set has a literal, verbatim-preserved August device name in HANDOFF** — every one of the 8 relies on either the original Increment 60 paraphrased classification (same recording-gap risk already surfaced for OUAP/BOP in Increment 72) or an explicit internal_code/cross-provider corroboration. None were found to intersect a protected legacy August house. **No property created, no device Mapped/Enabled, no discovery run, while preparing this investigation.**
+
+### Current state
+
+**33 locks in Production. `/properties` stands at 28** (24 + 4 from this batch). Miramar-Bliss/legacy houses/Surfside Solace/Starfish Waterfront remain excluded. Nest untouched throughout. Priority order unchanged: **Locks → Thermostats → Notion.**
