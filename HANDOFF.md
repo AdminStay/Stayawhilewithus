@@ -28,21 +28,21 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 CURRENT STATE — 2026-08-31, latest (READ THIS FIRST — supersedes every earlier summary below)
+# 🔖 CURRENT STATE — 2026-08-31, most recent (READ THIS FIRST — supersedes every earlier summary below)
 
-**Authoritative current state as of `## Increment 70` (2026-08-31), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-31 summary immediately below, now historical), this summary governs. Full detail in `## Increment 70` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated.**
+**Authoritative current state as of `## Increment 71` (2026-08-31), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-31 summary immediately below, now historical), this summary governs. Full detail in `## Increment 71` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated.**
 
-1. **Fast Batch 2 PASSED in Production.** 5 properties created and their single August lock each Mapped/Enabled: Palm Haven (377876), Majestic Isla (372241), Paradise Awaits (355018), Las Sirenas (477351), Moroccan Moon (441290). **`/locks` went 19 → 24** (24 Total / 3 Online / 0 Offline / 21 Unknown / 0 Low Battery). **`/properties` stands at 19.**
-2. **Fast Batch 3 cross-checked read-only, prepared, not yet executed**: Magnolia (400803), Casa Del Mar (385465), Casa Blanca (359672), Roseate Madre (359424), Royal Palms (383449). **Royal Palms' August side reconfirmed independently safe** — its Nest duplicate-count anomaly stays isolated to Nest, does not touch the August lock. Expected `/locks` after Batch 3: **29**.
-3. **No property created, no device Mapped/Enabled, no discovery run, since Fast Batch 2 completed.** Awaiting explicit approval before executing Batch 3.
-4. **Fast Batch pool has 12 properties remaining before Batch 3** (7 will remain after it: Riverside Château, Florisun, Driftwood Cottage, Once Upon a Pond, Bird of Paradise, Island SOS, Aloha by the Sea). **Review Batch** (Royal Eden ×2 locks, Maon de la Mer, Coco Vista, Robinson Recluse, Orion's Landing) still untouched.
+1. **Fast Batch 3 PASSED in Production.** 5 properties created and their single August lock each Mapped/Enabled: Magnolia (400803), Casa Del Mar (385465), Casa Blanca (359672), Roseate Madre (359424), Royal Palms (383449). **`/locks` went 24 → 29** (29 Total / 3 Online / 0 Offline / 26 Unknown / 0 Low Battery). **`/properties` stands at 24.** Royal Palms' August path completed successfully, fully isolated from its known Nest duplicate-count anomaly.
+2. **The last 7 Fast Batch candidates re-classified, read-only, not yet executed**: **SAFE NOW (6)** — Riverside Château, Florisun, Driftwood Cottage, Once Upon a Pond, Bird of Paradise, Aloha by the Sea (each with either an `internal_code`-confirmed abbreviation or independent Nest corroboration of the same short form). **REVIEW FIRST (1)** — Island SOS (August's "SOS" truncation has no `internal_code` backing and no corroborating Nest device). Expected `/locks` after the 6-property SAFE NOW batch: **35**.
+3. **No property created, no device Mapped/Enabled, no discovery run, since Fast Batch 3 completed.** Awaiting explicit approval before executing the next batch.
+4. **Review Batch** (Royal Eden ×2 locks, Maon de la Mer, Coco Vista, Robinson Recluse, Orion's Landing) still untouched, plus Island SOS now joining it pending one live check.
 5. **Miramar-Bliss (480401) remains explicitly protected from creation.** Bonjour AMI, Island Tides, Aqua Palm (legacy) remain excluded from the new ProviderDevice path. Surfside Solace remains NEEDS HUMAN CONFIRMATION. Starfish Waterfront remains deferred.
 6. **Nest untouched.**
 7. **Priority order unchanged: Locks → Thermostats → Notion.**
 
 ---
 
-# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31, latest" above] CURRENT STATE — 2026-08-31, latest of the day
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31, most recent" above] CURRENT STATE — 2026-08-31, latest
 
 **Authoritative current state as of `## Increment 68` (2026-08-31).** Full detail in `## Increment 68`.
 
@@ -3198,5 +3198,36 @@ Magnolia (400803), Casa Del Mar (385465), Casa Blanca (359672), Roseate Madre (3
 ### Current state
 
 **24 locks in Production. `/properties` stands at 19** (14 + 5 from Fast Batch 2). Fast Batch pool has 12 properties remaining before Batch 3 (7 will remain after it: the review-adjacent originally-flagged acronym/variant ones — Riverside Château, Florisun, Driftwood Cottage, Once Upon a Pond, Bird of Paradise, Island SOS, Aloha by the Sea — still queued for a later fast/near-fast batch). Review Batch (Royal Eden, Maon de la Mer, Coco Vista, Robinson Recluse, Orion's Landing) untouched. Miramar-Bliss/legacy houses/Surfside Solace/Starfish Waterfront all still excluded. Nest untouched throughout.
+
+**Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+## Increment 71 — 2026-08-31 (same day): Fast Batch 3 PASSED in Production — Magnolia/Casa Del Mar/Casa Blanca/Roseate Madre/Royal Palms onboarded, `/locks` 24 → 29; the last 7 Fast Batch candidates re-classified into SAFE NOW vs REVIEW FIRST, nothing executed
+
+### Fast Batch 3 — ✅ COMPLETE, Production-verified
+
+5 more properties created (ONBOARDING) and their single August lock each Mapped then Enabled:
+
+- Magnolia — OwnerRez 400803
+- Casa Del Mar — OwnerRez 385465
+- Casa Blanca — OwnerRez 359672
+- Roseate Madre — OwnerRez 359424
+- Royal Palms — OwnerRez 383449
+
+**`/locks` went 24 → 29.** Counters: 29 Total / 3 Online / 0 Offline / 26 Unknown / 0 Low Battery. **Royal Palms' August path completed successfully, fully isolated from its known Nest duplicate-count anomaly** — no discovery run, no physical lock command, Nest untouched throughout.
+
+### Remaining 7 Fast Batch candidates — re-classified read-only, nothing executed
+
+Re-examined against each property's actual `internal_code` (not just its display name) and whether a corroborating Nest device uses the same short form — a finer evidence check than the original Increment 65 split:
+
+- **SAFE NOW (6)**: Riverside Château (diacritic-only difference from August's "Riverside Chateau"), Florisun (spacing-only difference from August's "Flor Sun," and Nest independently also says "Florisun"), Driftwood Cottage (August's "Driftwood" is also exactly what Nest independently calls it — cross-provider corroboration), Once Upon a Pond (August's/Nest's "OUAP" is an unambiguous, unique acronym confirmed by both providers independently), Bird of Paradise (OwnerRez's own `internal_code` is literally "BOP (Rex)" — first-party confirmation), Aloha by the Sea (OwnerRez's own `internal_code` is literally "Aloha" — first-party confirmation).
+- **REVIEW FIRST (1)**: **Island SOS** — August's "SOS" is a truncation with no `internal_code` backing and no corroborating Nest device recorded anywhere for this property; needs one live confirmation before mapping.
+
+Full per-property table (OwnerRez ID, exact name, expected search term, expected lock count, naming difference, safety assessment) reported to the user in-conversation. Expected `/locks` after the 6-property SAFE NOW batch: **35**.
+
+### Current state
+
+**29 locks in Production. `/properties` stands at 24** (19 + 5 from Fast Batch 3). Next batch (SAFE NOW, 6 properties) prepared, not yet executed. Island SOS held for one live check. Review Batch (Royal Eden ×2 locks, Maon de la Mer, Coco Vista, Robinson Recluse, Orion's Landing) still untouched. Miramar-Bliss/legacy houses/Surfside Solace/Starfish Waterfront all still excluded. Nest untouched throughout.
 
 **Priority order unchanged: Locks → Thermostats → Notion.**
