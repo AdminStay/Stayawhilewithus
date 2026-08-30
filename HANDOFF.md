@@ -28,21 +28,36 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 CURRENT STATE — 2026-08-31, latest (READ THIS FIRST — supersedes every earlier summary below)
+# 🔖 CURRENT STATE — 2026-08-31, later same day (READ THIS FIRST — supersedes every earlier summary below)
 
-**Authoritative current state as of `## Increment 67` (2026-08-31), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-31 summary immediately below, now historical), this summary governs. Full detail in `## Increment 67` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated.**
+**Authoritative current state as of `## Increment 68` (2026-08-31), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-31 summary immediately below, now historical), this summary governs. Full detail in `## Increment 68` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated.**
 
-1. **Batch 0 PASSED in Production.** Bahamas +1, Ocean Pearl +3, Sandy Nudes +1 August locks — all Mapped then Enabled, one at a time. **`/locks` went 8 → 13** (13 Total / 3 Online / 0 Offline / 10 Unknown / 0 Low Battery). Camingo remains present, unaffected.
-2. Newly-enabled devices show "Connectivity not reported"/unknown lock state/stale telemetry as expected (Enable never re-syncs) — **discovery was deliberately not rerun.** No physical lock/unlock/PIN command issued. No Nest device changed. No additional property created.
-3. **The new `/integrations/devices` search UI was Production-verified**, including the House-ID-cluster behavior: searching "Ocean Pearl" returned only Front Door before it was mapped, then correctly expanded to 3 of 76 devices (Front Door, Garage Door, Spa lock) immediately after Front Door was manually mapped — confirmed display-only, no automatic map/enable of either sibling.
-4. **Group 1 of the 28-property rollout (Increment 63/65) has NOT started.** No property created, no device Mapped/Enabled since Batch 0 completed.
-5. **Miramar-Bliss (480401) remains explicitly protected from creation.** Bonjour AMI, Island Tides, Aqua Palm (legacy) remain excluded from the new ProviderDevice path. Surfside Solace remains NEEDS HUMAN CONFIRMATION. Starfish Waterfront remains deferred.
-6. **Nest untouched.**
-7. **Priority order unchanged: Locks → Thermostats → Notion.**
+1. **Lucky Charm — the first Group 1 property — PASSED end-to-end in Production.** OwnerRez 393800 created (ONBOARDING), its August lock "Lucky Charm - Front Door" Mapped then Enabled. **`/locks` went 13 → 14** (14 Total / 3 Online / 0 Offline / 11 Unknown / 0 Low Battery). Real August House ID confirmed live: `9f8328e8-8a13-460f-ab87-cc2493b4103b` — checked against all 4 protected legacy house IDs, no match. Nest thermostat untouched. No discovery, no physical command.
+2. **This is the third independent Production proof of the full pipeline** (Camingo → Batch 0 → Lucky Charm).
+3. **User has confirmed the one-property workflow is sufficiently proven and does not want a full investigation cycle repeated per property.** An accelerated multi-property batch plan was prepared and reported in-conversation — full tables not duplicated in HANDOFF to avoid drift before execution.
+4. **Lucky Charm is complete and excluded from all future batches.** Remaining Group 1/Group 2 properties re-sequenced into small batches of single-lock, unambiguous properties first; anything with multiple locks, a naming variant, or a known anomaly (Royal Palms' Nest duplicate-count issue, Riverside Château's diacritic, Maon de la Mer's typo, Coco Vista's spelling variant, Orion's Landing's non-exact match) moved to a separate later review batch.
+5. **Royal Palms' August side is independently cleared to proceed on schedule** — its unresolved Nest duplicate-count anomaly only blocks its future thermostat work, not its August Create/Map/Enable.
+6. **No property created, no device Mapped/Enabled, no discovery run, while preparing this plan.** Awaiting explicit approval before executing any batch.
+7. **Miramar-Bliss (480401) remains explicitly protected from creation.** Bonjour AMI, Island Tides, Aqua Palm (legacy) remain excluded from the new ProviderDevice path. Surfside Solace remains NEEDS HUMAN CONFIRMATION. Starfish Waterfront remains deferred.
+8. **Nest untouched.**
+9. **Priority order unchanged: Locks → Thermostats → Notion.**
 
 ---
 
-# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31, latest" above] CURRENT STATE — 2026-08-31, earlier same day
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31, later same day" above] CURRENT STATE — 2026-08-31, latest
+
+**Authoritative current state as of `## Increment 67` (2026-08-31).** Full detail in `## Increment 67`.
+
+1. **Batch 0 PASSED in Production.** Bahamas +1, Ocean Pearl +3, Sandy Nudes +1 August locks. `/locks` went 8 → 13. Camingo remains present, unaffected.
+2. Newly-enabled devices show stale telemetry as expected — discovery deliberately not rerun. No physical command, no Nest change, no additional property.
+3. **The new `/integrations/devices` search UI was Production-verified**, including the House-ID-cluster behavior (display-only, confirmed).
+4. **Group 1 of the 28-property rollout had NOT started as of this increment.** — superseded: Lucky Charm (first Group 1 property) has since passed, see Increment 68.
+5. **Nest untouched.**
+6. **Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31, later same day" above] CURRENT STATE — 2026-08-31, earlier same day
 
 **Authoritative current state as of `## Increment 66` (2026-08-31).** Full detail in `## Increment 66`.
 
@@ -3091,5 +3106,33 @@ This is the second real Production proof of the Map→Enable path (after Camingo
 ### Current state
 
 **13 locks in Production.** Batch 0 fully executed and verified. **Group 1 of the 28-property rollout (Increment 63/65's plan) has NOT started.** No property created, no Nest device touched, no discovery run, beyond what's recorded above.
+
+**Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+## Increment 68 — 2026-08-31 (same day): Lucky Charm — the first Group 1 property — PASSED end-to-end in Production; an accelerated multi-property August rollout batch plan prepared, nothing executed
+
+### Lucky Charm — ✅ COMPLETE, Production-verified — first Group 1 pilot
+
+OwnerRez ID **393800** was created as a new StayWhile property, remaining **ONBOARDING**. Its August device **"Lucky Charm - Front Door"** was manually Mapped then Enabled.
+
+- **`/locks` increased 13 → 14.** Counters: 14 Total / 3 Online / 0 Offline / 11 Unknown / 0 Low Battery.
+- **Lucky Charm's real August House ID, confirmed live in Production: `9f8328e8-8a13-460f-ab87-cc2493b4103b`.** Checked against all 4 protected legacy house IDs (Aqua Palm `c98c1d75-...`, Bonjour `81b55799-...`, Island Tides `1ee6ffaf-...`, Miramar Bliss `834a41d3-...`) — **no match**, exactly as the classification-based preflight predicted.
+- Lucky Charm's Nest thermostat remains **untouched and unmapped**, per instruction.
+- No discovery run. No physical lock/unlock/PIN/access-code command issued.
+
+This is the third real, independent Production proof of the full pipeline (Camingo → Batch 0 → Lucky Charm), now spanning both a brand-new property and several already-existing ones. **The user has confirmed the one-property workflow is sufficiently proven and does not want a full investigation cycle repeated per property going forward** — an accelerated multi-property batch plan was prepared in response (see below), reusing Increment 60/63/65's already-documented evidence rather than re-deriving it.
+
+### Accelerated rollout batch plan — prepared only, nothing executed
+
+Full batch tables (OwnerRez ID, property, August/Nest device counts, confidence, caution notes) and the exact repeatable click procedure (**OwnerRez search → Create → explicit timezone only if required → device search → Map → Enable**) were reported to the user in-conversation — not duplicated here to avoid HANDOFF drift before execution. Summary:
+
+- **Lucky Charm removed from all future batches — complete.**
+- Remaining Group 1 (Nest-corroborated) and Group 2 (August-only) properties re-sequenced into smaller **execution batches of single-lock, unambiguous properties first**; anything with multiple locks, a naming variant, or a known anomaly (Royal Palms' unresolved Nest duplicate-count issue, Riverside Château's diacritic, Maon de la Mer's Name-field typo, Coco Vista's spelling variant, Orion's Landing's non-exact name match) was pulled into a **separate later review batch**, not the fast-path batches.
+- **Royal Palms**: explicitly confirmed its August side (single "Royal Palms" lock, clean match) is independently safe to onboard on schedule — its Nest duplicate-count anomaly is flagged for the later **thermostat phase only** and does not block its August work.
+- All standing exclusions reaffirmed unchanged: Miramar-Bliss (480401) never created; Aqua Palm/Bonjour AMI/Island Tides/Miramar Bliss legacy houses never touched via the new ProviderDevice path; Surfside Solace/Dolphin still needs human confirmation; Starfish Waterfront still deferred; Nest still untouched everywhere.
+
+**No property was created, no device was mapped/enabled, no discovery was run while preparing this plan. Awaiting explicit approval before executing any batch.**
 
 **Priority order unchanged: Locks → Thermostats → Notion.**
