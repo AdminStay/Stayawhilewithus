@@ -28,21 +28,34 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 CURRENT STATE — 2026-08-31 (READ THIS FIRST — supersedes every earlier summary below)
+# 🔖 CURRENT STATE — 2026-08-31, latest (READ THIS FIRST — supersedes every earlier summary below)
 
-**Authoritative current state as of `## Increment 66` (2026-08-31), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the 2026-08-29 summary immediately below, now historical), this summary governs. Full detail in `## Increment 66` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated.**
+**Authoritative current state as of `## Increment 67` (2026-08-31), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-31 summary immediately below, now historical), this summary governs. Full detail in `## Increment 67` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated.**
 
-1. **Production remains at 8 locks, Camingo the last newly-enabled device** — unchanged since the Camingo pilot (Increment 65). Batch 0 (Bahamas/Ocean Pearl/Sandy Nudes) was paused before any click to do UI work first, and **has not resumed**.
-2. **`/integrations/devices` usability improvements — ✅ COMPLETE, committed (`8771ff8`), pushed.** Client-side search (device name/provider/external ID/House ID/mapped property/internal code), Provider/Mapping/Status filters with a live result count, compact rows, truncated External/House IDs (full value always in tooltip + copy button, never altered), sticky Device/Actions columns with horizontal scroll contained inside the table, compact mapping controls. **No bulk Map/Enable exists.** UI/filtering only — zero change to `mapProviderDeviceToProperty`, `setProviderDeviceEnabled`, discovery, provider calls, SmartDevice upsert, RBAC, audit, confirmation dialogs, legacy protections, or schema.
-3. **House-ID-cluster search is intentional and explicitly approved**: a search like "Ocean Pearl" also surfaces generically-named housemates ("Garage Door", "Spa lock") once a sibling sharing their August House ID is already manually mapped — display-only, built from a real existing mapping, never auto-selects/maps/enables anything.
-4. **Immediate next action**: once Vercel confirms `8771ff8` Ready, resume Batch 0 exactly as before — Bahamas ×1 → Ocean Pearl ×3 → Sandy Nudes ×1, one device at a time (Map → verify → Enable → verify). Expected final total: **13 locks**.
-5. **The 28-property Group 1/Group 2 rollout remains not started.** Miramar-Bliss (480401) remains explicitly protected from creation. Bonjour AMI, Island Tides, Aqua Palm (legacy) remain excluded from the new ProviderDevice path. Surfside Solace remains NEEDS HUMAN CONFIRMATION. Starfish Waterfront remains deferred.
-6. **Nest untouched.** No discovery run, no property created, no device changed, since the Camingo pilot.
+1. **Batch 0 PASSED in Production.** Bahamas +1, Ocean Pearl +3, Sandy Nudes +1 August locks — all Mapped then Enabled, one at a time. **`/locks` went 8 → 13** (13 Total / 3 Online / 0 Offline / 10 Unknown / 0 Low Battery). Camingo remains present, unaffected.
+2. Newly-enabled devices show "Connectivity not reported"/unknown lock state/stale telemetry as expected (Enable never re-syncs) — **discovery was deliberately not rerun.** No physical lock/unlock/PIN command issued. No Nest device changed. No additional property created.
+3. **The new `/integrations/devices` search UI was Production-verified**, including the House-ID-cluster behavior: searching "Ocean Pearl" returned only Front Door before it was mapped, then correctly expanded to 3 of 76 devices (Front Door, Garage Door, Spa lock) immediately after Front Door was manually mapped — confirmed display-only, no automatic map/enable of either sibling.
+4. **Group 1 of the 28-property rollout (Increment 63/65) has NOT started.** No property created, no device Mapped/Enabled since Batch 0 completed.
+5. **Miramar-Bliss (480401) remains explicitly protected from creation.** Bonjour AMI, Island Tides, Aqua Palm (legacy) remain excluded from the new ProviderDevice path. Surfside Solace remains NEEDS HUMAN CONFIRMATION. Starfish Waterfront remains deferred.
+6. **Nest untouched.**
 7. **Priority order unchanged: Locks → Thermostats → Notion.**
 
 ---
 
-# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31" above] CURRENT STATE — 2026-08-29, latest
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31, latest" above] CURRENT STATE — 2026-08-31, earlier same day
+
+**Authoritative current state as of `## Increment 66` (2026-08-31).** Full detail in `## Increment 66`.
+
+1. **Production remained at 8 locks, Camingo the last newly-enabled device** — Batch 0 was paused before any click to do UI work first. — **superseded: Batch 0 has since passed, see Increment 67.**
+2. **`/integrations/devices` usability improvements — ✅ COMPLETE, committed (`8771ff8`), pushed.** Client-side search, Provider/Mapping/Status filters with a live result count, compact rows, truncated External/House IDs (full value always in tooltip + copy button), sticky Device/Actions columns, compact mapping controls. **No bulk Map/Enable exists.** UI/filtering only.
+3. **House-ID-cluster search is intentional and explicitly approved** — display-only, built from a real existing mapping. — **since Production-verified, see Increment 67.**
+4. **The 28-property Group 1/Group 2 rollout remained not started.**
+5. **Nest untouched.**
+6. **Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31, latest" above] CURRENT STATE — 2026-08-29, latest
 
 **Authoritative current state as of `## Increment 65` (2026-08-29).** Full detail in `## Increment 65`.
 
@@ -3047,5 +3060,36 @@ Requested because the 43-August/33-Nest (76-row) inventory was unwieldy mid-roll
 ### Next action, exact order
 
 Once Vercel confirms `8771ff8` Ready, resume Batch 0 exactly as planned in Increment 65/the in-conversation preflight: **Bahamas - Front Door → Ocean Pearl - Front Door → Ocean Pearl - Garage Door → Ocean Pearl - Spa lock → Sandy Nudes Front Door**, one at a time (Map → verify → Enable → verify each), using the new search bar to jump straight to each device instead of scrolling. Expected final state: **13 locks total** (8 → 13: Bahamas +1, Ocean Pearl +3, Sandy Nudes +1), Camingo and all legacy locks unchanged. Group 1/Group 2 of the 28-property rollout remain **not started**. Nest remains untouched.
+
+**Priority order unchanged: Locks → Thermostats → Notion.**
+
+---
+
+## Increment 67 — 2026-08-31 (same day): Batch 0 PASSED in Production — Bahamas/Ocean Pearl/Sandy Nudes's 5 August locks Mapped and Enabled, 8 → 13 locks; new `/integrations/devices` search UI (including House-ID-cluster search) Production-verified; Group 1 not started
+
+### Batch 0 — ✅ COMPLETE, Production-verified
+
+All 5 previously-vetted "SAFE NOW" August locks (Increment 60) were Mapped then Enabled, one at a time, exactly as planned:
+
+- **Bahamas**: +1 lock (Bahamas - Front Door).
+- **Ocean Pearl**: +3 locks (Front Door, Garage Door, Spa lock).
+- **Sandy Nudes**: +1 lock (Sandy Nudes Front Door).
+- **`/locks` total: 8 → 13.** Breakdown: 13 Total / 3 Online / 0 Offline / 10 Unknown / 0 Low Battery.
+- **Camingo remains present**, unaffected.
+- Newly-enabled devices show "Connectivity not reported" / unknown lock state / telemetry-stale, exactly as expected — Enable reuses the last discovery snapshot and never re-syncs; **discovery was deliberately not rerun** to "fix" this cosmetic state.
+- **No physical Lock/Unlock/PIN/access-code command was issued. No Nest device was changed. No additional property was created.**
+
+This is the second real Production proof of the Map→Enable path (after Camingo), now exercised across multiple already-existing properties in one sitting — end-to-end confidence for the pipeline continues to hold.
+
+### `/integrations/devices` new search UI — Production-verified, including the House-ID-cluster behavior
+
+- Search and the compact ID/Actions layout worked as designed in real Production use.
+- Searching "Ocean Pearl" **before** Front Door was mapped correctly returned only 1 device (Front Door itself) — confirming the cluster behavior does _not_ fire prematurely.
+- **After** Front Door was manually mapped to Ocean Pearl, searching "Ocean Pearl" again correctly expanded to **3 of 76 devices** — Garage Door, Ocean Pearl - Front Door, and Spa lock — exactly the intended behavior from Increment 66.
+- Confirmed **display-only**: the cluster match never automatically mapped or enabled either sibling — each still required its own explicit Map → Enable click.
+
+### Current state
+
+**13 locks in Production.** Batch 0 fully executed and verified. **Group 1 of the 28-property rollout (Increment 63/65's plan) has NOT started.** No property created, no Nest device touched, no discovery run, beyond what's recorded above.
 
 **Priority order unchanged: Locks → Thermostats → Notion.**
