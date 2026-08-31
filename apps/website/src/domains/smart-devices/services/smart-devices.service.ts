@@ -5,6 +5,16 @@ import { prisma, type SmartDevice } from "@stayw/database";
 import { AugustClient, isAugustBrand } from "@stayw/integrations/august";
 import { CieloClient } from "@stayw/integrations/cielo";
 
+import { getTelemetryUpdatedAt } from "../lib/thermostat-metadata";
+
+export {
+  canRenderNestControls,
+  getCurrentTemperature,
+  getHumidity,
+  getMode,
+  getTargetTemperature,
+  getTelemetryUpdatedAt,
+} from "../lib/thermostat-metadata";
 export type { SmartDevice };
 
 /** Battery percentage below this is flagged as needing attention. Stored in SmartDevice.metadata (no dedicated column) since not every provider/device type reports one. */
@@ -60,29 +70,6 @@ export function isThermostatVisible(
 ): boolean {
   if (device.provider !== "NEST") return true;
   return device.providerDevice !== null && device.providerDevice.enabled;
-}
-
-/**
- * Gates whether NestThermostatControls should render at all — separate
- * from isThermostatVisible() above (that decides whether the row appears
- * on /thermostats; this decides whether its controls do). Previously,
- * ThermostatsList rendered controls purely from device capability data
- * (rawTraits) — any user who could see the page at all (smart_devices:read)
- * saw live-looking Heat/Cool/Fan/Mode buttons regardless of whether they
- * actually held thermostats:manage, the permission the server would then
- * enforce (see nest-commands.service.ts). `canManage` must be resolved
- * server-side, per-property, via hasPermission(actor, "thermostats:manage",
- * {propertyId}) — see /thermostats/page.tsx, which computes it once per
- * distinct property and passes the result down. assertPermission() inside
- * sendNestThermostatCommand remains the real, unchanged security boundary;
- * this only controls what renders, so a denied user is no longer invited
- * to click a button that was always going to be rejected.
- */
-export function canRenderNestControls(input: {
-  hasRawTraits: boolean;
-  canManage: boolean;
-}): boolean {
-  return input.hasRawTraits && input.canManage;
 }
 
 export interface DeviceSyncResult {
@@ -336,37 +323,12 @@ export function isLowBattery(device: Pick<SmartDevice, "metadata">): boolean {
  * reports every field. No current provider's sync function writes any of
  * these yet (CieloClient.listDevices() only returns name/online), so these
  * will honestly return null — rendered as "—" — until a provider that
- * reports them is actually synced. Never fabricated.
+ * reports them is actually synced. Never fabricated. getCurrentTemperature/
+ * getTargetTemperature/getMode/getHumidity/getTelemetryUpdatedAt live in
+ * ../lib/thermostat-metadata now (re-exported above) — moved out so a
+ * "use client" component (ThermostatsList.tsx) can use them without
+ * dragging this file's "server-only" guard into a client bundle.
  */
-export function getCurrentTemperature(
-  device: Pick<SmartDevice, "metadata">,
-): number | null {
-  const metadata = device.metadata as Record<string, unknown> | null;
-  const value = metadata?.currentTemperature;
-  return typeof value === "number" ? value : null;
-}
-
-export function getTargetTemperature(
-  device: Pick<SmartDevice, "metadata">,
-): number | null {
-  const metadata = device.metadata as Record<string, unknown> | null;
-  const value = metadata?.targetTemperature;
-  return typeof value === "number" ? value : null;
-}
-
-export function getMode(device: Pick<SmartDevice, "metadata">): string | null {
-  const metadata = device.metadata as Record<string, unknown> | null;
-  const value = metadata?.mode;
-  return typeof value === "string" ? value : null;
-}
-
-export function getHumidity(
-  device: Pick<SmartDevice, "metadata">,
-): number | null {
-  const metadata = device.metadata as Record<string, unknown> | null;
-  const value = metadata?.humidity;
-  return typeof value === "number" ? value : null;
-}
 
 /** Locked/unlocked, only where the provider gives a valid reading — see AugustLockDetail.lockState. Never guessed. */
 export function getLockState(
@@ -375,17 +337,6 @@ export function getLockState(
   const metadata = device.metadata as Record<string, unknown> | null;
   const value = metadata?.lockState;
   return typeof value === "string" ? value : null;
-}
-
-/** The provider's own last-telemetry timestamp (e.g. August's batteryInfo.infoUpdatedDate) — distinct from SmartDevice.updatedAt, which is when StayWhile itself last synced this row. */
-export function getTelemetryUpdatedAt(
-  device: Pick<SmartDevice, "metadata">,
-): Date | null {
-  const metadata = device.metadata as Record<string, unknown> | null;
-  const value = metadata?.telemetryUpdatedAt;
-  if (typeof value !== "string") return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 /**
