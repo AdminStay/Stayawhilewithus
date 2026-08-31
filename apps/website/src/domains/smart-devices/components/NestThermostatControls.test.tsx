@@ -73,25 +73,41 @@ function mockActionStates(
 }
 
 // Real trait shapes, exercising the actual computeNestDeviceCapabilities/
-// getSupportedNestControls logic end-to-end rather than faking their output.
-const HEAT_COOL_TRAITS = {
+// getSupportedNestControls/getCurrentThermostatMode logic end-to-end rather
+// than faking their output. `mode` (the device's own currently-active mode)
+// and `availableModes` (what it could be switched to) are deliberately set
+// independently, since mode-aware visibility gates on the former while the
+// Mode dropdown's options come from the latter.
+const HEAT_MODE_TRAITS = {
   "sdm.devices.traits.ThermostatMode": {
     mode: "HEAT",
     availableModes: ["HEAT", "COOL"],
   },
 };
-const HEATCOOL_RANGE_TRAITS = {
+const COOL_MODE_TRAITS = {
+  "sdm.devices.traits.ThermostatMode": {
+    mode: "COOL",
+    availableModes: ["HEAT", "COOL"],
+  },
+};
+const HEATCOOL_MODE_TRAITS = {
   "sdm.devices.traits.ThermostatMode": {
     mode: "HEATCOOL",
     availableModes: ["HEATCOOL"],
   },
 };
+const OFF_MODE_TRAITS = {
+  "sdm.devices.traits.ThermostatMode": {
+    mode: "OFF",
+    availableModes: ["HEAT", "COOL", "OFF"],
+  },
+};
 const WITH_FAN_TRAITS = {
-  ...HEAT_COOL_TRAITS,
+  ...HEAT_MODE_TRAITS,
   "sdm.devices.traits.Fan": { timerMode: "OFF" },
 };
 const ECO_ACTIVE_TRAITS = {
-  ...HEAT_COOL_TRAITS,
+  ...HEAT_MODE_TRAITS,
   "sdm.devices.traits.ThermostatEco": { mode: "MANUAL_ECO" },
 };
 const NO_MODE_TRAITS = {};
@@ -108,42 +124,50 @@ describe("NestThermostatControls", () => {
     ).toBeTruthy();
   });
 
-  it("renders Heat and Cool as two independent forms, never merged into one submission", () => {
+  it("shows only the Heat control (plus Mode), as its own independent form, when the thermostat's current mode is HEAT — hides Cool and Range", () => {
     mockActionStates();
     const { container } = render(
       <NestThermostatControls
         smartDeviceId="d1"
-        rawTraits={HEAT_COOL_TRAITS}
+        rawTraits={HEAT_MODE_TRAITS}
       />,
     );
 
-    // getByPlaceholderText has no `selector` filter option — both inputs
-    // share the literal placeholder "°F", so a direct attribute query is
-    // the unambiguous way to grab each one specifically.
     const heatInput = container.querySelector('input[name="heatFahrenheit"]');
-    const coolInput = container.querySelector('input[name="coolFahrenheit"]');
+    const modeSelect = container.querySelector('select[name="mode"]');
     expect(heatInput).toBeTruthy();
-    expect(coolInput).toBeTruthy();
-    expect(heatInput!.closest("form")).not.toBe(coolInput!.closest("form"));
-    // Mode + Heat + Cool all render for this fixture (availableModes: ["HEAT", "COOL"]).
-    expect(screen.getAllByRole("button", { name: "Apply" })).toHaveLength(3);
+    expect(modeSelect).toBeTruthy();
+    expect(container.querySelector('input[name="coolFahrenheit"]')).toBeNull();
+    // Heat remains its own independent form/submission, separate from Mode's.
+    expect(heatInput!.closest("form")).not.toBe(modeSelect!.closest("form"));
+    expect(screen.getAllByRole("button", { name: "Apply" })).toHaveLength(2);
   });
 
-  it("renders one combined Range form (shared heat+cool inputs, one submission) alongside the independent Mode/Heat/Cool forms when the device reports HEATCOOL", () => {
+  it("shows only the Cool control (plus Mode) when the thermostat's current mode is COOL — hides Heat and Range", () => {
     mockActionStates();
     const { container } = render(
       <NestThermostatControls
         smartDeviceId="d1"
-        rawTraits={HEATCOOL_RANGE_TRAITS}
+        rawTraits={COOL_MODE_TRAITS}
       />,
     );
 
-    // A HEATCOOL-capable device legitimately satisfies supportsHeatSetpoint,
-    // supportsCoolSetpoint, AND supportsHeatCoolRange simultaneously (see
-    // computeNestDeviceCapabilities) — so Mode, Heat, Cool, and Range all
-    // render together here. This test only asserts the Range form's own
-    // two inputs are still one shared submission, not that Range excludes
-    // the standalone Heat/Cool forms.
+    expect(
+      container.querySelector('input[name="coolFahrenheit"]'),
+    ).toBeTruthy();
+    expect(container.querySelector('input[name="heatFahrenheit"]')).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Apply" })).toHaveLength(2);
+  });
+
+  it("shows only the combined Range control (plus Mode) when the thermostat's current mode is HEATCOOL — hides standalone Heat and Cool", () => {
+    mockActionStates();
+    const { container } = render(
+      <NestThermostatControls
+        smartDeviceId="d1"
+        rawTraits={HEATCOOL_MODE_TRAITS}
+      />,
+    );
+
     const rangeHeat = container.querySelector(
       'input[placeholder="Heat"][name="heatFahrenheit"]',
     );
@@ -152,8 +176,29 @@ describe("NestThermostatControls", () => {
     );
     expect(rangeHeat).toBeTruthy();
     expect(rangeCool).toBeTruthy();
+    // Both inputs belong to the same one Range form/submission.
     expect(rangeHeat!.closest("form")).toBe(rangeCool!.closest("form"));
-    expect(screen.getAllByRole("button", { name: "Apply" })).toHaveLength(4);
+    // No separate standalone Heat/Cool inputs alongside the Range pair.
+    expect(
+      container.querySelectorAll('input[name="heatFahrenheit"]'),
+    ).toHaveLength(1);
+    expect(
+      container.querySelectorAll('input[name="coolFahrenheit"]'),
+    ).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Apply" })).toHaveLength(2);
+  });
+
+  it("hides every temperature-setting control when the thermostat's current mode is OFF, until an appropriate mode is applied", () => {
+    mockActionStates();
+    const { container } = render(
+      <NestThermostatControls smartDeviceId="d1" rawTraits={OFF_MODE_TRAITS} />,
+    );
+
+    expect(container.querySelector('input[name="heatFahrenheit"]')).toBeNull();
+    expect(container.querySelector('input[name="coolFahrenheit"]')).toBeNull();
+    // Mode itself remains available so an admin can choose HEAT/COOL/etc.
+    expect(container.querySelector('select[name="mode"]')).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Apply" })).toHaveLength(1);
   });
 
   it("renders the Fan control only when the device reports a Fan trait", () => {
@@ -161,7 +206,7 @@ describe("NestThermostatControls", () => {
     const { unmount } = render(
       <NestThermostatControls
         smartDeviceId="d1"
-        rawTraits={HEAT_COOL_TRAITS}
+        rawTraits={HEAT_MODE_TRAITS}
       />,
     );
     expect(screen.queryByText("Fan")).toBeNull();
@@ -191,7 +236,7 @@ describe("NestThermostatControls", () => {
     render(
       <NestThermostatControls
         smartDeviceId="d1"
-        rawTraits={HEAT_COOL_TRAITS}
+        rawTraits={HEAT_MODE_TRAITS}
       />,
     );
 
@@ -202,12 +247,12 @@ describe("NestThermostatControls", () => {
   it("renders a success/rejected/failure/already_running result message per form independently", () => {
     mockActionStates({
       heat: [{ status: "success" }, false],
-      cool: [{ status: "rejected", reason: "Not supported." }, false],
+      mode: [{ status: "rejected", reason: "Not supported." }, false],
     });
     render(
       <NestThermostatControls
         smartDeviceId="d1"
-        rawTraits={HEAT_COOL_TRAITS}
+        rawTraits={HEAT_MODE_TRAITS}
       />,
     );
 
@@ -220,7 +265,7 @@ describe("NestThermostatControls", () => {
     const { unmount } = render(
       <NestThermostatControls
         smartDeviceId="d1"
-        rawTraits={HEAT_COOL_TRAITS}
+        rawTraits={HEAT_MODE_TRAITS}
         currentTemperatureLabel="72°"
         targetTemperatureLabel="70°"
         modeLabel="HEAT"
@@ -235,7 +280,7 @@ describe("NestThermostatControls", () => {
     render(
       <NestThermostatControls
         smartDeviceId="d1"
-        rawTraits={HEAT_COOL_TRAITS}
+        rawTraits={HEAT_MODE_TRAITS}
       />,
     );
     expect(screen.queryByText(/Current/)).toBeNull();
@@ -247,7 +292,7 @@ describe("NestThermostatControls", () => {
     const { unmount } = render(
       <NestThermostatControls
         smartDeviceId="d1"
-        rawTraits={HEAT_COOL_TRAITS}
+        rawTraits={HEAT_MODE_TRAITS}
         onClose={onClose}
       />,
     );
@@ -259,7 +304,7 @@ describe("NestThermostatControls", () => {
     render(
       <NestThermostatControls
         smartDeviceId="d1"
-        rawTraits={HEAT_COOL_TRAITS}
+        rawTraits={HEAT_MODE_TRAITS}
       />,
     );
     expect(screen.queryByRole("button", { name: "Close controls" })).toBeNull();
@@ -270,7 +315,7 @@ describe("NestThermostatControls", () => {
     render(
       <NestThermostatControls
         smartDeviceId="device-xyz"
-        rawTraits={HEAT_COOL_TRAITS}
+        rawTraits={HEAT_MODE_TRAITS}
       />,
     );
 

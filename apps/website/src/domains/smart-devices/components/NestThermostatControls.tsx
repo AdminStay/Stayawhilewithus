@@ -45,6 +45,28 @@ function CommandResult({ state }: { state: NestCommandActionState }) {
   return <p className={`mt-1 text-xs ${line.className}`}>{line.text}</p>;
 }
 
+const KNOWN_THERMOSTAT_MODES = new Set(["HEAT", "COOL", "HEATCOOL", "OFF"]);
+
+/**
+ * The thermostat's own currently-active mode — read from the exact same
+ * ThermostatMode trait computeNestDeviceCapabilities() already parses out
+ * of this same rawTraits prop, never from the Mode <select> below (which
+ * is uncontrolled and only read at form submission). This only changes
+ * when the parent re-renders with a fresh sync/confirmation read, so a
+ * newly chosen-but-not-yet-applied mode can never affect which temperature
+ * control is shown. Returns null when the device hasn't reported a
+ * recognized current mode at all — treated the same as OFF (no
+ * temperature-setting control) rather than guessed.
+ */
+function getCurrentThermostatMode(
+  rawTraits: Record<string, Record<string, unknown>>,
+): "HEAT" | "COOL" | "HEATCOOL" | "OFF" | null {
+  const mode = rawTraits["sdm.devices.traits.ThermostatMode"]?.mode;
+  return typeof mode === "string" && KNOWN_THERMOSTAT_MODES.has(mode)
+    ? (mode as "HEAT" | "COOL" | "HEATCOOL" | "OFF")
+    : null;
+}
+
 /**
  * One row of the compact control grid: a short fixed-width label, the
  * control itself plus its own submit button (still its own independent
@@ -94,6 +116,17 @@ function ControlRow({
  * tradeoff is worth a purely visual improvement — this redesign only
  * changes layout/grouping, never how many physical commands a click can
  * trigger.
+ *
+ * MODE-AWARE VISIBILITY, on top of the above (presentation only — see
+ * getCurrentThermostatMode): Heat/Cool/Range still each gate on their own
+ * getSupportedNestControls() flag exactly as before, AND now additionally
+ * only render when the thermostat's own current mode matches (HEAT/COOL/
+ * HEATCOOL respectively) — narrowing which single temperature control a
+ * non-technical admin sees at once instead of exposing all three
+ * simultaneously. Mode and Fan are unaffected by this narrowing. This adds
+ * an AND condition to what already rendered; it never widens what would
+ * otherwise show, never touches validateNestCommand/capabilities.ts, and
+ * has no effect on what the server accepts.
  */
 export function NestThermostatControls({
   smartDeviceId,
@@ -119,6 +152,10 @@ export function NestThermostatControls({
 }) {
   const capabilities = computeNestDeviceCapabilities(rawTraits);
   const availability = getSupportedNestControls(capabilities);
+  const currentMode = getCurrentThermostatMode(rawTraits);
+  const showHeat = availability.canSetHeat && currentMode === "HEAT";
+  const showCool = availability.canSetCool && currentMode === "COOL";
+  const showRange = availability.canSetRange && currentMode === "HEATCOOL";
 
   const [heatState, heatAction, heatPending] = useActionState(
     setNestHeatSetpointAction,
@@ -142,9 +179,9 @@ export function NestThermostatControls({
   );
 
   const hasAnyControl =
-    availability.canSetHeat ||
-    availability.canSetCool ||
-    availability.canSetRange ||
+    showHeat ||
+    showCool ||
+    showRange ||
     availability.availableModes.length > 0 ||
     availability.canUseFan;
 
@@ -226,7 +263,7 @@ export function NestThermostatControls({
             </ControlRow>
           )}
 
-          {availability.canSetHeat && (
+          {showHeat && (
             <ControlRow label="Heat °F">
               <form
                 action={heatAction}
@@ -260,7 +297,7 @@ export function NestThermostatControls({
             </ControlRow>
           )}
 
-          {availability.canSetCool && (
+          {showCool && (
             <ControlRow label="Cool °F">
               <form
                 action={coolAction}
@@ -294,7 +331,7 @@ export function NestThermostatControls({
             </ControlRow>
           )}
 
-          {availability.canSetRange && (
+          {showRange && (
             <ControlRow label="Range °F">
               <form
                 action={rangeAction}
