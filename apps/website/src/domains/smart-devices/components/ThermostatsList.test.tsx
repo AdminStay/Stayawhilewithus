@@ -145,12 +145,13 @@ describe("ThermostatsList", () => {
     expect(screen.getByText("2")).toBeTruthy(); // total unaffected by the search
   });
 
-  it("renders live controls only when canManage is true for the device's property", () => {
+  it("shows a compact 'Controls' toggle (not the live control stack) by default when canManage is true", () => {
     render(
       <ThermostatsList
         thermostats={[
           makeThermostat({
             id: "a",
+            name: "Living Room",
             propertyId: "prop-can-manage",
             providerDevice: { enabled: true, rawMetadata: { rawTraits: {} } },
           }),
@@ -159,8 +160,78 @@ describe("ThermostatsList", () => {
       />,
     );
 
-    expect(screen.getByText("REAL CONTROLS")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Show controls for Living Room" }),
+    ).toBeTruthy();
+    expect(screen.queryByText("REAL CONTROLS")).toBeNull();
     expect(screen.queryByText(/View only/)).toBeNull();
+  });
+
+  it("expands to reveal the live control stack on click, and collapses again on a second click — the row never starts tall", () => {
+    render(
+      <ThermostatsList
+        thermostats={[
+          makeThermostat({
+            id: "a",
+            name: "Living Room",
+            propertyId: "prop-can-manage",
+            providerDevice: { enabled: true, rawMetadata: { rawTraits: {} } },
+          }),
+        ]}
+        canManageByPropertyId={{ "prop-can-manage": true }}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", {
+      name: "Show controls for Living Room",
+    });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(toggle);
+
+    expect(screen.getByText("REAL CONTROLS")).toBeTruthy();
+    const hideToggle = screen.getByRole("button", {
+      name: "Hide controls for Living Room",
+    });
+    expect(hideToggle.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(hideToggle);
+
+    expect(screen.queryByText("REAL CONTROLS")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Show controls for Living Room" }),
+    ).toBeTruthy();
+  });
+
+  it("keeps each thermostat's expanded state independent of the others", () => {
+    render(
+      <ThermostatsList
+        thermostats={[
+          makeThermostat({
+            id: "a",
+            name: "Living Room",
+            propertyId: "prop-can-manage",
+            providerDevice: { enabled: true, rawMetadata: { rawTraits: {} } },
+          }),
+          makeThermostat({
+            id: "b",
+            name: "Kitchen",
+            propertyId: "prop-can-manage",
+            providerDevice: { enabled: true, rawMetadata: { rawTraits: {} } },
+          }),
+        ]}
+        canManageByPropertyId={{ "prop-can-manage": true }}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show controls for Living Room" }),
+    );
+
+    expect(screen.getAllByText("REAL CONTROLS")).toHaveLength(1);
+    expect(
+      screen.getByRole("button", { name: "Show controls for Kitchen" }),
+    ).toBeTruthy();
   });
 
   it("renders 'View only' when canManage is false for the device's property, even though rawTraits exist — never renders live controls in this case", () => {
@@ -179,6 +250,50 @@ describe("ThermostatsList", () => {
 
     expect(screen.getByText(/View only — no permission/)).toBeTruthy();
     expect(screen.queryByText("REAL CONTROLS")).toBeNull();
+  });
+
+  it("renders the compact column set, with 'Device' (not 'Thermostat') and no separate 'Last telemetry' column", () => {
+    render(
+      <ThermostatsList
+        thermostats={[makeThermostat()]}
+        canManageByPropertyId={{}}
+      />,
+    );
+
+    for (const header of [
+      "Property",
+      "Device",
+      "Provider",
+      "Status",
+      "Current",
+      "Target",
+      "Mode",
+      "Humidity",
+      "Last synced",
+      "Controls",
+    ]) {
+      expect(screen.getByText(header)).toBeTruthy();
+    }
+    expect(screen.queryByText("Thermostat")).toBeNull();
+    expect(screen.queryByText("Last telemetry")).toBeNull();
+  });
+
+  it("surfaces last-telemetry as a tooltip on the Last synced cell, not as its own column", () => {
+    render(
+      <ThermostatsList
+        thermostats={[
+          makeThermostat({
+            metadata: { telemetryUpdatedAt: "2026-01-02T00:00:00.000Z" },
+          }),
+        ]}
+        canManageByPropertyId={{}}
+      />,
+    );
+
+    const lastSyncedCell = screen.getByText(
+      new Date("2026-01-01").toLocaleString(),
+    );
+    expect(lastSyncedCell.getAttribute("title")).toMatch(/Last telemetry:/);
   });
 
   it("renders '—' for a non-Nest device with no rawTraits, regardless of canManage", () => {

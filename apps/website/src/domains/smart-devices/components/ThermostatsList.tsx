@@ -15,8 +15,14 @@ import {
   TableHeaderCell,
   TableRow,
 } from "@stayw/ui";
-import { Search, Thermometer, WifiOff } from "lucide-react";
-import { useMemo, useState } from "react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Search,
+  Thermometer,
+  WifiOff,
+} from "lucide-react";
+import { Fragment, useMemo, useState } from "react";
 
 import {
   DEFAULT_THERMOSTAT_FILTER_STATE,
@@ -43,6 +49,8 @@ type ThermostatWithProperty = SmartDevice & {
     rawMetadata: unknown;
   } | null;
 };
+
+const CONTROLS_COLUMN_COUNT = 10;
 
 /**
  * providerDevice.rawMetadata is a generic Prisma Json value — this reads
@@ -76,7 +84,7 @@ function formatTemperature(value: number | null): string {
 // to Discovered Devices — the default Table styling is too roomy once
 // dozens of thermostats are mapped.
 const HEAD_CLASS = "px-2 py-2 text-xs";
-const CELL_CLASS = "px-2 py-1.5 text-xs";
+const CELL_CLASS = "px-2 py-1.5 text-xs align-middle";
 
 /** ONLINE/OFFLINE binary display status, matching the existing summary-card convention (anything non-ONLINE and non-UNKNOWN, e.g. ERROR, still reads "Offline" in the badge) — unchanged from before this UI pass. */
 function connectivityLabel(status: string): "Online" | "Offline" | "Unknown" {
@@ -96,6 +104,24 @@ export function ThermostatsList({
   const [filters, setFilters] = useState<ThermostatFilterState>(
     DEFAULT_THERMOSTAT_FILTER_STATE,
   );
+  // Which rows currently show their full NestThermostatControls stack below
+  // the main row — collapsed by default so a row with 5 possible command
+  // forms (mode/heat/cool/range/fan) doesn't force every row to be that
+  // tall. Purely local UI state; never affects what data is fetched,
+  // what's mapped/enabled, or what RBAC/command logic runs.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+  function toggleExpanded(id: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
 
   // Always derived from the full, unfiltered inventory — these summary
   // cards intentionally don't move when the user searches/filters below.
@@ -201,12 +227,8 @@ export function ThermostatsList({
       ) : (
         <Table>
           <TableHead>
-            <TableHeaderCell className={cx(HEAD_CLASS, "min-w-[120px]")}>
-              Property
-            </TableHeaderCell>
-            <TableHeaderCell className={cx(HEAD_CLASS, "min-w-[120px]")}>
-              Thermostat
-            </TableHeaderCell>
+            <TableHeaderCell className={HEAD_CLASS}>Property</TableHeaderCell>
+            <TableHeaderCell className={HEAD_CLASS}>Device</TableHeaderCell>
             <TableHeaderCell className={HEAD_CLASS}>Provider</TableHeaderCell>
             <TableHeaderCell className={HEAD_CLASS}>Status</TableHeaderCell>
             <TableHeaderCell className={HEAD_CLASS}>Current</TableHeaderCell>
@@ -215,9 +237,6 @@ export function ThermostatsList({
             <TableHeaderCell className={HEAD_CLASS}>Humidity</TableHeaderCell>
             <TableHeaderCell className={HEAD_CLASS}>
               Last synced
-            </TableHeaderCell>
-            <TableHeaderCell className={HEAD_CLASS}>
-              Last telemetry
             </TableHeaderCell>
             <TableHeaderCell className={HEAD_CLASS}>Controls</TableHeaderCell>
           </TableHead>
@@ -230,74 +249,110 @@ export function ThermostatsList({
               const canManage =
                 canManageByPropertyId[thermostat.propertyId] ?? false;
               const label = connectivityLabel(thermostat.status);
+              // The only case that ever renders NestThermostatControls' own
+              // (potentially 5-form) stack — everything else in this column
+              // is already a single short line, so only this case needs a
+              // collapse/expand affordance.
+              const hasLiveControls =
+                Boolean(rawTraits) &&
+                canRenderNestControls({ hasRawTraits: true, canManage });
+              const isExpanded = expandedIds.has(thermostat.id);
+              const lastTelemetryTitle = `Last telemetry: ${formatTimestamp(telemetryUpdatedAt)}`;
 
               return (
-                <TableRow key={thermostat.id}>
-                  <TableCell className={CELL_CLASS}>
-                    <span
-                      className="block max-w-[160px] truncate font-medium text-ink"
-                      title={thermostat.property.name}
-                    >
-                      {thermostat.property.name}
-                    </span>
-                  </TableCell>
-                  <TableCell className={CELL_CLASS}>
-                    <span
-                      className="block max-w-[160px] truncate text-ink-muted"
-                      title={thermostat.name}
-                    >
-                      {thermostat.name}
-                    </span>
-                  </TableCell>
-                  <TableCell className={cx(CELL_CLASS, "text-ink-muted")}>
-                    {getProviderDisplayName(thermostat)}
-                  </TableCell>
-                  <TableCell className={CELL_CLASS}>
-                    <StatusIndicator
-                      label={label}
-                      tone={
-                        label === "Online"
-                          ? "success"
-                          : label === "Unknown"
-                            ? "neutral"
-                            : "error"
-                      }
-                    />
-                  </TableCell>
-                  <TableCell className={cx(CELL_CLASS, "text-ink-muted")}>
-                    {formatTemperature(getCurrentTemperature(thermostat))}
-                  </TableCell>
-                  <TableCell className={cx(CELL_CLASS, "text-ink-muted")}>
-                    {formatTemperature(getTargetTemperature(thermostat))}
-                  </TableCell>
-                  <TableCell className={cx(CELL_CLASS, "text-ink-muted")}>
-                    {mode ?? "—"}
-                  </TableCell>
-                  <TableCell className={cx(CELL_CLASS, "text-ink-muted")}>
-                    {humidity !== null ? `${humidity}%` : "—"}
-                  </TableCell>
-                  <TableCell className={cx(CELL_CLASS, "text-ink-muted")}>
-                    {formatTimestamp(thermostat.updatedAt)}
-                  </TableCell>
-                  <TableCell className={cx(CELL_CLASS, "text-ink-muted")}>
-                    {formatTimestamp(telemetryUpdatedAt)}
-                  </TableCell>
-                  <TableCell className={CELL_CLASS}>
-                    {rawTraits &&
-                    canRenderNestControls({ hasRawTraits: true, canManage }) ? (
-                      <NestThermostatControls
-                        smartDeviceId={thermostat.id}
-                        rawTraits={rawTraits}
-                      />
-                    ) : rawTraits ? (
-                      <span className="text-ink-faint">
-                        View only — no permission to control this device
+                <Fragment key={thermostat.id}>
+                  <TableRow>
+                    <TableCell className={CELL_CLASS}>
+                      <span
+                        className="block max-w-[140px] truncate font-medium text-ink"
+                        title={thermostat.property.name}
+                      >
+                        {thermostat.property.name}
                       </span>
-                    ) : (
-                      <span className="text-ink-faint">—</span>
-                    )}
-                  </TableCell>
-                </TableRow>
+                    </TableCell>
+                    <TableCell className={CELL_CLASS}>
+                      <span
+                        className="block max-w-[140px] truncate text-ink-muted"
+                        title={thermostat.name}
+                      >
+                        {thermostat.name}
+                      </span>
+                    </TableCell>
+                    <TableCell className={cx(CELL_CLASS, "text-ink-muted")}>
+                      {getProviderDisplayName(thermostat)}
+                    </TableCell>
+                    <TableCell className={CELL_CLASS}>
+                      <StatusIndicator
+                        label={label}
+                        tone={
+                          label === "Online"
+                            ? "success"
+                            : label === "Unknown"
+                              ? "neutral"
+                              : "error"
+                        }
+                      />
+                    </TableCell>
+                    <TableCell className={cx(CELL_CLASS, "text-ink-muted")}>
+                      {formatTemperature(getCurrentTemperature(thermostat))}
+                    </TableCell>
+                    <TableCell className={cx(CELL_CLASS, "text-ink-muted")}>
+                      {formatTemperature(getTargetTemperature(thermostat))}
+                    </TableCell>
+                    <TableCell className={cx(CELL_CLASS, "text-ink-muted")}>
+                      {mode ?? "—"}
+                    </TableCell>
+                    <TableCell className={cx(CELL_CLASS, "text-ink-muted")}>
+                      {humidity !== null ? `${humidity}%` : "—"}
+                    </TableCell>
+                    <TableCell className={cx(CELL_CLASS, "text-ink-muted")}>
+                      {/* Last telemetry (its own full column before this
+                          pass) now rides along as a tooltip here — a
+                          non-intrusive secondary detail, not a column that
+                          widens every row. */}
+                      <span title={lastTelemetryTitle}>
+                        {formatTimestamp(thermostat.updatedAt)}
+                      </span>
+                    </TableCell>
+                    <TableCell className={CELL_CLASS}>
+                      {hasLiveControls ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleExpanded(thermostat.id)}
+                          aria-expanded={isExpanded}
+                          aria-label={`${isExpanded ? "Hide" : "Show"} controls for ${thermostat.name}`}
+                          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-ink transition-colors hover:bg-surface-muted"
+                        >
+                          {isExpanded ? (
+                            <ChevronDown className="h-3.5 w-3.5" />
+                          ) : (
+                            <ChevronRight className="h-3.5 w-3.5" />
+                          )}
+                          Controls
+                        </button>
+                      ) : rawTraits ? (
+                        <span className="text-ink-faint">
+                          View only — no permission to control this device
+                        </span>
+                      ) : (
+                        <span className="text-ink-faint">—</span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                  {hasLiveControls && isExpanded && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={CONTROLS_COLUMN_COUNT}
+                        className="bg-surface-muted px-4 py-3"
+                      >
+                        <NestThermostatControls
+                          smartDeviceId={thermostat.id}
+                          rawTraits={rawTraits!}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </Fragment>
               );
             })}
           </TableBody>
