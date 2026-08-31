@@ -348,6 +348,17 @@ export function ThermostatsList({
                         <NestThermostatControls
                           smartDeviceId={thermostat.id}
                           rawTraits={rawTraits!}
+                          currentTemperatureLabel={formatTemperature(
+                            getCurrentTemperature(thermostat),
+                          )}
+                          targetTemperatureLabel={formatTemperature(
+                            getTargetTemperature(thermostat),
+                          )}
+                          modeLabel={mode ?? undefined}
+                          humidityLabel={
+                            humidity !== null ? `${humidity}%` : undefined
+                          }
+                          onClose={() => toggleExpanded(thermostat.id)}
                         />
                       </TableCell>
                     </TableRow>
