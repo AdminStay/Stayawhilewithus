@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 
+import { formatTimestamp } from "../lib/format-timestamp";
 import {
   DEFAULT_THERMOSTAT_FILTER_STATE,
   filterThermostats,
@@ -70,10 +71,6 @@ function getRawTraits(
   return rawTraits && typeof rawTraits === "object"
     ? (rawTraits as Record<string, Record<string, unknown>>)
     : null;
-}
-
-function formatTimestamp(date: Date | null): string {
-  return date ? new Date(date).toLocaleString() : "—";
 }
 
 function formatTemperature(value: number | null): string {

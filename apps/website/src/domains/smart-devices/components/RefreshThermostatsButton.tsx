@@ -7,6 +7,7 @@ import type {
   ProviderRefreshOutcome,
   RefreshThermostatsActionState,
 } from "../actions";
+import { formatTimestamp } from "../lib/format-timestamp";
 
 const INITIAL_STATE: RefreshThermostatsActionState = { status: "idle" };
 
@@ -80,7 +81,7 @@ export function RefreshThermostatsButton({
             <p key={outcome.provider}>{describeProviderOutcome(outcome)}</p>
           ))}
           <p className="text-ink-muted">
-            Last refreshed: {new Date(state.refreshedAt).toLocaleString()}
+            Last refreshed: {formatTimestamp(new Date(state.refreshedAt))}
           </p>
         </div>
       )}

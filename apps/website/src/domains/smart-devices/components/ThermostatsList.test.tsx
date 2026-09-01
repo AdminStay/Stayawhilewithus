@@ -10,6 +10,7 @@ vi.mock("./NestThermostatControls", () => ({
   NestThermostatControls: () => <div>REAL CONTROLS</div>,
 }));
 
+import { formatTimestamp } from "../lib/format-timestamp";
 import { ThermostatsList } from "./ThermostatsList";
 
 afterEach(cleanup);
@@ -291,7 +292,7 @@ describe("ThermostatsList", () => {
     );
 
     const lastSyncedCell = screen.getByText(
-      new Date("2026-01-01").toLocaleString(),
+      formatTimestamp(new Date("2026-01-01")),
     );
     expect(lastSyncedCell.getAttribute("title")).toMatch(/Last telemetry:/);
   });
