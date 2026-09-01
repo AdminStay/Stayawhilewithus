@@ -28,20 +28,49 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 CURRENT STATE — 2026-08-31, latest of all (READ THIS FIRST — supersedes every earlier summary below)
+# 🔖 CURRENT STATE — 2026-09-02, latest of all (READ THIS FIRST — supersedes every earlier summary below)
 
-**Authoritative current state as of `## Increment 73` (2026-08-31), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-08-31 summary immediately below, now historical), this summary governs. Full detail in `## Increment 73` at the bottom of this file. **Nothing in Increment 60's findings is superseded or invalidated.**
+**Authoritative current state as of `## Increment 75` (2026-09-02), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the 2026-09-01 summary immediately below, now historical), this summary governs. Full detail in `## Increment 75` at the bottom of this file.
+
+1. **Notion broader operational search — ✅ COMPLETE, committed (`29d0acc`), pushed, deployed, Production-verified.** VAs can now search everything shared with the StayWhile Notion integration (SOPs, FAQs, property pages, guidebooks, policies, training manuals), not just "View of Listings" — server-side, real, paginated Notion `/search`, minimal result fields only. **Property Listings section retained unchanged, still 35/35 in Production.** **Search remains strictly read-only** — no create/update/delete/archive call exists anywhere in the client.
+2. **Staff/contact-directory content excluded from VA search, by real Notion database id, Production-verified.** People/Company Directory/Contact List databases never surface in search results — confirmed live (a "Kenny" query returned 0 results) — while operational content that happens to mention a staff member's name stays fully searchable (id-based exclusion only, never title/keyword-based).
+3. **⚠️ New explicit client product requirement recorded, NOT implemented**: StayWhile should ultimately become the operational interface for approved Notion information — users should be able to view/edit specifically-approved Notion fields **from inside the StayWhile dashboard**, with StayWhile writing the approved change back to Notion in the background, without the user leaving StayWhile. "Open in Notion" may remain as an optional reference/fallback link but must **not** be the required editing workflow. See "Future in-dashboard Notion editing" in `## Increment 75` for the full requirement list (approved fields/actions, RBAC, validation, audit logging, conflict handling, etc.) — **none of this is built**, and it is explicitly blocked on Michelle/Kenny confirming exactly which fields/actions are editable before any implementation starts.
+4. **Notion altered/deleted-page detection and alerts remain pending, separate future work** — unrelated to the search-exclusion feature above, not started, not designed further this increment.
+5. **Credentials unchanged.** Two credentials (`NOTION_API_KEY`, `N8N_API_KEY`) were exposed in an earlier session's tool output and the client has chosen to keep them as-is rather than rotate — recorded, not acted on further.
+6. **RBAC unchanged.** The actual VA role is still unconfirmed anywhere in this repo's data/config — recorded as a **testing prerequisite**, not guessed at.
+7. **Revised execution priority, updated**: (1) ~~Notion search~~ **done, see above**, (2) **thermostat manual Refresh/Sync — next priority, not started**, (3) OwnerRez/property cleanup (full addresses, timezone auto-sourcing, Poinciana exclusion, Sync Now), (4) status freshness (August UNKNOWN, Cielo/Bahamas investigation), (5) safe automatic device mapping (only after relationships are verified), (6) controlled real Nest command test (explicit approval required), (7) Trane/Ecobee per readiness, (8) team testing checklist, (9) Notion in-dashboard editing (blocked on Michelle/Kenny field/action approval — see item 3), (10) Notion altered/deleted-page alerts.
+8. **All standing safety rules unchanged** — client isolation, Production Supabase project identity, transaction-pooler `DATABASE_URL`, `DIRECT_URL` migration rules, no secrets in repo docs, protected legacy August houses, no physical lock commands, no physical Nest commands without explicit approval, no guessing ambiguous mappings. See `## Increment 75` for the full detail.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-02, latest of all" above] CURRENT STATE — 2026-09-01, latest of all
+
+**Authoritative current state as of `## Increment 74` (2026-09-01).** Full detail in `## Increment 74`.
+
+1. **HANDOFF updated with the latest meeting decisions (Michelle/Kenny) and actual Production status.** No new functionality was implemented in this increment — documentation only, per explicit instruction.
+2. **Thermostats/Nest is READY FOR TEAM UI/DATA TESTING.** Production: 31 thermostats (30 Online, 1 Offline — Bahamas – Living Room / Cielo, tracked separately). Search/provider-filter/status-filter/N-of-M count, compact operations table, compact expandable Controls UI, and mode-aware Heat/Cool/Range visibility are all Production-verified. Latest thermostat commit: **`ee147298e4006198c640686b1ed4aea4be34277d`**. **No physical Nest command has been issued yet** — kept as a separate, explicitly-approval-gated task.
+3. **Locks/August substantially complete** (`/locks` at 33 per Increment 73) and ready for team testing on mapped locks. **UNKNOWN telemetry does not mean disconnected** — it means insufficient/stale telemetry, not a broken integration. Status-freshness and Connected/Mapped/Enabled/status-clarity UI work remains pending, not started.
+4. **Revised execution priority for future engineering work** (supersedes the "Locks → Thermostats → Notion" ordering used since Increment 60): (1) Notion read-only audit first, (2) thermostat manual Refresh/Sync, (3) OwnerRez/property cleanup (full addresses, timezone auto-sourcing, Poinciana exclusion, Sync Now), (4) status freshness (August UNKNOWN, Cielo/Bahamas investigation), (5) safe automatic device mapping (only after relationships are verified), (6) controlled real Nest command test (explicit approval required), (7) Trane/Ecobee per readiness, (8) team testing checklist. — **superseded: Notion read-only audit/search has since shipped and been Production-verified, see current banner above.**
+5. **Pending, tracked, none started**: Notion dashboard search UX, thermostat manual Refresh/Sync, full OwnerRez addresses, Poinciana removal, OwnerRez Sync Now, automatic device mapping design, first controlled physical Nest command, Trane Ocean Pearl (blocked on Michelle's password-manager access + property/device reconfirmation), Ecobee (existing dependency unchanged), August UNKNOWN/status-freshness work, Bahamas–Cielo Offline investigation.
+6. **Dashboard scope decision recorded**: StayWhile supplements operational systems — it does not prioritize rebuilding OwnerRez/Airbnb/Vrbo booking management or direct-booking functionality.
+7. **All standing safety rules unchanged** — client isolation, Production Supabase project identity, transaction-pooler `DATABASE_URL`, `DIRECT_URL` migration rules, no secrets in repo docs, protected legacy August houses, no physical lock commands, no physical Nest commands without explicit approval, no guessing ambiguous mappings. See `## Increment 74` for the full reaffirmation.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-01, latest of all" above] CURRENT STATE — 2026-08-31, latest of all
+
+**Authoritative current state as of `## Increment 73` (2026-08-31).** Full detail in `## Increment 73`.
 
 1. **The 4-property SAFE NOW batch PASSED in Production.** Riverside Château, Florisun, Driftwood Cottage, Aloha by the Sea — all created (ONBOARDING), single August lock each Mapped/Enabled. **`/locks` went 29 → 33**, exactly as predicted (33 Total / 3 Online / 0 Offline / 30 Unknown / 0 Low Battery). **`/properties` stands at 28.**
 2. **A read-only investigation of the remaining 8 review/unresolved August locks was performed and reported to the user in-conversation** (Island SOS, Once Upon a Pond, Bird of Paradise, Royal Eden ×2, Maon de la Mer, Coco Vista, Robinson Recluse, Orion's Landing) — classifying each SAFE TO EXECUTE / NEEDS ONE LIVE CHECK / HOLD. **None found to intersect a protected legacy August house.** Key finding: **none of these 8 has a literal, verbatim-preserved August device name in HANDOFF** — same recording-gap risk already surfaced for OUAP/BOP in Increment 72.
 3. **No property created, no device Mapped/Enabled, no discovery run, while preparing this investigation.**
 4. **Miramar-Bliss (480401) remains explicitly protected from creation.** Bonjour AMI, Island Tides, Aqua Palm (legacy) remain excluded from the new ProviderDevice path. Surfside Solace remains NEEDS HUMAN CONFIRMATION. Starfish Waterfront remains deferred.
 5. **Nest untouched.**
-6. **Priority order unchanged: Locks → Thermostats → Notion.**
+6. **Priority order at the time: Locks → Thermostats → Notion.** — superseded: see the revised execution priority in the current banner above.
 
 ---
 
-# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-08-31, latest of all" above] CURRENT STATE — 2026-08-31, most recent
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-01, latest of all" above] CURRENT STATE — 2026-08-31, most recent
 
 **Authoritative current state as of `## Increment 72` (2026-08-31).** Full detail in `## Increment 72`.
 
@@ -3299,3 +3328,162 @@ Full per-property findings (exact OwnerRez property, exact August device name if
 ### Current state
 
 **33 locks in Production. `/properties` stands at 28** (24 + 4 from this batch). Miramar-Bliss/legacy houses/Surfside Solace/Starfish Waterfront remain excluded. Nest untouched throughout. Priority order unchanged: **Locks → Thermostats → Notion.**
+
+---
+
+## Increment 74 — 2026-09-01: Documentation-only — latest meeting decisions (Michelle/Kenny) and actual Production status recorded; revised execution priority set; no application code changed
+
+### Purpose of this increment
+
+**Documentation-only, per explicit instruction.** No feature was implemented, no application code/test/schema/migration/environment variable/dependency was modified, no command was run against Production, no database read or write occurred. This increment records (1) what has actually been completed and Production-verified since the last recorded meeting, (2) the decisions from the latest meeting with Michelle and Kenny, and (3) the revised execution priority for engineering work going forward. The only file changed by this increment is `HANDOFF.md` itself.
+
+### Thermostats / Nest — READY FOR TEAM UI/DATA TESTING, Production-verified
+
+- Production shows **31 thermostats: 30 Online, 1 Offline** (Bahamas – Living Room / Cielo — see "Cielo" below; tracked separately, does not block).
+- Nest property/device mappings are largely completed (the same property-onboarding work documented in Increments 54–73 covers most of this set on the Nest side too).
+- `/thermostats` has: search by property/device, provider filter, status filter, N-of-M result count, a compact operations table, a compact expandable Controls UI, and now **mode-aware controls** — the panel always shows the summary line and the Mode control when supported; shows Heat °F only when the confirmed current mode is HEAT; Cool °F only when COOL; the combined Range °F control only when HEATCOOL; no temperature-setting control at all when the confirmed mode is OFF (or unrecognized); Fan is shown whenever the device reports a Fan trait, independent of mode.
+- **Admin `thermostats:manage` RBAC permission fix remains confirmed working in Production** (see the dedicated RBAC-investigation increment earlier in this file) — unchanged, not touched this increment.
+- **Latest Production thermostat commit: `ee147298e4006198c640686b1ed4aea4be34277d`** — "Mode-aware visibility for Nest thermostat controls." Presentation-only: no change to `sendNestThermostatCommand`, `validateNestCommand`/`capabilities.ts`, RBAC, database/schema, or any provider mapping.
+- **Manually verified in Production** by the user: Aqua Palm – dbl room reports COOL; opening Controls shows exactly **Mode, Cool °F, Fan** — Heat and Range are correctly hidden because the confirmed thermostat mode is COOL. The mode-aware UI reads the confirmed `ThermostatMode.mode` value out of `rawTraits` — the same trait data the existing capability/validation logic already trusts — never an unsaved Mode-dropdown selection.
+- **No physical Nest command has been issued in Production yet.** Physical command testing is intentionally kept as its own separate, explicitly-approval-gated task (see "First Physical Nest Command" below) — do not perform one automatically.
+
+### Locks / August — substantially complete, ready for team dashboard testing (mapped locks only)
+
+- Inventory/mapping work (Increments 54–73) is substantially complete; `/locks` stands at **33** as of Increment 73.
+- Current team testing should focus on **mapped locks only**.
+- **UNKNOWN status does not mean the device is disconnected from StayWhile** — it represents insufficient/stale device telemetry for determining Online/Offline, not a connectivity failure. This distinction needs to be communicated to the testing team so UNKNOWN isn't misread as a broken integration.
+- **Required follow-up, not started**: improve status/telemetry freshness and sync; make the UI clearly distinguish Connected vs. Mapped vs. Enabled vs. current device status/telemetry (today these concepts are conflated in places).
+- **No physical lock/unlock/PIN/access-code command has been issued, and none is in scope for current testing** — unchanged standing rule; no such capability exists anywhere in this codebase (Increment 39's capability audit).
+- Unresolved/ambiguous mappings (Island SOS, Once Upon a Pond, Bird of Paradise, Surfside Solace, Starfish Waterfront, and the other REVIEW FIRST items from Increments 71–73) remain untouched — no guessing.
+
+### Meeting decisions (Michelle & Kenny) — recorded this increment; none implemented yet unless explicitly noted above
+
+1. **OwnerRez / Properties.** OwnerRez remains the authoritative property source. Required, not yet started: finish verifying the active OwnerRez portfolio; display the full property address including house number (not only city/location); auto-source timezone from OwnerRez wherever authoritative data is available instead of requiring manual selection (the existing explicit-fallback-when-genuinely-missing behavior from the Camingo pilot stays for the true no-data case); remove/exclude the private/non-rental **Poinciana** residence — identified by Michelle — from operational dashboard views; after the existing portfolio is verified, provide a clear **Sync Now** workflow for OwnerRez properties. **Do not blindly bulk-create or guess property relationships** — unchanged standing rule.
+2. **Locks / August.** August inventory/mapping is substantially complete and ready for team dashboard testing; current testing should focus on mapped locks. UNKNOWN ≠ disconnected (see above). Required follow-up not yet started: status/freshness/sync improvements; a UI that clearly distinguishes Connected / Mapped / Enabled / current device status-telemetry. **No physical lock/unlock/PIN/access-code commands** are part of the approved testing scope. Keep unresolved/ambiguous mappings untouched rather than guessing.
+3. **Automatic device mapping** (Kenny). Requested for _future_ locks and thermostats, only after the current portfolio is verified. **Not implemented yet.** Future design must be safe: high-confidence match → automatic mapping may be allowed; ambiguous match → Needs Review; no reliable match → remains unmapped. **Never automatically guess a property relationship** — this generalizes, but does not replace, the existing no-name-based-auto-matching rule already in the "Standing Architecture Requirement — Dynamic, Dashboard-Configurable Integrations" section at the top of this file. This work should happen only after current property/device relationships have been finalized.
+4. **Thermostat manual Refresh/Sync** (Michelle). Requested directly on `/thermostats` for the VA daily-check workflow: Thermostats → Refresh/Sync → review Online/Offline/status/temperature → compare questionable devices with the provider app → report discrepancy. **Still pending — not implemented in this documentation-only increment.** Recorded here as a **high-priority pending requirement** (see Revised Execution Priority, item 2, below).
+5. **First physical Nest command.** Still pending. **Do NOT perform one automatically.** When approved: deliberately choose one known-safe thermostat, confirm its current physical state, issue exactly one controlled command, verify provider/device state, verify StayWhile reflects the confirmed result. **This requires explicit approval before execution.**
+6. **Cielo.** Production currently shows Bahamas – Living Room | Cielo | Offline, with no current telemetry values. Tracked as a separate provider/status investigation. **Does not block** Nest UI/data testing.
+7. **Notion — NEXT DEVELOPMENT PRIORITY.** Notion is connected/readable, but the dashboard experience is not yet complete enough for team testing. Meeting requirement: VAs should be able to search for operational information from the StayWhile dashboard rather than manually hunting through Notion. Required work: dashboard keyword search; useful search-results/content presentation; clear empty/error/loading states; appropriate access controls; preserve the previously requested tracking/alert requirement for altered/deleted Notion pages. **Not implemented in this increment.** After this HANDOFF update is approved, the next engineering task is a **read-only audit of the existing Notion implementation** (see Increments 40–57 for the prior Notion read-only/search-deferred work) before changing anything — do not assume it needs rebuilding.
+8. **Trane — Ocean Pearl** (Kenny). Requested integration of the Ocean Pearl thermostat, which uses Trane. **Pending external information**: Michelle will provide access through the team's approved shared password manager; Michelle will reconfirm the correct property/device information. **Do not request or place credentials in the repository or in HANDOFF** — only the integration requirement and this dependency are tracked here.
+9. **Ecobee.** Remains a pending thermostat-provider integration. **Do not start it during the Notion priority work.** Track the existing API/account dependency/status accurately (see the `project_thermostat_provider_expansion` memory for the last recorded state) without placing credentials in repo documentation.
+10. **Dashboard scope decision.** StayWhile should **supplement** operational systems, not recreate booking platforms. Do not prioritize building duplicate OwnerRez, Airbnb, or Vrbo booking management, or direct-booking functionality that merely reproduces capabilities those platforms already handle. StayWhile should prioritize: operational visibility; property/device status; search/information retrieval; internal workflow; automation; alerts; reference information (e.g., property photos/guidebooks) where useful. OwnerRez and other external providers remain authoritative for their respective functions.
+
+### Revised execution priority (supersedes the "Locks → Thermostats → Notion" ordering used since Increment 60)
+
+1. **Notion search/read experience** — audit what already exists first; do not assume it needs rebuilding.
+2. **Thermostat manual Refresh/Sync** — supports the VA daily status-verification workflow.
+3. **OwnerRez/property cleanup** — full addresses, timezone sourcing, final portfolio verification, Poinciana exclusion, future Sync Now workflow.
+4. **Status freshness** — August UNKNOWN, provider telemetry freshness, clearer Connected/Mapped/Enabled vs. device-status presentation, and the Cielo/Bahamas investigation.
+5. **Safe automatic device mapping** — only after existing relationships have been verified.
+6. **Controlled real Nest command test** — requires explicit approval.
+7. **Trane / Ecobee / remaining thermostat providers** — according to access/dependency readiness.
+8. **Team testing checklist** — a simple "go here → click this → check this → report discrepancies" workflow for Properties, Locks, Thermostats, and Notion.
+
+### Safety rules — reaffirmed, unchanged, none modified this increment
+
+- **StayWhile client/workspace isolation** — unchanged (see "⚠️ Workspace Isolation — Read First" at the top of this file).
+- **Production Supabase project identity** (`bsyjuufnwjyzfchmxgiv`) and the required `diagnose-db-target.mjs` verification step before any production write — unchanged.
+- **`DATABASE_URL`'s `pgbouncer=true&connection_limit=1` transaction-pooler configuration remains required and must not be changed or removed** — unchanged (Increment 24; reaffirmed as recently as Increment 60's discovery perf fix).
+- **`DIRECT_URL` migration rules** (session-mode pooler, kept separate from `DATABASE_URL`) — unchanged.
+- **No secrets/credentials in repo documentation** — reaffirmed explicitly for this increment's new pending items (Trane Ocean Pearl, Ecobee): only the requirement/dependency is tracked here, never actual credentials.
+- **Protected legacy August mapping rules** — the four legacy August houses (Aqua Palm, Bonjour AMI, Island Tides, Miramar Bliss) remain untouched; Miramar-Bliss (OwnerRez ID 480401) remains explicitly protected from creation — unchanged.
+- **No physical lock commands** — unchanged; no such capability exists in this codebase.
+- **No physical Nest commands without explicit approval** — unchanged; none have been issued; the first one remains a separate, explicitly-approval-gated future task.
+- **Do not guess ambiguous mappings** — unchanged; REVIEW FIRST items (Island SOS, Once Upon a Pond, Bird of Paradise, Surfside Solace, Starfish Waterfront) remain untouched.
+- **No unrelated uncommitted diagnostic files were committed as part of this increment** — the `packages/database/*.mjs` diagnostic scripts and other pre-existing uncommitted working files remain exactly as they were, untouched.
+
+### What changed in this increment
+
+**Only `HANDOFF.md`.** No application code, test, schema, migration, environment variable, or dependency was modified. No command was run against Production. No database read or write occurred.
+
+### Next step
+
+Pending the user's approval of this HANDOFF update, the next engineering task is a **read-only audit of the existing Notion implementation** — no Notion or application code change until that audit is reviewed and the user approves proceeding.
+
+---
+
+## Increment 75 — 2026-09-02: broader operational Notion search shipped, committed, pushed, and Production-verified; staff/contact-directory content excluded by database id; new client requirement recorded for future in-dashboard Notion editing — not implemented
+
+### Read-only audit (preceded this increment's build work)
+
+A read-only, read-only-by-construction audit of the existing Notion implementation was performed first, per Increment 74's "next step." Using the existing app-level `NOTION_API_KEY` and a new paginated `NotionClient.search()` call (no query, `maxPages: 50`), confirmed the integration can see **320 accessible objects**: 9 databases, 114 database rows, 197 pages — far more than just "View of Listings." This included genuinely useful operational content (SOPs, FAQs, property pages, training manuals, lock/thermostat/pool instructions, house rules, cancellation/booking-platform procedures, regional pages) **and** three categories of staff/contact-directory content (People, Company Directory, Contact List/Contact List (1)/Contact List (2)) that should not be part of a VA-facing operational search. No Notion sharing/permissions were changed to produce this finding.
+
+### Broader operational Notion search — ✅ COMPLETE, committed, pushed, deployed, Production-verified
+
+**Commit `29d0acc`** — "Add read-only operational Notion search, excluding staff/contact-directory content." 18 files (client/service/component/schema/action/config + tests), pushed to `origin/main` (`ee14729..29d0acc`). Vercel auto-deploy picked it up; **the user manually verified the live Production `/notion` page** and confirmed:
+
+- Search Notion UI is live.
+- Notion connection shows Connected.
+- View of Listings shows Read access verified.
+- Existing Property Listings section remains intact — **35/35**, unchanged from Increment 57.
+- A real operational query (**"pool"**) returned the real Notion page **"Pool heater warranty"** — confirms the broader search is genuinely reaching operational content beyond the listings database, not just returning listing rows.
+- A staff-name query (**"Kenny"**) returned **0 results** — confirms the staff/contact-directory exclusion is working live in Production, not just in tests.
+- The no-results state renders correctly.
+
+**Architecture, for a fresh session picking this up**: `NotionClient.search({query, maxPages})` (new, `packages/integrations/src/notion/client.ts`) wraps a real, paginated `POST /search` — Notion's own relevance ranking, minimal result fields only (title/url/lastEditedTime/sourceType/parentDatabaseId), same cycle-detection/hard-page-cap discipline as every other paginated read in this client. `searchNotionContent()` (`apps/website/src/domains/integrations/services/integrations.service.ts`) merges two real reads: this general search, and the existing `listDataSourceRecords()`-backed "View of Listings" match (unchanged, reused as-is) — deduped by id, listing matches first. **No page/block content is ever fetched** — `/search` only returns titles/metadata, never body text, so there was never a "dump the whole workspace into the browser" risk to design around. The `/notion` page now has two sections: "Search Notion" (new) above "Property Listings" (existing, untouched aside from a small shared-helper extraction — `matchesListingQuery()` — so the two features' keyword-matching can't silently drift apart).
+
+**RBAC**: still gated only by the existing, generic `integrations:read` permission — no new permission or role. **No RBAC change was made this increment**, per explicit instruction — see "RBAC — unchanged, VA role still unconfirmed" below.
+
+**Search stays strictly read-only** — confirmed both by direct code inspection (no `PATCH`/create/archive/append call exists anywhere in `NotionClient`) and by the user's own Production testing (no Notion write occurred during verification).
+
+### Staff/contact-directory exclusion — ✅ COMPLETE, id-based, Production-verified
+
+`apps/website/src/domains/integrations/config/notion-search-exclusions.ts` hardcodes the 5 real Notion database ids for People/Company Directory/Contact List/Contact List (1)/Contact List (2) (confirmed live via the read-only audit above — non-secret Notion object identifiers, same sensitivity class as the existing `NOTION_LISTINGS_DATA_SOURCE_ID` config pointer). `isExcludedFromVaSearch()` (`services/notion-search-exclusions.ts`) checks only a result's own Notion object id / `parentDatabaseId` — **never a title or keyword** — so operational content that happens to mention a staff member's name (verified with a dedicated test: a page titled "Michelle's Guide to Early Check-in Requests" stays fully searchable) is never dropped. This reliably needed **zero extra Notion API calls** — `parent.database_id` is already present on every `/search` row result; the only new work was capturing it into `NotionSearchResultItem` instead of discarding it.
+
+### Notion package README corrected — "must never be writable" language replaced
+
+`packages/integrations/src/notion/README.md`'s "Hard safety requirement" section previously stated Notion must **never** have write capability — **this was incorrect and has been corrected** (client direction, 2026-09-02, recorded below). Updated section now reads, in substance: _"Notion is currently read-only. Controlled dashboard-to-Notion updates are a future requirement and must be implemented only for explicitly approved fields/actions with RBAC, validation, and audit logging."_ The cross-session memory `feedback_notion_ownerrez_read_only_safety` was updated to match — OwnerRez's separate read-only-until-authorized rule is unaffected by this correction.
+
+### ⚠️ New client product requirement — StayWhile as the operational interface for approved Notion information (recorded, NOT implemented)
+
+**Set 2026-09-02 by the client, via the user.** StayWhile should ultimately become the operational interface for **specifically approved** Notion information — the client does not want users to have to leave the StayWhile dashboard and open Notion in order to make approved edits.
+
+**Future approved workflow** (design intent, not yet built): Notion → StayWhile dashboard → user views/edits approved information **inside StayWhile** → Save → StayWhile writes the approved change back to the corresponding Notion page/database **in the background** → the user remains on the StayWhile dashboard throughout and sees success/error feedback there. **"Open in Notion" may remain as an optional reference/fallback link, but it must NOT become the required editing workflow** — normal editing must happen without a redirect to Notion.
+
+**Before any implementation**: Michelle/Kenny must confirm **exactly which Notion information/fields/actions** should be editable from StayWhile — this has not happened yet, and no implementation should start until it does.
+
+**When designed and built, future Notion editing must include, all together, not as separate optional pieces**:
+
+- An explicit, client-approved list of exactly which fields/actions are editable — never "everything Notion allows," never a generic Notion editor.
+- In-dashboard editing UI — no redirect to Notion for normal editing.
+- Server-side validation.
+- Dedicated RBAC for each specific write (not inherited from the existing broad `integrations:*`/`smart_devices:*` grants).
+- Audit logging showing **who changed what and when** (`recordAudit`, same standard as every other write path in this app).
+- Clear Save success/failure feedback, surfaced inside the StayWhile dashboard.
+- Safe handling of conflicting/stale Notion data (e.g. the underlying Notion page changed since the user opened the edit view) — not designed yet, must be addressed before write-back ships.
+- **No deletion/archive capability unless separately approved**, on top of everything above.
+
+This is a **recorded requirement only**. Nothing toward it was implemented this increment — no write path, no editing UI, no new RBAC, no validation, no audit-log wiring for a Notion write. The current search release (this increment) remains strictly read-only, and stays that way until this future work is separately designed and explicitly approved.
+
+### Notion altered/deleted-page detection and alerts — still pending, separate future work, unaffected by this increment
+
+**Explicitly a different, still-pending requirement from both the search-exclusion work above and the future in-dashboard-editing requirement above** — do not conflate the three. No polling job, persistence, migration, cron, or webhook receiver was built or designed further this increment. Whether Notion's API supports webhooks for page changes/deletions remains unconfirmed from earlier sessions. Recorded here again only to keep it visibly tracked, not advanced.
+
+### RBAC — unchanged, VA role still unconfirmed
+
+**No permission or role change was made this increment**, per explicit instruction. Checked again: nothing in this repo's data/config (HANDOFF.md, `packages/database/prisma/seed.ts`) establishes which role Michelle/Kenny's VA users actually use. `cleaner`/`front_desk`/`maintenance_tech` still lack `integrations:read`, so a VA on one of those roles cannot reach `/notion` today. **Recorded as a testing prerequisite** — do not guess or grant a permission to work around this; get the actual role confirmed first.
+
+### Credentials — left unchanged, per explicit instruction
+
+Two credentials (`NOTION_API_KEY`, `N8N_API_KEY`) were exposed in an earlier session's tool output (overly broad `grep`/`cat`-style commands against local `.env.local`, corrected mid-session). **The client has chosen to keep both credentials as-is rather than rotate them** — no rotation, revocation, replacement, inspection, printing, or modification of any Notion or n8n credential occurred this increment. Every secret/config check this increment was presence-only (no `cat`/`grep`/`printenv`/`env` or equivalent run against any `.env*` file or shell environment).
+
+### Verification, this increment
+
+- Targeted Notion tests: 46/46 (`@stayw/integrations`), 113/113 (website).
+- Full website suite: 649/649.
+- `@stayw/integrations` typecheck: clean. `website` typecheck: clean.
+- `next build`: succeeds (dummy, command-line-only n8n env overrides for the pre-existing, unrelated missing-webhook-secret gap already documented since Increment 54 — nothing written to disk, no real value read or displayed).
+- Production: verified manually by the user directly on the live `/notion` page (see "Broader operational Notion search" above) — this is real, human, live-dashboard verification, not a local/mocked check.
+
+### Files changed this increment
+
+Exactly the 18 Notion-implementation files from commit `29d0acc` (see the commit for the full list — client/types/tests in `packages/integrations/src/notion/`, service/schema/action/component/config/tests in `apps/website/src/domains/integrations/`, plus the package README). `HANDOFF.md` (this file) was intentionally excluded from that commit and updated separately, this pass. No schema, migration, RBAC, credential, or n8n file was touched. The pre-existing, unrelated uncommitted files (`.env.example`, `.gitignore`, `apps/website/app/(dashboard)/layout.tsx`, the `packages/database/*.mjs` diagnostic scripts, `thermostat-permission-gating.test.ts`) remain exactly as they were, untouched by this increment.
+
+### Ecobee — API credentials supplied/configured locally (2026-09-02, later same day)
+
+**Ecobee API credentials have now been supplied and configured locally for StayWhile.** Ecobee is therefore ready for a **credential-safe connectivity/discovery phase** (read-only verification that the credentials authenticate and can enumerate devices — same pattern already used for Nest's Phase A discovery) once that work is explicitly started. **Not tested this increment, per explicit instruction — no connectivity check, no discovery run, no code change.** **Credential values are never recorded here or anywhere in this repo** — only this non-secret status fact. No `.env*` file was read, inspected, or modified to record this.
+
+### Next step
+
+**Thermostat manual Refresh/Sync** is next, per the revised execution priority in the current-state banner at the top of this file — **not started**, per explicit instruction to stop after this HANDOFF update. Ecobee's credential-safe connectivity/discovery phase (see immediately above) is now unblocked whenever the user wants it prioritized, but has not been started either.
