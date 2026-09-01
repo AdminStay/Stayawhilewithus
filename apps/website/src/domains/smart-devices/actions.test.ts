@@ -5,11 +5,13 @@ const {
   mockDiscoverNestDevices,
   mockDiscoverAugustDevices,
   mockRefreshThermostats,
+  mockLogThermostatRefresh,
 } = vi.hoisted(() => ({
   mockRevalidatePath: vi.fn(),
   mockDiscoverNestDevices: vi.fn(),
   mockDiscoverAugustDevices: vi.fn(),
   mockRefreshThermostats: vi.fn(),
+  mockLogThermostatRefresh: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({
@@ -34,6 +36,7 @@ vi.mock("./services/nest-commands.service", () => ({
 
 vi.mock("./services/thermostat-refresh.service", () => ({
   refreshThermostats: mockRefreshThermostats,
+  logThermostatRefresh: mockLogThermostatRefresh,
 }));
 
 import {
@@ -220,5 +223,32 @@ describe("refreshThermostatsAction", () => {
       status: "failure",
       error: "raw string rejection",
     });
+  });
+
+  it("logs action_succeeded on success", async () => {
+    mockLogThermostatRefresh.mockReset();
+    mockRefreshThermostats.mockResolvedValueOnce({
+      providers: [],
+      refreshedAt: "2026-09-02T00:00:00.000Z",
+    });
+
+    await refreshThermostatsAction(IDLE_REFRESH);
+
+    expect(mockLogThermostatRefresh).toHaveBeenCalledWith(
+      "action_succeeded",
+      expect.objectContaining({ actorUserId: "user-1" }),
+    );
+  });
+
+  it("logs action_failed with the same sanitized message already returned to the UI on failure", async () => {
+    mockLogThermostatRefresh.mockReset();
+    mockRefreshThermostats.mockRejectedValueOnce(new Error("ForbiddenError"));
+
+    await refreshThermostatsAction(IDLE_REFRESH);
+
+    expect(mockLogThermostatRefresh).toHaveBeenCalledWith(
+      "action_failed",
+      expect.objectContaining({ error: "ForbiddenError" }),
+    );
   });
 });

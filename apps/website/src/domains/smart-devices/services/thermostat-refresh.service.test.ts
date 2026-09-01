@@ -607,3 +607,177 @@ describe("refreshThermostats — provider isolation", () => {
     expect(mockListCieloDevices).not.toHaveBeenCalled();
   });
 });
+
+describe("thermostat-refresh.service — diagnostic logging", () => {
+  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+
+  function loggedEvents(): Array<Record<string, unknown>> {
+    return consoleLogSpy.mock.calls.map((call) =>
+      JSON.parse(call[1] as string),
+    );
+  }
+
+  beforeEach(() => {
+    setNestEnv();
+    setCieloEnv();
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.providerDevice.findMany).mockReset().mockResolvedValue([]);
+    vi.mocked(prisma.smartDevice.findMany).mockReset().mockResolvedValue([]);
+    vi.mocked(prisma.smartDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    vi.mocked(prisma.providerDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    mockListDevices.mockReset().mockResolvedValue([]);
+    mockListCieloDevices.mockReset().mockResolvedValue([]);
+    mockTransaction
+      .mockReset()
+      .mockImplementation(async (arg) =>
+        Array.isArray(arg) ? Promise.all(arg) : arg,
+      );
+    consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    consoleLogSpy.mockRestore();
+    restoreEnv();
+  });
+
+  it("logs every event under the [thermostat-refresh] prefix, structured, at least once for a real run", async () => {
+    await refreshThermostats(actor);
+
+    expect(consoleLogSpy.mock.calls.length).toBeGreaterThan(0);
+    for (const call of consoleLogSpy.mock.calls) {
+      expect(call[0]).toBe("[thermostat-refresh]");
+      // Every logged payload must be valid, parseable structured JSON with
+      // a named event — never a raw string dump of something unexpected.
+      const parsed = JSON.parse(call[1] as string) as { event?: unknown };
+      expect(typeof parsed.event).toBe("string");
+    }
+  });
+
+  it("logs a provider_outcome event with status success for a provider that refreshed real devices", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      enabledProviderDevice("pd-1", "ext-1", "sd-1"),
+    ] as never);
+    mockListDevices.mockResolvedValueOnce([nestDevice("ext-1")]);
+
+    await refreshThermostats(actor);
+
+    expect(loggedEvents()).toContainEqual(
+      expect.objectContaining({
+        event: "provider_outcome",
+        provider: "NEST",
+        status: "success",
+        refreshed: 1,
+      }),
+    );
+  });
+
+  it("logs a provider_outcome event with status not_configured when a provider's credentials are missing", async () => {
+    delete process.env.CIELO_USERNAME;
+
+    await refreshThermostats(actor);
+
+    expect(loggedEvents()).toContainEqual(
+      expect.objectContaining({
+        event: "provider_outcome",
+        provider: "CIELO",
+        status: "not_configured",
+      }),
+    );
+  });
+
+  it("logs a provider_outcome event with status failure and the same sanitized message already returned to the UI when a provider call fails", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockRejectedValueOnce(
+      new Error("Request to /web/devices failed with 500"),
+    );
+
+    await refreshThermostats(actor);
+
+    expect(loggedEvents()).toContainEqual(
+      expect.objectContaining({
+        event: "provider_outcome",
+        provider: "CIELO",
+        status: "failure",
+        error: "Request to /web/devices failed with 500",
+      }),
+    );
+  });
+
+  it("logs the real, enforced authorization outcome at the service boundary — permission_denied when RBAC actually rejects the actor", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(refreshThermostats(actor)).rejects.toThrow();
+
+    expect(loggedEvents()).toContainEqual(
+      expect.objectContaining({
+        event: "permission_denied",
+        actorUserId: "user-1",
+        permission: "smart_devices:update",
+      }),
+    );
+  });
+
+  it("logs permission_granted at the service boundary when RBAC allows the actor", async () => {
+    await refreshThermostats(actor);
+
+    expect(loggedEvents()).toContainEqual(
+      expect.objectContaining({
+        event: "permission_granted",
+        actorUserId: "user-1",
+        permission: "smart_devices:update",
+      }),
+    );
+  });
+
+  it("SECRET-SAFETY: never logs any credential/env value, even across every event this run produces, including the not-configured case that names the missing env vars", async () => {
+    delete process.env.NEST_CLIENT_ID;
+
+    await refreshThermostats(actor);
+
+    const serialized = JSON.stringify(loggedEvents());
+    for (const secretLikeValue of [
+      "client-id",
+      "client-secret",
+      "project-id",
+      "refresh-token",
+      "cielo-user",
+      "cielo-pass",
+    ]) {
+      expect(serialized).not.toContain(secretLikeValue);
+    }
+    // The env VAR NAMES are allowed to appear (they're not secret — see
+    // getNestClientFromEnv()'s own thrown message, already shown to users
+    // elsewhere in this app), but no logged event should carry a `token`,
+    // `secret`, `password`, or `credential`-shaped field at all.
+    for (const event of loggedEvents()) {
+      for (const key of Object.keys(event)) {
+        expect(key.toLowerCase()).not.toMatch(
+          /token|secret|password|credential|clientid|clientsecret/,
+        );
+      }
+    }
+  });
+
+  it("SECRET-SAFETY: never logs raw provider metadata/payloads — only counts and status strings", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      enabledProviderDevice("pd-1", "ext-1", "sd-1"),
+    ] as never);
+    mockListDevices.mockResolvedValueOnce([
+      nestDevice("ext-1", {
+        rawTraits: {
+          "sdm.devices.traits.Info": { customName: "secret-device-label" },
+        },
+      }),
+    ]);
+
+    await refreshThermostats(actor);
+
+    const serialized = JSON.stringify(loggedEvents());
+    expect(serialized).not.toContain("secret-device-label");
+    expect(serialized).not.toContain("rawTraits");
+  });
+});

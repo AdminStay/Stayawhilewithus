@@ -29,6 +29,7 @@ import {
   type DiscoverySyncResult,
 } from "./services/provider-devices.service";
 import {
+  logThermostatRefresh,
   refreshThermostats,
   type ProviderRefreshOutcome,
 } from "./services/thermostat-refresh.service";
@@ -282,12 +283,21 @@ export async function refreshThermostatsAction(
     // without a manual reload — this page is a Server Component that reads
     // fresh on every render, so revalidating it is sufficient.
     revalidatePath(THERMOSTATS_PAGE_PATH);
+    logThermostatRefresh("action_succeeded", { actorUserId: actor.userId });
     return {
       status: "success",
       providers: result.providers,
       refreshedAt: result.refreshedAt,
     };
   } catch (err) {
+    // Covers both a genuine top-level failure inside refreshThermostats()
+    // (e.g. an RBAC denial — the only thing it still lets throw) and
+    // anything unexpected before it, e.g. getCurrentUser() itself failing.
+    // Same message this action already returns to the browser — already
+    // safe to log.
+    logThermostatRefresh("action_failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     return {
       status: "failure",
       error: err instanceof Error ? err.message : String(err),

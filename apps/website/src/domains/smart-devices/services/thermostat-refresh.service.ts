@@ -26,6 +26,32 @@ import { toSmartDeviceMetadata } from "./provider-devices.service";
  * data but only ever writes to SmartDevice rows that already exist.
  */
 
+/**
+ * Every diagnostic line this file (and refreshThermostatsAction in
+ * actions.ts) emits goes through this one function, always under the
+ * `[thermostat-refresh]` prefix, so a real Production Refresh is
+ * conclusively diagnosable from Vercel logs alone. Same convention as the
+ * existing `[nest-diag]` log in app/(dashboard)/thermostats/page.tsx —
+ * plain console.log, structured JSON, never gated behind anything.
+ *
+ * Hard rule for every call site below: only non-secret operational facts —
+ * actor id, provider name, counts, and status strings/messages that are
+ * already returned to the browser via ProviderRefreshOutcome (so if it's
+ * safe to show a VA in the UI, it's safe to log). Never a credential, env
+ * value, token, raw provider payload, or full API response. See
+ * thermostat-refresh.service.test.ts's dedicated secret-safety tests for
+ * the enforced proof.
+ */
+export function logThermostatRefresh(
+  event: string,
+  data: Record<string, unknown> = {},
+): void {
+  console.log(
+    "[thermostat-refresh]",
+    JSON.stringify({ event, ...data, timestamp: new Date().toISOString() }),
+  );
+}
+
 function getNestClientFromEnv(): NestClient {
   const clientId = process.env.NEST_CLIENT_ID;
   const clientSecret = process.env.NEST_CLIENT_SECRET;
@@ -88,8 +114,15 @@ export async function refreshNestTelemetry(
     },
     select: { id: true, externalDeviceId: true, smartDeviceId: true },
   });
+  logThermostatRefresh("nest_eligible_rows", {
+    actorUserId: actor.userId,
+    eligibleCount: enabledDevices.length,
+  });
 
   if (enabledDevices.length === 0) {
+    logThermostatRefresh("nest_no_eligible_rows", {
+      actorUserId: actor.userId,
+    });
     return { refreshed: 0, notReturnedByProvider: 0 };
   }
 
@@ -97,6 +130,10 @@ export async function refreshNestTelemetry(
   // never a per-device call, and never anything but a read (no command
   // method is imported into this file).
   const freshDevices = await client.listDevices();
+  logThermostatRefresh("nest_devices_returned", {
+    actorUserId: actor.userId,
+    returnedCount: freshDevices.length,
+  });
   const freshByExternalId = new Map(
     freshDevices.map((device) => [device.externalDeviceId, device]),
   );
@@ -144,7 +181,23 @@ export async function refreshNestTelemetry(
 
   if (writes.length > 0) {
     await prisma.$transaction(writes);
+  } else {
+    // Distinct, explicitly named case: the provider call succeeded and
+    // returned devices, but none of them matched an eligible row by
+    // externalDeviceId — worth telling apart from "provider returned
+    // nothing at all" or "provider call failed."
+    logThermostatRefresh("nest_zero_matched", {
+      actorUserId: actor.userId,
+      eligibleCount: enabledDevices.length,
+      returnedCount: freshDevices.length,
+    });
   }
+
+  logThermostatRefresh("nest_refresh_completed", {
+    actorUserId: actor.userId,
+    refreshed: writes.length / 2,
+    notReturnedByProvider,
+  });
 
   return { refreshed: writes.length / 2, notReturnedByProvider };
 }
@@ -194,13 +247,24 @@ export async function refreshCieloTelemetry(
     where: { provider: "CIELO" },
     select: { id: true, externalDeviceId: true },
   });
+  logThermostatRefresh("cielo_eligible_rows", {
+    actorUserId: actor.userId,
+    eligibleCount: existingDevices.length,
+  });
 
   if (existingDevices.length === 0) {
+    logThermostatRefresh("cielo_no_eligible_rows", {
+      actorUserId: actor.userId,
+    });
     return { refreshed: 0, notReturnedByProvider: 0 };
   }
 
   const client = new CieloClient({ username, password });
   const freshDevices = await client.listDevices();
+  logThermostatRefresh("cielo_devices_returned", {
+    actorUserId: actor.userId,
+    returnedCount: freshDevices.length,
+  });
   const freshByExternalId = new Map(
     freshDevices.map((device) => [device.id, device]),
   );
@@ -231,7 +295,19 @@ export async function refreshCieloTelemetry(
 
   if (writes.length > 0) {
     await prisma.$transaction(writes);
+  } else {
+    logThermostatRefresh("cielo_zero_matched", {
+      actorUserId: actor.userId,
+      eligibleCount: existingDevices.length,
+      returnedCount: freshDevices.length,
+    });
   }
+
+  logThermostatRefresh("cielo_refresh_completed", {
+    actorUserId: actor.userId,
+    refreshed: writes.length,
+    notReturnedByProvider,
+  });
 
   return { refreshed: writes.length, notReturnedByProvider };
 }
@@ -268,22 +344,45 @@ function isNotConfiguredError(err: unknown): boolean {
 async function refreshNestProvider(
   actor: AuthContext,
 ): Promise<ProviderRefreshOutcome> {
+  logThermostatRefresh("provider_start", {
+    actorUserId: actor.userId,
+    provider: "NEST",
+  });
   try {
     const result = await refreshNestTelemetry(actor);
-    return {
+    const outcome: ProviderRefreshOutcome = {
       provider: "NEST",
       status: "success",
       refreshed: result.refreshed,
       notReturnedByProvider: result.notReturnedByProvider,
     };
+    logThermostatRefresh("provider_outcome", {
+      actorUserId: actor.userId,
+      ...outcome,
+    });
+    return outcome;
   } catch (err) {
-    if (isNotConfiguredError(err))
+    if (isNotConfiguredError(err)) {
+      logThermostatRefresh("provider_outcome", {
+        actorUserId: actor.userId,
+        provider: "NEST",
+        status: "not_configured",
+      });
       return { provider: "NEST", status: "not_configured" };
-    return {
+    }
+    // Same message ProviderRefreshOutcome.error already carries back to the
+    // browser via RefreshThermostatsButton — already safe to show a VA, so
+    // already safe to log. Never the raw thrown object, only its message
+    // (HttpClient-shaped errors in this codebase are always "Request to
+    // ... failed with <status>" — never a credential value).
+    const error = err instanceof Error ? err.message : String(err);
+    logThermostatRefresh("provider_outcome", {
+      actorUserId: actor.userId,
       provider: "NEST",
       status: "failure",
-      error: err instanceof Error ? err.message : String(err),
-    };
+      error,
+    });
+    return { provider: "NEST", status: "failure", error };
   }
 }
 
@@ -296,22 +395,40 @@ async function refreshNestProvider(
 async function refreshCieloProvider(
   actor: AuthContext,
 ): Promise<ProviderRefreshOutcome> {
+  logThermostatRefresh("provider_start", {
+    actorUserId: actor.userId,
+    provider: "CIELO",
+  });
   try {
     const result = await refreshCieloTelemetry(actor);
-    return {
+    const outcome: ProviderRefreshOutcome = {
       provider: "CIELO",
       status: "success",
       refreshed: result.refreshed,
       notReturnedByProvider: result.notReturnedByProvider,
     };
+    logThermostatRefresh("provider_outcome", {
+      actorUserId: actor.userId,
+      ...outcome,
+    });
+    return outcome;
   } catch (err) {
-    if (isNotConfiguredError(err))
+    if (isNotConfiguredError(err)) {
+      logThermostatRefresh("provider_outcome", {
+        actorUserId: actor.userId,
+        provider: "CIELO",
+        status: "not_configured",
+      });
       return { provider: "CIELO", status: "not_configured" };
-    return {
+    }
+    const error = err instanceof Error ? err.message : String(err);
+    logThermostatRefresh("provider_outcome", {
+      actorUserId: actor.userId,
       provider: "CIELO",
       status: "failure",
-      error: err instanceof Error ? err.message : String(err),
-    };
+      error,
+    });
+    return { provider: "CIELO", status: "failure", error };
   }
 }
 
@@ -335,12 +452,42 @@ async function refreshCieloProvider(
 export async function refreshThermostats(
   actor: AuthContext,
 ): Promise<RefreshThermostatsResult> {
-  await assertPermission(actor, "smart_devices:update");
+  logThermostatRefresh("refresh_requested", { actorUserId: actor.userId });
+
+  // Logged explicitly at this exact boundary — the project has unresolved
+  // history (see the `[nest-diag]` diagnostic still in
+  // app/(dashboard)/thermostats/page.tsx, added for a real, still-open Nest
+  // permission discrepancy) of a computed "can do this" check disagreeing
+  // with actual enforcement. This makes the real, enforced Refresh
+  // authorization outcome directly visible in logs, independent of what the
+  // page's own button-visibility check (a separate hasPermission call)
+  // decided.
+  try {
+    await assertPermission(actor, "smart_devices:update");
+  } catch (err) {
+    logThermostatRefresh("permission_denied", {
+      actorUserId: actor.userId,
+      permission: "smart_devices:update",
+    });
+    throw err;
+  }
+  logThermostatRefresh("permission_granted", {
+    actorUserId: actor.userId,
+    permission: "smart_devices:update",
+  });
 
   const providers: ProviderRefreshOutcome[] = [
     await refreshNestProvider(actor),
     await refreshCieloProvider(actor),
   ];
+
+  logThermostatRefresh("refresh_completed", {
+    actorUserId: actor.userId,
+    providers: providers.map((p) => ({
+      provider: p.provider,
+      status: p.status,
+    })),
+  });
 
   return { providers, refreshedAt: new Date().toISOString() };
 }
