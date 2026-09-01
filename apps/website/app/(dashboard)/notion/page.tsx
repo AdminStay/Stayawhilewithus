@@ -1,6 +1,8 @@
 import { PageHeader, SectionHeader } from "@stayw/ui";
 
+import { searchNotionAction } from "@/domains/integrations/actions";
 import { NotionListingsSearch } from "@/domains/integrations/components/NotionListingsSearch";
+import { NotionSearch } from "@/domains/integrations/components/NotionSearch";
 import {
   getNotionIntegrationConfigStatus,
   listNotionListings,
@@ -39,11 +41,15 @@ export default async function NotionPage() {
     <div>
       <PageHeader
         title="Notion"
-        subtitle="Real, read-only listings from Notion's 'View of Listings' — search by name, keyword, or region."
+        subtitle="Real, read-only search across everything shared with the StayWhile Notion integration — properties, procedures, guidebooks, and more."
       />
       <div className="space-y-10">
         <div>
-          <SectionHeader title="Listings" size="lg" />
+          <SectionHeader title="Search Notion" size="lg" />
+          <NotionSearch action={searchNotionAction} />
+        </div>
+        <div>
+          <SectionHeader title="Property Listings" size="lg" />
           <NotionListingsSearch listings={listings} />
         </div>
       </div>

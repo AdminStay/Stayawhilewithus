@@ -16,6 +16,8 @@ import type {
   NotionListingRecord,
   NotionSearchResponse,
   NotionSearchResult,
+  NotionSearchResultItem,
+  NotionSearchSourceType,
   NotionUser,
 } from "./types";
 
@@ -23,6 +25,8 @@ export type {
   NotionHighlight,
   NotionDataSourceQueryResult,
   NotionListingRecord,
+  NotionSearchResultItem,
+  NotionSearchSourceType,
 } from "./types";
 
 /**
@@ -48,8 +52,31 @@ function extractTitle(result: NotionSearchResult): string {
     : "(untitled page)";
 }
 
+/**
+ * Labels a general search() result using only fields Notion's /search
+ * response already includes on every result (never a second lookup):
+ * "database" for a database object itself, "database_row" for a page whose
+ * parent is a database (e.g. a "View of Listings" row, or a row in some
+ * other database this integration can see), "page" for anything else
+ * (a standalone workspace page or a sub-page of another page).
+ */
+function deriveSourceType(result: NotionSearchResult): NotionSearchSourceType {
+  if (result.object === "database") return "database";
+  if (result.parent?.type === "database_id") return "database_row";
+  return "page";
+}
+
 const BASE_URL = "https://api.notion.com/v1";
 const NOTION_VERSION = "2022-06-28";
+
+// Hard cap independent of cycle detection below — belt-and-suspenders, not a
+// substitute for it. A real user-facing search call site passes a much
+// smaller maxPages (see integrations.service.ts); this default only bounds
+// the rare unscoped/no-query enumeration case (used by the one-time
+// accessible-scope discovery script), matching the discipline already
+// applied to MAX_DATA_SOURCE_PAGES below.
+const MAX_SEARCH_PAGES = 50;
+const SEARCH_PAGE_SIZE = 50;
 
 /**
  * Notion's data-source query endpoint (POST /data_sources/{id}/query) did
@@ -280,6 +307,80 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
       url: result.url ?? null,
       lastEditedTime: result.last_edited_time ?? null,
     }));
+  }
+
+  /**
+   * General, read-only search across every page/database this integration
+   * token can see — real Notion /search, optionally with a `query` string
+   * (Notion's own relevance ranking, not client-side filtering), fully
+   * paginated up to `maxPages`. Returns only the narrow NotionSearchResultItem
+   * shape (title/url/lastEditedTime/sourceType) — never a raw Notion object,
+   * never page/block content (this endpoint only ever returns titles and
+   * metadata, not page bodies). Same cycle-detection + hard-cap discipline
+   * as listDataSourceRecords()/queryDataSource() below. A caller doing a
+   * live, user-typed search should pass a small `maxPages` (see
+   * integrations.service.ts) — this method's own default (MAX_SEARCH_PAGES)
+   * only bounds the unscoped/no-query enumeration case used by the
+   * accessible-scope discovery script, never a full unbounded workspace
+   * crawl on every keystroke.
+   */
+  async search(
+    options: { query?: string; maxPages?: number } = {},
+  ): Promise<NotionSearchResultItem[]> {
+    const { query, maxPages = MAX_SEARCH_PAGES } = options;
+    const items: NotionSearchResultItem[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    let pageCount = 0;
+
+    for (;;) {
+      if (pageCount >= maxPages) {
+        throw new Error(
+          `Notion search exceeded the maximum of ${maxPages} pages — refusing to continue.`,
+        );
+      }
+      pageCount++;
+
+      const body: Record<string, unknown> = { page_size: SEARCH_PAGE_SIZE };
+      if (query) body.query = query;
+      if (cursor) body.start_cursor = cursor;
+
+      const response = await this.http.request<NotionSearchResponse>(
+        "/search",
+        { method: "POST", body: JSON.stringify(body) },
+      );
+
+      for (const result of response.results) {
+        const sourceType = deriveSourceType(result);
+        items.push({
+          id: result.id,
+          title: extractTitle(result),
+          url: result.url ?? null,
+          lastEditedTime: result.last_edited_time ?? null,
+          sourceType,
+          parentDatabaseId:
+            sourceType === "database_row"
+              ? (result.parent?.database_id ?? null)
+              : null,
+        });
+      }
+
+      if (!response.has_more) break;
+      if (!response.next_cursor) {
+        throw new Error(
+          "Notion reported more results (has_more: true) but returned no next_cursor — refusing to silently truncate.",
+        );
+      }
+      if (seenCursors.has(response.next_cursor)) {
+        throw new Error(
+          "Notion returned a repeated pagination cursor — refusing to loop.",
+        );
+      }
+      seenCursors.add(response.next_cursor);
+      cursor = response.next_cursor;
+    }
+
+    return items;
   }
 
   /**

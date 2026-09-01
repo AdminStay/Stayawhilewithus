@@ -39,11 +39,13 @@ vi.mock("@/platform/audit/record-audit", () => ({
 const mockListRecentlyEdited = vi.fn();
 const mockQueryDataSource = vi.fn();
 const mockListDataSourceRecords = vi.fn();
+const mockSearch = vi.fn();
 vi.mock("@stayw/integrations/notion", () => ({
   NotionClient: vi.fn().mockImplementation(() => ({
     listRecentlyEdited: mockListRecentlyEdited,
     queryDataSource: mockQueryDataSource,
     listDataSourceRecords: mockListDataSourceRecords,
+    search: mockSearch,
   })),
 }));
 
@@ -59,6 +61,7 @@ vi.mock("@stayw/integrations/ownerrez", () => ({
 import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
 
+import { NOTION_SEARCH_EXCLUDED_DATABASE_IDS } from "../config/notion-search-exclusions";
 import {
   beginDeviceSync,
   disconnectIntegration,
@@ -70,6 +73,7 @@ import {
   getOwnerRezProperties,
   listIntegrationConnections,
   listNotionListings,
+  searchNotionContent,
 } from "./integrations.service";
 
 import { recordAudit } from "@/platform/audit/record-audit";
@@ -680,6 +684,311 @@ describe("listNotionListings", () => {
 
     await expect(listNotionListings(actor)).rejects.toThrow();
     expect(mockListDataSourceRecords).not.toHaveBeenCalled();
+  });
+});
+
+describe("searchNotionContent", () => {
+  const originalToken = process.env.NOTION_API_KEY;
+  const originalDataSourceId = process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+  afterEach(() => {
+    process.env.NOTION_API_KEY = originalToken;
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = originalDataSourceId;
+  });
+
+  it("reports not configured when NOTION_API_KEY is unset, without calling Notion", async () => {
+    delete process.env.NOTION_API_KEY;
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+
+    const result = await searchNotionContent(actor, "pool");
+
+    expect(result).toEqual({ configured: false });
+    expect(mockSearch).not.toHaveBeenCalled();
+    expect(mockListDataSourceRecords).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty result set for a blank query without calling Notion", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+
+    const result = await searchNotionContent(actor, "   ");
+
+    expect(result).toEqual({
+      configured: true,
+      ok: true,
+      query: "",
+      results: [],
+    });
+    expect(mockSearch).not.toHaveBeenCalled();
+    expect(mockListDataSourceRecords).not.toHaveBeenCalled();
+  });
+
+  it("does not call listDataSourceRecords when NOTION_LISTINGS_DATA_SOURCE_ID is unset, but still runs the general search", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    delete process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockSearch.mockResolvedValueOnce([]);
+
+    const result = await searchNotionContent(actor, "pool");
+
+    expect(mockListDataSourceRecords).not.toHaveBeenCalled();
+    expect(mockSearch).toHaveBeenCalledWith({ query: "pool", maxPages: 3 });
+    expect(result).toEqual({
+      configured: true,
+      ok: true,
+      query: "pool",
+      results: [],
+    });
+  });
+
+  it("returns a matching listing as a richer 'Property listing' card, with region and address as the snippet", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = "ds-123";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListDataSourceRecords.mockResolvedValueOnce([
+      {
+        id: "listing-1",
+        url: "https://notion.so/listing-1",
+        name: "Moonlit Cove",
+        address: "123 Main St",
+        bedrooms: 3,
+        bathrooms: 2,
+        guests: 6,
+        directBooking: null,
+        airbnbLink: null,
+        vrboLink: null,
+        googleDrivePhotosUrl: null,
+        guidebookUrl: null,
+      },
+    ]);
+    mockSearch.mockResolvedValueOnce([]);
+
+    const result = await searchNotionContent(actor, "moonlit");
+
+    expect(result).toEqual({
+      configured: true,
+      ok: true,
+      query: "moonlit",
+      results: [
+        {
+          id: "listing-1",
+          title: "Moonlit Cove",
+          url: "https://notion.so/listing-1",
+          lastEditedTime: null,
+          contentType: "Property listing",
+          region: "SRQ",
+          snippet: "123 Main St",
+        },
+      ],
+    });
+  });
+
+  it("labels a general search result by its sourceType and attaches a resolvable region when the title matches the known reference table", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    delete process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockSearch.mockResolvedValueOnce([
+      {
+        id: "db-1",
+        title: "View of Listings",
+        url: "https://notion.so/db-1",
+        lastEditedTime: "2026-08-24T00:00:00.000Z",
+        sourceType: "database",
+      },
+      {
+        id: "row-1",
+        title: "Pool Cleaning Schedule",
+        url: "https://notion.so/row-1",
+        lastEditedTime: "2026-08-27T00:00:00.000Z",
+        sourceType: "database_row",
+      },
+      {
+        id: "page-1",
+        title: "Moonlit Cove",
+        url: "https://notion.so/page-1",
+        lastEditedTime: "2026-08-04T00:00:00.000Z",
+        sourceType: "page",
+      },
+    ]);
+
+    const result = await searchNotionContent(actor, "moonlit");
+
+    expect(result).toEqual({
+      configured: true,
+      ok: true,
+      query: "moonlit",
+      results: [
+        expect.objectContaining({
+          id: "db-1",
+          contentType: "Notion database",
+          region: null,
+          snippet: null,
+        }),
+        expect.objectContaining({
+          id: "row-1",
+          contentType: "Database row",
+          region: null,
+        }),
+        expect.objectContaining({
+          id: "page-1",
+          contentType: "Notion page",
+          region: "SRQ",
+        }),
+      ],
+    });
+  });
+
+  it("dedupes a general search result that is the same object as an already-matched listing", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    process.env.NOTION_LISTINGS_DATA_SOURCE_ID = "ds-123";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListDataSourceRecords.mockResolvedValueOnce([
+      {
+        id: "row-1",
+        url: "https://notion.so/row-1",
+        name: "Moonlit Cove",
+        address: null,
+        bedrooms: null,
+        bathrooms: null,
+        guests: null,
+        directBooking: null,
+        airbnbLink: null,
+        vrboLink: null,
+        googleDrivePhotosUrl: null,
+        guidebookUrl: null,
+      },
+    ]);
+    mockSearch.mockResolvedValueOnce([
+      {
+        id: "row-1",
+        title: "Moonlit Cove",
+        url: "https://notion.so/row-1",
+        lastEditedTime: "2026-08-04T00:00:00.000Z",
+        sourceType: "database_row",
+      },
+    ]);
+
+    const result = await searchNotionContent(actor, "moonlit");
+
+    expect(result.configured).toBe(true);
+    if (result.configured && result.ok) {
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0]).toEqual(
+        expect.objectContaining({
+          id: "row-1",
+          contentType: "Property listing",
+        }),
+      );
+    }
+  });
+
+  it("surfaces a live API failure as ok: false rather than swallowing it", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    delete process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockSearch.mockRejectedValueOnce(new Error("network error"));
+
+    const result = await searchNotionContent(actor, "pool");
+
+    expect(result).toEqual({
+      configured: true,
+      ok: false,
+      query: "pool",
+      error: "network error",
+    });
+  });
+
+  it("propagates denial when the actor lacks integrations:read", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(searchNotionContent(actor, "pool")).rejects.toThrow();
+    expect(mockSearch).not.toHaveBeenCalled();
+    expect(mockListDataSourceRecords).not.toHaveBeenCalled();
+  });
+
+  it("excludes a row belonging to a known staff/contact-directory database, by id, while keeping an unrelated operational row", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    delete process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    const [excludedDbId] = NOTION_SEARCH_EXCLUDED_DATABASE_IDS;
+    mockSearch.mockResolvedValueOnce([
+      {
+        id: "staff-row-1",
+        title: "Jenny - CEO and Founder",
+        url: "https://notion.so/staff-row-1",
+        lastEditedTime: "2026-07-15T00:00:00.000Z",
+        sourceType: "database_row",
+        parentDatabaseId: excludedDbId,
+      },
+      {
+        id: "sop-row-1",
+        title: "SOP for VRBO & Direct Bookings",
+        url: "https://notion.so/sop-row-1",
+        lastEditedTime: "2026-07-14T00:00:00.000Z",
+        sourceType: "database_row",
+        parentDatabaseId: "some-operational-database-id",
+      },
+    ]);
+
+    const result = await searchNotionContent(actor, "vrbo");
+
+    expect(result.configured).toBe(true);
+    if (result.configured && result.ok) {
+      expect(result.results.map((r) => r.id)).toEqual(["sop-row-1"]);
+      expect(result.results[0]?.title).toBe("SOP for VRBO & Direct Bookings");
+    }
+  });
+
+  it("excludes the excluded database object itself from results", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    delete process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    const [excludedDbId] = NOTION_SEARCH_EXCLUDED_DATABASE_IDS;
+    mockSearch.mockResolvedValueOnce([
+      {
+        id: excludedDbId,
+        title: "People",
+        url: "https://notion.so/people-db",
+        lastEditedTime: "2026-06-04T00:00:00.000Z",
+        sourceType: "database",
+        parentDatabaseId: null,
+      },
+    ]);
+
+    const result = await searchNotionContent(actor, "people");
+
+    expect(result.configured).toBe(true);
+    if (result.configured && result.ok) {
+      expect(result.results).toHaveLength(0);
+    }
+  });
+
+  it("does not exclude operational content just because its title mentions a staff member's name", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    delete process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockSearch.mockResolvedValueOnce([
+      {
+        id: "faq-1",
+        title: "Michelle's Guide to Early Check-in Requests",
+        url: "https://notion.so/faq-1",
+        lastEditedTime: "2026-08-26T00:00:00.000Z",
+        sourceType: "page",
+        parentDatabaseId: null,
+      },
+    ]);
+
+    const result = await searchNotionContent(actor, "check-in");
+
+    expect(result.configured).toBe(true);
+    if (result.configured && result.ok) {
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0]?.title).toBe(
+        "Michelle's Guide to Early Check-in Requests",
+      );
+    }
   });
 });
 

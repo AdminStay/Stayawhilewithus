@@ -26,6 +26,7 @@ import type {
   IntegrationHighlights,
   NotionListingWithRegion,
 } from "../services/integrations.service";
+import { matchesListingQuery } from "../services/notion-listing-match";
 import { isSafeHttpUrl } from "./notion-link.utils";
 
 const ALL_REGIONS_VALUE = "";
@@ -79,20 +80,11 @@ export function NotionListingsSearch({
     return allItems.filter((item) => {
       if (name && !item.name.toLowerCase().includes(name)) return false;
 
-      if (keyword) {
-        // Direct booking is only meaningful "content" for keyword search
-        // when it's descriptive text, not a link — a URL isn't searchable
-        // keyword content.
-        const keywordFields = [
-          item.name,
-          item.address,
-          isSafeHttpUrl(item.directBooking) ? null : item.directBooking,
-        ].filter((value): value is string => Boolean(value));
-        const matchesKeyword = keywordFields.some((field) =>
-          field.toLowerCase().includes(keyword),
-        );
-        if (!matchesKeyword) return false;
-      }
+      // Same match rule as the unified "Search Notion" feature above uses
+      // for a listing (see notion-listing-match.ts) — kept as one shared,
+      // tested function so the two features can never silently drift apart
+      // on what counts as a match.
+      if (keyword && !matchesListingQuery(item, keywordQuery)) return false;
 
       if (region && item.region !== region) return false;
 

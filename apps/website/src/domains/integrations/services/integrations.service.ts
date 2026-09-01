@@ -10,6 +10,8 @@ import {
   NotionClient,
   type NotionHighlight,
   type NotionListingRecord,
+  type NotionSearchResultItem,
+  type NotionSearchSourceType,
 } from "@stayw/integrations/notion";
 import {
   OwnerrezClient,
@@ -20,7 +22,10 @@ import {
 export type { IntegrationConnection };
 
 import type { DisconnectIntegrationInput } from "../schemas/integrations.schema";
+import { matchesListingQuery } from "./notion-listing-match";
+import { isExcludedFromVaSearch } from "./notion-search-exclusions";
 import { resolveRegion } from "./notion-region-matching";
+import { UNKNOWN_REGION } from "../config/notion-region-reference";
 
 import { recordAudit } from "@/platform/audit/record-audit";
 
@@ -541,6 +546,143 @@ export async function getOwnerRezProperties(
       configured: true,
       ok: false,
       error: err instanceof Error ? err.message : "OwnerRez request failed.",
+    };
+  }
+}
+
+// How a general search() result's sourceType (see NotionClient.search()) is
+// labeled on a result card — never invented per-call, one fixed mapping.
+const SOURCE_TYPE_LABEL: Record<NotionSearchSourceType, string> = {
+  database: "Notion database",
+  database_row: "Database row",
+  page: "Notion page",
+};
+
+/**
+ * One VA-facing search result card — either a matched "View of Listings"
+ * row (richer: region + address-as-snippet, reusing exactly the same match
+ * rule as the existing Listings section) or a general workspace match
+ * (whatever else is shared with the integration: SOPs, FAQs, property
+ * pages, directories, etc.) — never a raw Notion object, never page/block
+ * content beyond a title.
+ */
+export interface NotionSearchResultCard {
+  id: string;
+  title: string;
+  url: string | null;
+  lastEditedTime: string | null;
+  contentType: string;
+  region: string | null;
+  snippet: string | null;
+}
+
+export type NotionSearchState =
+  | { configured: false }
+  | {
+      configured: true;
+      ok: true;
+      query: string;
+      results: NotionSearchResultCard[];
+    }
+  | { configured: true; ok: false; query: string; error: string };
+
+// A live, user-typed query only needs Notion's own relevance-ranked top
+// results, not an exhaustive workspace crawl — kept small and separate from
+// NotionClient.search()'s own default cap (used by the one-time,
+// unscoped accessible-scope discovery script only).
+const LIVE_SEARCH_MAX_PAGES = 3;
+
+/**
+ * The unified "Search Notion" feature backing the /notion page's search box
+ * (see NotionSearch.tsx). Combines two real, read-only reads, both against
+ * exactly what's already shared with this integration — never a client-side
+ * dump of full workspace content:
+ *
+ *  1. A live, server-side Notion /search(query) call (NotionClient.search())
+ *     — whatever pages/databases this integration can see, Notion's own
+ *     relevance ranking, minimal fields only (title/url/lastEditedTime/
+ *     sourceType).
+ *  2. If NOTION_LISTINGS_DATA_SOURCE_ID is configured, the same
+ *     listDataSourceRecords() read the existing Listings section already
+ *     uses, filtered by the same matchesListingQuery() rule that section's
+ *     keyword filter uses — richer result (region + address as a snippet)
+ *     for a property-listing match specifically.
+ *
+ * Results are merged, listing matches first (richer context), general
+ * matches after (deduped by id — a listing row would otherwise also surface
+ * through /search as a lower-context duplicate of the same object).
+ */
+export async function searchNotionContent(
+  actor: AuthContext,
+  rawQuery: string,
+): Promise<NotionSearchState> {
+  await assertPermission(actor, "integrations:read");
+
+  const token = process.env.NOTION_API_KEY;
+  if (!token) return { configured: false };
+
+  const query = rawQuery.trim();
+  if (!query) return { configured: true, ok: true, query, results: [] };
+
+  try {
+    const client = new NotionClient({ token });
+
+    const dataSourceId = process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+    const listingMatches: NotionSearchResultCard[] = [];
+    if (dataSourceId) {
+      const listings = await client.listDataSourceRecords(dataSourceId);
+      for (const listing of listings) {
+        if (!matchesListingQuery(listing, query)) continue;
+        listingMatches.push({
+          id: listing.id,
+          title: listing.name,
+          url: listing.url,
+          lastEditedTime: null,
+          contentType: "Property listing",
+          region: resolveRegion(listing.name),
+          snippet: listing.address,
+        });
+      }
+    }
+
+    const seenIds = new Set(listingMatches.map((r) => r.id));
+    const generalResults = await client.search({
+      query,
+      maxPages: LIVE_SEARCH_MAX_PAGES,
+    });
+    const generalCards: NotionSearchResultCard[] = generalResults
+      .filter((r: NotionSearchResultItem) => !seenIds.has(r.id))
+      // VA search is an operational-knowledge search, not a browser for
+      // every object the integration token happens to have access to — see
+      // notion-search-exclusions.ts. Excluded by real database id only,
+      // never by title, so operational content is never dropped just
+      // because it mentions a person's name.
+      .filter((r: NotionSearchResultItem) => !isExcludedFromVaSearch(r))
+      .map((r: NotionSearchResultItem) => {
+        const region = resolveRegion(r.title);
+        return {
+          id: r.id,
+          title: r.title,
+          url: r.url,
+          lastEditedTime: r.lastEditedTime,
+          contentType: SOURCE_TYPE_LABEL[r.sourceType],
+          region: region === UNKNOWN_REGION ? null : region,
+          snippet: null,
+        };
+      });
+
+    return {
+      configured: true,
+      ok: true,
+      query,
+      results: [...listingMatches, ...generalCards],
+    };
+  } catch (err) {
+    return {
+      configured: true,
+      ok: false,
+      query,
+      error: err instanceof Error ? err.message : "Notion search failed.",
     };
   }
 }

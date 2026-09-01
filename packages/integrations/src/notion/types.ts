@@ -20,12 +20,26 @@ export interface NotionTitleProperty {
   title: NotionRichText[];
 }
 
+/**
+ * Where a "page" object lives — a database row (`database_id`), a sub-page
+ * of another page (`page_id`), or a top-level workspace page
+ * (`workspace`). Always present on every real Notion page/database object;
+ * used only to label a search result's content type, never to fetch
+ * anything further.
+ */
+export interface NotionParent {
+  type: string;
+  database_id?: string;
+  page_id?: string;
+}
+
 export interface NotionSearchResult {
   id: string;
   /** "page" | "database" — Notion's two searchable object types. */
   object: string;
   url?: string;
   last_edited_time?: string;
+  parent?: NotionParent;
   /** Present on "database" objects — their title lives here, not in `properties`. */
   title?: NotionRichText[];
   /** Present on "page" objects — the title lives in whichever property has type "title", which varies per database schema. */
@@ -45,6 +59,38 @@ export interface NotionHighlight {
   title: string;
   url: string | null;
   lastEditedTime: string | null;
+}
+
+/**
+ * What kind of Notion object a general search() result is — derived only
+ * from fields Notion's /search already returns on every result (`object`,
+ * `parent.type`), never from an extra lookup. "database_row" means a page
+ * that lives inside some database (e.g. a "View of Listings" row, or a row
+ * in an unrelated database) — distinguished from a standalone "page" so the
+ * UI can label results honestly instead of calling everything just "page."
+ */
+export type NotionSearchSourceType = "database" | "database_row" | "page";
+
+/**
+ * One general-search result reduced to exactly what a result card needs —
+ * never the raw Notion object, never page/block content (search() only
+ * calls Notion's /search, which returns titles/metadata, not body text).
+ */
+export interface NotionSearchResultItem {
+  id: string;
+  title: string;
+  url: string | null;
+  lastEditedTime: string | null;
+  sourceType: NotionSearchSourceType;
+  /**
+   * The id of the database this result lives in, when `sourceType` is
+   * "database_row" — Notion's /search already returns this on every row
+   * result (`parent.database_id`), so identifying which database a row
+   * belongs to (e.g. for excluding a known staff/contact-directory database
+   * from a search feature) needs no extra API call. Always null for
+   * "database" and "page" results.
+   */
+  parentDatabaseId: string | null;
 }
 
 /** Result of a one-row proof read against a specific data source — never the row's full content. */

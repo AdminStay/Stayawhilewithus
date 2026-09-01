@@ -2,11 +2,16 @@
 
 import { revalidatePath } from "next/cache";
 
-import { disconnectIntegrationSchema } from "./schemas/integrations.schema";
+import {
+  disconnectIntegrationSchema,
+  searchNotionSchema,
+} from "./schemas/integrations.schema";
 import {
   beginDeviceSync,
   disconnectIntegration,
   finishDeviceSync,
+  searchNotionContent,
+  type NotionSearchState,
 } from "./services/integrations.service";
 
 import {
@@ -142,4 +147,26 @@ export async function syncCieloDevicesAction(
   _prevState: SyncActionState,
 ): Promise<SyncActionState> {
   return runDeviceSync(connectionId, "CIELO", syncCieloDevices);
+}
+
+/**
+ * Bound to the "Search Notion" box's <form action> via useActionState (see
+ * NotionSearch.tsx) — a submit-triggered live search, not a per-keystroke
+ * call. An empty/whitespace-only query (e.g. the box was cleared and
+ * re-submitted) resolves to the idle state rather than a thrown validation
+ * error, since that's a normal "nothing to search" case, not a real input
+ * error.
+ */
+export async function searchNotionAction(
+  _prevState: NotionSearchState | { status: "idle" },
+  formData: FormData,
+): Promise<NotionSearchState | { status: "idle" }> {
+  const actor = await getCurrentUser();
+
+  const parsed = searchNotionSchema.safeParse({
+    query: formData.get("query"),
+  });
+  if (!parsed.success) return { status: "idle" };
+
+  return searchNotionContent(actor, parsed.data.query);
 }

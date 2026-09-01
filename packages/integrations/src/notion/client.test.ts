@@ -170,6 +170,237 @@ describe("NotionClient", () => {
     });
   });
 
+  describe("search", () => {
+    it("sends a bare /search request with no query field when none is given", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      await client.search();
+
+      expect(mockRequest).toHaveBeenCalledWith("/search", {
+        method: "POST",
+        body: JSON.stringify({ page_size: 50 }),
+      });
+    });
+
+    it("includes the query string when one is given", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      await client.search({ query: "guidebook" });
+
+      expect(mockRequest).toHaveBeenCalledWith("/search", {
+        method: "POST",
+        body: JSON.stringify({ page_size: 50, query: "guidebook" }),
+      });
+    });
+
+    it("labels a database object as sourceType 'database'", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          {
+            id: "db1",
+            object: "database",
+            url: "https://notion.so/db1",
+            last_edited_time: "2026-08-01T00:00:00.000Z",
+            title: [{ plain_text: "View of Listings" }],
+          },
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const [result] = await client.search();
+
+      expect(result).toEqual({
+        id: "db1",
+        title: "View of Listings",
+        url: "https://notion.so/db1",
+        lastEditedTime: "2026-08-01T00:00:00.000Z",
+        sourceType: "database",
+        parentDatabaseId: null,
+      });
+    });
+
+    it("labels a page whose parent is a database as sourceType 'database_row' and captures its parentDatabaseId", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          {
+            id: "row1",
+            object: "page",
+            parent: { type: "database_id", database_id: "db1" },
+            properties: {
+              Name: { type: "title", title: [{ plain_text: "Aqua Palm" }] },
+            },
+          },
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const [result] = await client.search();
+
+      expect(result?.sourceType).toBe("database_row");
+      expect(result?.parentDatabaseId).toBe("db1");
+    });
+
+    it("leaves parentDatabaseId null for a plain page — never guessed from anything else", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          {
+            id: "page1",
+            object: "page",
+            parent: { type: "workspace" },
+            properties: {
+              Name: { type: "title", title: [{ plain_text: "Cleaning SOP" }] },
+            },
+          },
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const [result] = await client.search();
+
+      expect(result?.parentDatabaseId).toBeNull();
+    });
+
+    it("labels a page whose parent is a page or the workspace as sourceType 'page'", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          {
+            id: "page1",
+            object: "page",
+            parent: { type: "workspace" },
+            properties: {
+              Name: {
+                type: "title",
+                title: [{ plain_text: "Cleaning SOP" }],
+              },
+            },
+          },
+          {
+            id: "page2",
+            object: "page",
+            parent: { type: "page_id", page_id: "parent-page" },
+            properties: {
+              Name: { type: "title", title: [{ plain_text: "Sub-page" }] },
+            },
+          },
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const results = await client.search();
+
+      expect(results[0]?.sourceType).toBe("page");
+      expect(results[1]?.sourceType).toBe("page");
+    });
+
+    it("follows next_cursor across multiple pages, accumulating results", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          results: [{ id: "p1", object: "page" }],
+          has_more: true,
+          next_cursor: "cursor-a",
+        })
+        .mockResolvedValueOnce({
+          results: [{ id: "p2", object: "page" }],
+          has_more: false,
+          next_cursor: null,
+        });
+      const client = new NotionClient(credentials);
+
+      const results = await client.search();
+
+      expect(mockRequest).toHaveBeenNthCalledWith(2, "/search", {
+        method: "POST",
+        body: JSON.stringify({ page_size: 50, start_cursor: "cursor-a" }),
+      });
+      expect(results.map((r) => r.id)).toEqual(["p1", "p2"]);
+    });
+
+    it("rejects a repeated pagination cursor instead of looping forever", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          results: [{ id: "p1", object: "page" }],
+          has_more: true,
+          next_cursor: "cursor-a",
+        })
+        .mockResolvedValueOnce({
+          results: [{ id: "p2", object: "page" }],
+          has_more: true,
+          next_cursor: "cursor-a",
+        });
+      const client = new NotionClient(credentials);
+
+      await expect(client.search()).rejects.toThrow(
+        /repeated pagination cursor/,
+      );
+    });
+
+    it("rejects has_more: true with a missing next_cursor instead of silently truncating", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [{ id: "p1", object: "page" }],
+        has_more: true,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      await expect(client.search()).rejects.toThrow(
+        /refusing to silently truncate/,
+      );
+    });
+
+    it("respects a caller-supplied maxPages instead of always using the default cap", async () => {
+      let n = 0;
+      mockRequest.mockImplementation(async () => {
+        n += 1;
+        return {
+          results: [{ id: `p${n}`, object: "page" }],
+          has_more: true,
+          next_cursor: `cursor-${n}`,
+        };
+      });
+      const client = new NotionClient(credentials);
+
+      await expect(client.search({ maxPages: 2 })).rejects.toThrow(
+        /exceeded the maximum of 2 pages/,
+      );
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+    });
+
+    it("makes only bare POST /search requests — no create/update/delete/archive call is ever introduced", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      await client.search({ query: "anything" });
+
+      for (const call of mockRequest.mock.calls) {
+        const [path, init] = call as [string, { method: string }];
+        expect(path).toBe("/search");
+        expect(init.method).toBe("POST");
+      }
+    });
+  });
+
   describe("queryDataSource", () => {
     it("queries the given data source with a per-request Notion-Version override, requesting only the given page size", async () => {
       mockRequest.mockResolvedValueOnce({

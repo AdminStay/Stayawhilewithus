@@ -20,3 +20,9 @@ export const disconnectIntegrationSchema = z.object({
 export type DisconnectIntegrationInput = z.infer<
   typeof disconnectIntegrationSchema
 >;
+
+export const searchNotionSchema = z.object({
+  query: z.string().trim().min(1).max(200),
+});
+
+export type SearchNotionInput = z.infer<typeof searchNotionSchema>;
