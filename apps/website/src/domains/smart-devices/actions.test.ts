@@ -4,10 +4,12 @@ const {
   mockRevalidatePath,
   mockDiscoverNestDevices,
   mockDiscoverAugustDevices,
+  mockRefreshThermostats,
 } = vi.hoisted(() => ({
   mockRevalidatePath: vi.fn(),
   mockDiscoverNestDevices: vi.fn(),
   mockDiscoverAugustDevices: vi.fn(),
+  mockRefreshThermostats: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({
@@ -30,9 +32,14 @@ vi.mock("./services/nest-commands.service", () => ({
   sendNestThermostatCommand: vi.fn(),
 }));
 
+vi.mock("./services/thermostat-refresh.service", () => ({
+  refreshThermostats: mockRefreshThermostats,
+}));
+
 import {
   discoverAugustDevicesAction,
   discoverNestDevicesAction,
+  refreshThermostatsAction,
 } from "./actions";
 
 const IDLE = { status: "idle" as const };
@@ -109,6 +116,105 @@ describe("discoverAugustDevicesAction", () => {
     mockDiscoverAugustDevices.mockRejectedValueOnce("raw string rejection");
 
     const result = await discoverAugustDevicesAction(IDLE);
+
+    expect(result).toEqual({
+      status: "failure",
+      error: "raw string rejection",
+    });
+  });
+});
+
+describe("refreshThermostatsAction", () => {
+  const IDLE_REFRESH = { status: "idle" as const };
+
+  it("returns the exact per-provider results and revalidates /thermostats on success", async () => {
+    mockRefreshThermostats.mockResolvedValueOnce({
+      providers: [
+        {
+          provider: "NEST",
+          status: "success",
+          refreshed: 31,
+          notReturnedByProvider: 0,
+        },
+        {
+          provider: "CIELO",
+          status: "success",
+          refreshed: 3,
+          notReturnedByProvider: 0,
+        },
+      ],
+      refreshedAt: "2026-09-02T00:00:00.000Z",
+    });
+
+    const result = await refreshThermostatsAction(IDLE_REFRESH);
+
+    expect(result).toEqual({
+      status: "success",
+      providers: [
+        {
+          provider: "NEST",
+          status: "success",
+          refreshed: 31,
+          notReturnedByProvider: 0,
+        },
+        {
+          provider: "CIELO",
+          status: "success",
+          refreshed: 3,
+          notReturnedByProvider: 0,
+        },
+      ],
+      refreshedAt: "2026-09-02T00:00:00.000Z",
+    });
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/thermostats");
+  });
+
+  it("still returns a success state (with the partial per-provider results) when one provider failed — never loses the working provider's real result", async () => {
+    mockRefreshThermostats.mockResolvedValueOnce({
+      providers: [
+        { provider: "NEST", status: "failure", error: "network error" },
+        {
+          provider: "CIELO",
+          status: "success",
+          refreshed: 3,
+          notReturnedByProvider: 0,
+        },
+      ],
+      refreshedAt: "2026-09-02T00:00:00.000Z",
+    });
+
+    const result = await refreshThermostatsAction(IDLE_REFRESH);
+
+    expect(result.status).toBe("success");
+    if (result.status === "success") {
+      expect(result.providers).toContainEqual({
+        provider: "NEST",
+        status: "failure",
+        error: "network error",
+      });
+      expect(result.providers).toContainEqual({
+        provider: "CIELO",
+        status: "success",
+        refreshed: 3,
+        notReturnedByProvider: 0,
+      });
+    }
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/thermostats");
+  });
+
+  it("returns a top-level failure state instead of throwing when the whole refresh call fails (e.g. RBAC denial), and does not revalidate", async () => {
+    mockRefreshThermostats.mockRejectedValueOnce(new Error("ForbiddenError"));
+
+    const result = await refreshThermostatsAction(IDLE_REFRESH);
+
+    expect(result).toEqual({ status: "failure", error: "ForbiddenError" });
+    expect(mockRevalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("never lets a non-Error throw crash the action — falls back to String(err)", async () => {
+    mockRefreshThermostats.mockRejectedValueOnce("raw string rejection");
+
+    const result = await refreshThermostatsAction(IDLE_REFRESH);
 
     expect(result).toEqual({
       status: "failure",

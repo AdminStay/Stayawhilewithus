@@ -1,6 +1,8 @@
 import { hasPermission } from "@stayw/auth";
 import { PageHeader } from "@stayw/ui";
 
+import { refreshThermostatsAction } from "@/domains/smart-devices/actions";
+import { RefreshThermostatsButton } from "@/domains/smart-devices/components/RefreshThermostatsButton";
 import { ThermostatsList } from "@/domains/smart-devices/components/ThermostatsList";
 import {
   isThermostatVisible,
@@ -33,6 +35,13 @@ export default async function ThermostatsPage() {
   );
   const canManageByPropertyId = Object.fromEntries(manageChecks);
 
+  // Global (not property-scoped) — refreshThermostats()/refreshThermostatsAction
+  // both still call assertPermission(actor, "smart_devices:update") themselves,
+  // so this check is UX-only: it stops a read-only user from ever seeing a
+  // button that would just fail with "ForbiddenError" on click, it doesn't
+  // relax or replace the real server-side enforcement.
+  const canRefresh = await hasPermission(actor, "smart_devices:update");
+
   // TEMPORARY DIAGNOSTIC — added 2026-08-24, remove after the Nest
   // permission discrepancy is resolved. Server-side only, never rendered
   // to the browser. See HANDOFF.md Increment 38 "OPEN ISSUE". Derives
@@ -59,6 +68,11 @@ export default async function ThermostatsPage() {
       <PageHeader
         title="Thermostats"
         subtitle="Every connected thermostat across all properties — status and reading detail."
+        actions={
+          canRefresh && (
+            <RefreshThermostatsButton action={refreshThermostatsAction} />
+          )
+        }
       />
       <ThermostatsList
         thermostats={thermostats}

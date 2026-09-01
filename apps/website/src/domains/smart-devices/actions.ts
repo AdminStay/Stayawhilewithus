@@ -28,6 +28,12 @@ import {
   unmapProviderDevice,
   type DiscoverySyncResult,
 } from "./services/provider-devices.service";
+import {
+  refreshThermostats,
+  type ProviderRefreshOutcome,
+} from "./services/thermostat-refresh.service";
+
+export type { ProviderRefreshOutcome };
 
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
@@ -241,4 +247,50 @@ export async function setNestFanAction(
   });
   if (result.status === "success") revalidatePath(THERMOSTATS_PAGE_PATH);
   return result;
+}
+
+/**
+ * Manual "Refresh" — /thermostats' own action, separate from
+ * discoverNestDevicesAction/discoverAugustDevicesAction above (those stay
+ * scoped to /integrations/devices' discovery flow). Read/fetch from
+ * configured providers + write telemetry to StayWhile's DB only — never a
+ * physical command, never a mapping change (see thermostat-refresh.service.ts
+ * for the full read/write boundary). One provider failing is reported
+ * alongside the other's real result, never silently dropped — this action
+ * itself never throws for a provider-level failure (refreshThermostats()
+ * already isolates those into the per-provider outcome array); it only
+ * catches a genuinely unexpected top-level error (including an RBAC
+ * denial), same "catch and report inline" convention as
+ * discoverNestDevicesAction/discoverAugustDevicesAction above.
+ */
+export type RefreshThermostatsActionState =
+  | { status: "idle" }
+  | {
+      status: "success";
+      providers: ProviderRefreshOutcome[];
+      refreshedAt: string;
+    }
+  | { status: "failure"; error: string };
+
+export async function refreshThermostatsAction(
+  _prevState: RefreshThermostatsActionState,
+): Promise<RefreshThermostatsActionState> {
+  try {
+    const actor = await getCurrentUser();
+    const result = await refreshThermostats(actor);
+    // Keeps the user on /thermostats and shows the newly refreshed DB state
+    // without a manual reload — this page is a Server Component that reads
+    // fresh on every render, so revalidating it is sufficient.
+    revalidatePath(THERMOSTATS_PAGE_PATH);
+    return {
+      status: "success",
+      providers: result.providers,
+      refreshedAt: result.refreshedAt,
+    };
+  } catch (err) {
+    return {
+      status: "failure",
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }

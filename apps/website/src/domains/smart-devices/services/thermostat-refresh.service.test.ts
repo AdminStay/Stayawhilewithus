@@ -1,0 +1,609 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { mockTransaction, mockListDevices, mockListCieloDevices } = vi.hoisted(
+  () => ({
+    mockTransaction: vi.fn(),
+    mockListDevices: vi.fn(),
+    mockListCieloDevices: vi.fn(),
+  }),
+);
+
+vi.mock("@stayw/database", () => ({
+  prisma: {
+    providerDevice: {
+      findMany: vi.fn(),
+      update: vi.fn().mockResolvedValue({}),
+    },
+    smartDevice: {
+      findMany: vi.fn(),
+      update: vi.fn().mockResolvedValue({}),
+    },
+    $transaction: mockTransaction,
+  },
+}));
+
+vi.mock("@stayw/auth", () => ({
+  assertPermission: vi.fn(),
+}));
+
+// Deliberately exposes only listDevices — the real @stayw/integrations/nest
+// module does export command-sending functionality (executeNestThermostatCommand
+// etc.), but this mock only ever needs to prove what thermostat-refresh.service.ts
+// itself calls, and a mock this narrow means any accidental call to
+// anything else would throw "not a function" immediately.
+vi.mock("@stayw/integrations/nest", () => ({
+  NestClient: vi.fn().mockImplementation(() => ({
+    listDevices: mockListDevices,
+  })),
+}));
+
+// Same discipline as the Nest mock above — CieloClient exposes only
+// listDevices() here, even though the real client has no control/command
+// method at all (see packages/integrations/src/cielo/README.md).
+vi.mock("@stayw/integrations/cielo", () => ({
+  CieloClient: vi.fn().mockImplementation(() => ({
+    listDevices: mockListCieloDevices,
+  })),
+}));
+
+import { assertPermission } from "@stayw/auth";
+import { prisma } from "@stayw/database";
+
+import {
+  refreshCieloTelemetry,
+  refreshNestTelemetry,
+  refreshThermostats,
+} from "./thermostat-refresh.service";
+
+const actor = { userId: "user-1" };
+
+function nestDevice(
+  externalDeviceId: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    externalDeviceId,
+    resourceName: `enterprises/x/devices/${externalDeviceId}`,
+    deviceType: "sdm.devices.types.THERMOSTAT",
+    connectivity: "ONLINE",
+    ambientTemperatureCelsius: 21,
+    thermostatMode: "COOL",
+    rawTraits: {},
+    ...overrides,
+  };
+}
+
+function cieloDevice(id: string, overrides: Record<string, unknown> = {}) {
+  return { id, name: "Living Room", online: true, ...overrides };
+}
+
+function enabledProviderDevice(
+  id: string,
+  externalDeviceId: string,
+  smartDeviceId: string,
+) {
+  return { id, externalDeviceId, smartDeviceId };
+}
+
+function existingCieloSmartDevice(id: string, externalDeviceId: string) {
+  // Cast to `never` (not the full SmartDevice shape) — this mock only ever
+  // needs the two fields refreshCieloTelemetry() actually selects.
+  return { id, externalDeviceId } as never;
+}
+
+const ORIGINAL_ENV = { ...process.env };
+
+function setNestEnv() {
+  process.env.NEST_CLIENT_ID = "client-id";
+  process.env.NEST_CLIENT_SECRET = "client-secret";
+  process.env.NEST_PROJECT_ID = "project-id";
+  process.env.NEST_REFRESH_TOKEN = "refresh-token";
+}
+
+function setCieloEnv() {
+  process.env.CIELO_USERNAME = "cielo-user";
+  process.env.CIELO_PASSWORD = "cielo-pass";
+}
+
+function restoreEnv() {
+  process.env = { ...ORIGINAL_ENV };
+}
+
+describe("thermostat-refresh.service — source-level command-safety guarantee", () => {
+  it("never imports or references any Nest command-sending function — structurally impossible to send a physical command from this file", () => {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(
+      resolve(__dirname, "./thermostat-refresh.service.ts"),
+      "utf8",
+    );
+
+    for (const forbidden of [
+      "executeNestThermostatCommand",
+      "sendNestThermostatCommand",
+      "SET_HEAT",
+      "SET_COOL",
+      "SET_RANGE",
+      "SET_MODE",
+      "SET_FAN",
+    ]) {
+      expect(source).not.toContain(forbidden);
+    }
+  });
+
+  it("never imports anything from smart-devices.service — Refresh cannot reach Cielo's upsert-capable sync path (syncCieloDevices lives only there)", () => {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(
+      resolve(__dirname, "./thermostat-refresh.service.ts"),
+      "utf8",
+    );
+
+    expect(source).not.toContain('from "./smart-devices.service"');
+  });
+});
+
+describe("refreshNestTelemetry", () => {
+  beforeEach(() => {
+    setNestEnv();
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.providerDevice.findMany).mockReset();
+    vi.mocked(prisma.smartDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    vi.mocked(prisma.providerDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    mockListDevices.mockReset();
+    mockTransaction
+      .mockReset()
+      .mockImplementation(async (arg) =>
+        Array.isArray(arg) ? Promise.all(arg) : arg,
+      );
+  });
+  afterEach(restoreEnv);
+
+  it("queries only already-enabled, mapped Nest devices — never touches unmapped or disabled ones", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([]);
+
+    await refreshNestTelemetry(actor);
+
+    expect(prisma.providerDevice.findMany).toHaveBeenCalledWith({
+      where: {
+        enabled: true,
+        smartDeviceId: { not: null },
+        integrationConnection: { provider: "NEST" },
+      },
+      select: { id: true, externalDeviceId: true, smartDeviceId: true },
+    });
+  });
+
+  it("makes zero Nest API calls when there are no enabled devices to refresh", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([]);
+
+    const result = await refreshNestTelemetry(actor);
+
+    expect(mockListDevices).not.toHaveBeenCalled();
+    expect(result).toEqual({ refreshed: 0, notReturnedByProvider: 0 });
+  });
+
+  it("uses exactly one bulk listDevices() call regardless of how many devices are enabled", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      enabledProviderDevice("pd-1", "ext-1", "sd-1"),
+      enabledProviderDevice("pd-2", "ext-2", "sd-2"),
+      enabledProviderDevice("pd-3", "ext-3", "sd-3"),
+    ] as never);
+    mockListDevices.mockResolvedValueOnce([
+      nestDevice("ext-1"),
+      nestDevice("ext-2"),
+      nestDevice("ext-3"),
+    ]);
+
+    await refreshNestTelemetry(actor);
+
+    expect(mockListDevices).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates the existing SmartDevice's telemetry/status and the existing ProviderDevice's snapshot/freshness for a matched device", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      enabledProviderDevice("pd-1", "ext-1", "sd-1"),
+    ] as never);
+    mockListDevices.mockResolvedValueOnce([
+      nestDevice("ext-1", {
+        connectivity: "ONLINE",
+        ambientTemperatureCelsius: 22,
+        thermostatMode: "HEAT",
+      }),
+    ]);
+
+    const result = await refreshNestTelemetry(actor);
+
+    expect(prisma.smartDevice.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "sd-1" },
+        data: expect.objectContaining({
+          status: "ONLINE",
+          metadata: expect.objectContaining({
+            mode: "HEAT",
+            telemetryUpdatedAt: expect.any(String),
+          }),
+        }),
+      }),
+    );
+    expect(prisma.providerDevice.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "pd-1" },
+        data: expect.objectContaining({
+          connectivityStatus: "ONLINE",
+          lastSeenAt: expect.any(Date),
+        }),
+      }),
+    );
+    expect(result).toEqual({ refreshed: 1, notReturnedByProvider: 0 });
+  });
+
+  it("never touches any mapping field — propertyId/enabled/mappedAt/mappedByUserId/smartDeviceId never appear in the ProviderDevice write", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      enabledProviderDevice("pd-1", "ext-1", "sd-1"),
+    ] as never);
+    mockListDevices.mockResolvedValueOnce([nestDevice("ext-1")]);
+
+    await refreshNestTelemetry(actor);
+
+    const call = vi.mocked(prisma.providerDevice.update).mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    for (const forbiddenField of [
+      "propertyId",
+      "enabled",
+      "mappedAt",
+      "mappedByUserId",
+      "smartDeviceId",
+    ]) {
+      expect(call.data).not.toHaveProperty(forbiddenField);
+    }
+  });
+
+  it("never calls create/upsert on either model — only update, on rows that already exist", () => {
+    // The mocked prisma client above defines no `create`/`upsert` method on
+    // either providerDevice or smartDevice at all — if this file ever
+    // called one, the test run above would already have thrown
+    // "is not a function". This test documents that guarantee explicitly.
+    expect(
+      (prisma.providerDevice as unknown as Record<string, unknown>).upsert,
+    ).toBeUndefined();
+    expect(
+      (prisma.smartDevice as unknown as Record<string, unknown>).upsert,
+    ).toBeUndefined();
+  });
+
+  it("leaves a device Nest doesn't report this time completely untouched, and counts it separately — never prunes/disables it", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      enabledProviderDevice("pd-1", "ext-1", "sd-1"),
+      enabledProviderDevice("pd-2", "ext-2", "sd-2"),
+    ] as never);
+    // Only ext-1 comes back — ext-2 has temporarily dropped out of the
+    // account's response, same real-world case that caused data loss for
+    // Cielo before (see smart-devices.service.ts's pruning-removal comment).
+    mockListDevices.mockResolvedValueOnce([nestDevice("ext-1")]);
+
+    const result = await refreshNestTelemetry(actor);
+
+    expect(prisma.smartDevice.update).toHaveBeenCalledTimes(1);
+    expect(prisma.smartDevice.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "sd-1" } }),
+    );
+    expect(result).toEqual({ refreshed: 1, notReturnedByProvider: 1 });
+  });
+
+  it("propagates a not-configured error when Nest credentials are missing, even when there are zero enabled devices — never silently reports a misleading '0 refreshed' success", async () => {
+    delete process.env.NEST_CLIENT_ID;
+
+    await expect(refreshNestTelemetry(actor)).rejects.toThrow(
+      /isn't configured/,
+    );
+    expect(prisma.providerDevice.findMany).not.toHaveBeenCalled();
+    expect(mockListDevices).not.toHaveBeenCalled();
+  });
+
+  it("propagates denial when the actor lacks smart_devices:update, without querying the database", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(refreshNestTelemetry(actor)).rejects.toThrow();
+    expect(prisma.providerDevice.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("refreshCieloTelemetry", () => {
+  beforeEach(() => {
+    setCieloEnv();
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.smartDevice.findMany).mockReset();
+    vi.mocked(prisma.smartDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    mockListCieloDevices.mockReset();
+    mockTransaction
+      .mockReset()
+      .mockImplementation(async (arg) =>
+        Array.isArray(arg) ? Promise.all(arg) : arg,
+      );
+  });
+  afterEach(restoreEnv);
+
+  it("queries only existing SmartDevice rows for CIELO — never reads CIELO_PROPERTY_MAP or anything discovery-shaped", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([]);
+
+    await refreshCieloTelemetry(actor);
+
+    expect(prisma.smartDevice.findMany).toHaveBeenCalledWith({
+      where: { provider: "CIELO" },
+      select: { id: true, externalDeviceId: true },
+    });
+  });
+
+  it("THE CRITICAL SAFETY PROOF: a Cielo device with no existing SmartDevice row is never created, even if Cielo's live API reports it", async () => {
+    // Zero existing rows in StayWhile's DB — but the live provider reports
+    // a real device. Reusing syncCieloDevices() here would upsert-create a
+    // brand-new SmartDevice row for it; refreshCieloTelemetry() must not.
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([]);
+    mockListCieloDevices.mockResolvedValueOnce([cieloDevice("mac-new-device")]);
+
+    const result = await refreshCieloTelemetry(actor);
+
+    // Zero Cielo API calls too — there's nothing to refresh, and this
+    // function must never look up CIELO_PROPERTY_MAP to decide otherwise.
+    expect(mockListCieloDevices).not.toHaveBeenCalled();
+    expect(prisma.smartDevice.update).not.toHaveBeenCalled();
+    expect(result).toEqual({ refreshed: 0, notReturnedByProvider: 0 });
+  });
+
+  it("makes zero Cielo API calls when there are no existing Cielo devices to refresh", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([]);
+
+    await refreshCieloTelemetry(actor);
+
+    expect(mockListCieloDevices).not.toHaveBeenCalled();
+  });
+
+  it("uses exactly one bulk listDevices() call regardless of how many existing devices there are", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
+      existingCieloSmartDevice("sd-1", "mac-1"),
+      existingCieloSmartDevice("sd-2", "mac-2"),
+    ]);
+    mockListCieloDevices.mockResolvedValueOnce([
+      cieloDevice("mac-1"),
+      cieloDevice("mac-2"),
+    ]);
+
+    await refreshCieloTelemetry(actor);
+
+    expect(mockListCieloDevices).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates only status/lastSeenAt on an existing SmartDevice row for a matched device — by its own id, never an upsert", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
+      existingCieloSmartDevice("sd-1", "mac-1"),
+    ]);
+    mockListCieloDevices.mockResolvedValueOnce([
+      cieloDevice("mac-1", { online: true }),
+    ]);
+
+    const result = await refreshCieloTelemetry(actor);
+
+    expect(prisma.smartDevice.update).toHaveBeenCalledWith({
+      where: { id: "sd-1" },
+      data: { status: "ONLINE", lastSeenAt: expect.any(Date) },
+    });
+    expect(result).toEqual({ refreshed: 1, notReturnedByProvider: 0 });
+  });
+
+  it("writes OFFLINE status and a null lastSeenAt for a device Cielo reports as offline", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
+      existingCieloSmartDevice("sd-1", "mac-1"),
+    ]);
+    mockListCieloDevices.mockResolvedValueOnce([
+      cieloDevice("mac-1", { online: false }),
+    ]);
+
+    await refreshCieloTelemetry(actor);
+
+    expect(prisma.smartDevice.update).toHaveBeenCalledWith({
+      where: { id: "sd-1" },
+      data: { status: "OFFLINE", lastSeenAt: null },
+    });
+  });
+
+  it("never writes metadata or name — this provider has no telemetry beyond online/offline status to honestly report", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
+      existingCieloSmartDevice("sd-1", "mac-1"),
+    ]);
+    mockListCieloDevices.mockResolvedValueOnce([cieloDevice("mac-1")]);
+
+    await refreshCieloTelemetry(actor);
+
+    const call = vi.mocked(prisma.smartDevice.update).mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    expect(call.data).not.toHaveProperty("metadata");
+    expect(call.data).not.toHaveProperty("name");
+  });
+
+  it("never calls create/upsert — only update, on rows that already exist", () => {
+    expect(
+      (prisma.smartDevice as unknown as Record<string, unknown>).upsert,
+    ).toBeUndefined();
+    expect(
+      (prisma.smartDevice as unknown as Record<string, unknown>).create,
+    ).toBeUndefined();
+  });
+
+  it("leaves a device Cielo doesn't report this time completely untouched, and counts it separately — never prunes/disables it", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
+      existingCieloSmartDevice("sd-1", "mac-1"),
+      existingCieloSmartDevice("sd-2", "mac-2"),
+    ]);
+    mockListCieloDevices.mockResolvedValueOnce([cieloDevice("mac-1")]);
+
+    const result = await refreshCieloTelemetry(actor);
+
+    expect(prisma.smartDevice.update).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ refreshed: 1, notReturnedByProvider: 1 });
+  });
+
+  it("propagates a not-configured error when Cielo credentials are missing, even when there are zero existing devices", async () => {
+    delete process.env.CIELO_USERNAME;
+
+    await expect(refreshCieloTelemetry(actor)).rejects.toThrow(
+      /isn't configured/,
+    );
+    expect(prisma.smartDevice.findMany).not.toHaveBeenCalled();
+    expect(mockListCieloDevices).not.toHaveBeenCalled();
+  });
+
+  it("propagates denial when the actor lacks smart_devices:update, without querying the database", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(refreshCieloTelemetry(actor)).rejects.toThrow();
+    expect(prisma.smartDevice.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("refreshThermostats — provider isolation", () => {
+  beforeEach(() => {
+    setNestEnv();
+    setCieloEnv();
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.providerDevice.findMany).mockReset().mockResolvedValue([]);
+    vi.mocked(prisma.smartDevice.findMany).mockReset().mockResolvedValue([]);
+    mockListDevices.mockReset().mockResolvedValue([]);
+    mockListCieloDevices.mockReset().mockResolvedValue([]);
+    mockTransaction
+      .mockReset()
+      .mockImplementation(async (arg) =>
+        Array.isArray(arg) ? Promise.all(arg) : arg,
+      );
+  });
+  afterEach(restoreEnv);
+
+  it("delegates Cielo to refreshCieloTelemetry(), not syncCieloDevices() — no duplicate/unsafe implementation", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
+      existingCieloSmartDevice("sd-1", "mac-1"),
+    ]);
+    mockListCieloDevices.mockResolvedValueOnce([cieloDevice("mac-1")]);
+
+    const result = await refreshThermostats(actor);
+
+    expect(result.providers).toContainEqual({
+      provider: "CIELO",
+      status: "success",
+      refreshed: 1,
+      notReturnedByProvider: 0,
+    });
+  });
+
+  it("reports both providers' real success together when both succeed", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      enabledProviderDevice("pd-1", "ext-1", "sd-1"),
+    ] as never);
+    mockListDevices.mockResolvedValueOnce([nestDevice("ext-1")]);
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
+      existingCieloSmartDevice("sd-c1", "mac-1"),
+      existingCieloSmartDevice("sd-c2", "mac-2"),
+    ]);
+    mockListCieloDevices.mockResolvedValueOnce([
+      cieloDevice("mac-1"),
+      cieloDevice("mac-2"),
+    ]);
+
+    const result = await refreshThermostats(actor);
+
+    expect(result.providers).toEqual([
+      {
+        provider: "NEST",
+        status: "success",
+        refreshed: 1,
+        notReturnedByProvider: 0,
+      },
+      {
+        provider: "CIELO",
+        status: "success",
+        refreshed: 2,
+        notReturnedByProvider: 0,
+      },
+    ]);
+    expect(result.refreshedAt).toEqual(expect.any(String));
+  });
+
+  it("one provider failing produces a partial result — the other provider's real success is never lost", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockRejectedValueOnce(
+      new Error("connection reset"),
+    );
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
+      existingCieloSmartDevice("sd-c1", "mac-1"),
+    ]);
+    mockListCieloDevices.mockResolvedValueOnce([cieloDevice("mac-1")]);
+
+    const result = await refreshThermostats(actor);
+
+    expect(result.providers).toContainEqual({
+      provider: "NEST",
+      status: "failure",
+      error: "connection reset",
+    });
+    expect(result.providers).toContainEqual({
+      provider: "CIELO",
+      status: "success",
+      refreshed: 1,
+      notReturnedByProvider: 0,
+    });
+  });
+
+  it("represents total failure as two independent failure entries, not a single swallowed error", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockRejectedValueOnce(
+      new Error("nest down"),
+    );
+    vi.mocked(prisma.smartDevice.findMany).mockRejectedValueOnce(
+      new Error("cielo down"),
+    );
+
+    const result = await refreshThermostats(actor);
+
+    expect(result.providers).toEqual([
+      { provider: "NEST", status: "failure", error: "nest down" },
+      { provider: "CIELO", status: "failure", error: "cielo down" },
+    ]);
+  });
+
+  it("classifies a missing-credentials error as not_configured, distinct from a real failure", async () => {
+    delete process.env.NEST_CLIENT_ID;
+    delete process.env.CIELO_USERNAME;
+
+    const result = await refreshThermostats(actor);
+
+    expect(result.providers).toContainEqual({
+      provider: "NEST",
+      status: "not_configured",
+    });
+    expect(result.providers).toContainEqual({
+      provider: "CIELO",
+      status: "not_configured",
+    });
+  });
+
+  it("propagates an RBAC denial at the top level instead of downgrading it to a per-provider failure row", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(refreshThermostats(actor)).rejects.toThrow("ForbiddenError");
+    expect(mockListDevices).not.toHaveBeenCalled();
+    expect(mockListCieloDevices).not.toHaveBeenCalled();
+  });
+});
