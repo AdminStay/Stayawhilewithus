@@ -68,12 +68,21 @@ export default async function ThermostatsPage() {
       <PageHeader
         title="Thermostats"
         subtitle="Every connected thermostat across all properties — status and reading detail."
-        actions={
-          canRefresh && (
-            <RefreshThermostatsButton action={refreshThermostatsAction} />
-          )
-        }
       />
+      {/* Rendered directly in the page body, not through PageHeader's
+          `actions` prop — matching the exact position every other real,
+          Production-proven Server-Action form in this app uses
+          (DiscoverDevicesButton on /integrations/devices, SyncNowButton on
+          /integrations). RefreshThermostatsButton was previously the only
+          immediate-submit form ever routed through `actions`, and the
+          Production Refresh click that should have produced this button's
+          submit never reached the server at all — this realigns it with
+          the one pattern already proven to reliably submit. */}
+      {canRefresh && (
+        <div className="mb-6 flex justify-end">
+          <RefreshThermostatsButton action={refreshThermostatsAction} />
+        </div>
+      )}
       <ThermostatsList
         thermostats={thermostats}
         canManageByPropertyId={canManageByPropertyId}
