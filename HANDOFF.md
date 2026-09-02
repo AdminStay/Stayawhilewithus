@@ -28,9 +28,46 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 CURRENT STATE — 2026-09-02, latest of all (READ THIS FIRST — supersedes every earlier summary below)
+# 🔖 CURRENT STATE — 2026-09-02, even later same day (READ THIS FIRST — supersedes every earlier summary below)
 
-**Authoritative current state as of `## Increment 75` (2026-09-02), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the 2026-09-01 summary immediately below, now historical), this summary governs. Full detail in `## Increment 75` at the bottom of this file.
+**Authoritative current state as of `## Increment 77` (2026-09-02), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-09-02 "later same day" summary immediately below, now historical), this summary governs. Full detail in `## Increment 77` at the bottom of this file.
+
+1. **Thermostat manual Refresh — investigation continued through commit `a3cfe40`. Still NOT Production-verified.** The Production test after `75490c4` (Increment 76) showed Refresh appeared to do nothing — the visible "Last Synced" timestamps stayed stale, and no live provider success (Nest or Cielo) was established. Diagnostics were added (`454ea6c`, no behavior change); a subsequent Production test showed no `POST` Server Action request and no `[thermostat-refresh]` execution logs at all, pointing at client-side form/event wiring rather than provider or authorization logic. The Refresh form was relocated out of `PageHeader`'s `actions` prop (`14744d1`) as a reasonable leading hypothesis at the time — **Production evidence afterward showed the same symptom persisted, so PageHeader placement was not proven as the root cause.**
+2. **Real root cause identified via live Production browser inspection: React error #418, a server/client hydration mismatch.** Chrome DevTools on a fresh Production `/thermostats` load showed #418 in the console **before Refresh was ever clicked**; installed React `19.2.8` source was inspected to confirm what #418 means. Caused by ambient `toLocaleString()` timestamp rendering (Last Synced / Last telemetry / Last refreshed) producing different output on Vercel's server runtime vs. a viewer's local-timezone browser — disrupting the un-isolated hydration unit that also contained the Refresh form, before a user's first click.
+3. **Fixed in `a3cfe40`**: deterministic, explicit-UTC shared timestamp formatting applied to all three affected displays. Tests prove identical output across multiple ambient `TZ` values. Full website suite **706/706**, relevant typechecks clean, Production build successful. **Implemented, committed, pushed — NOT YET PRODUCTION-VERIFIED.**
+4. **⚠️ None of the following is yet confirmed live**: that React #418 is gone, that `/thermostats` hydrates cleanly, that Refresh now generates the expected Server Action request, that `[thermostat-refresh]` logs execute, that Nest telemetry refresh succeeds, that Cielo telemetry refresh succeeds, or that "Last Synced" actually updates. **No real successful provider Refresh has occurred anywhere in this investigation, at any point. Do not treat Thermostat Refresh as working until a real Production test confirms it.**
+5. **Separately recorded, unrelated**: Production Chrome showed a Clerk development-keys-in-Production warning during this session's browser inspection — a separate Production-readiness follow-up, not changed.
+6. **Ecobee unchanged** — Client ID + Client Secret configured locally only; SmartBuildings auth/connectivity/discovery not started; existing `EcobeeClient` stub/`.env.example`/README still model the older credential shape and require a separate future architecture/auth update.
+7. **No physical Nest/Cielo/Ecobee thermostat command has been sent at any point in this entire Refresh investigation** (`75490c4` through `a3cfe40`).
+8. **This pass was HANDOFF documentation only** — reconciling the file with actual git HEAD (`a3cfe40`); no application code, RBAC, schema, credentials, or Production testing was touched or performed.
+9. **Revised execution priority, unchanged in substance**: (1) ~~Notion search~~ done (Increment 75), (2) **thermostat manual Refresh — code and hydration fix shipped, still awaiting a real Production verification test before any part of this is considered working**, (3) OwnerRez/property cleanup, (4) status freshness (August UNKNOWN, Cielo/Bahamas investigation), (5) safe automatic device mapping, (6) controlled real Nest command test (explicit approval required), (7) Trane/Ecobee per readiness, (8) team testing checklist, (9) Notion in-dashboard editing (blocked on Michelle/Kenny approval), (10) Notion altered/deleted-page alerts, (11) Clerk Production-keys follow-up (newly recorded, not yet prioritized).
+10. **All standing safety rules unchanged** — client isolation, Production Supabase project identity, transaction-pooler `DATABASE_URL`, `DIRECT_URL` migration rules, no secrets in repo docs, protected legacy August houses, no physical lock/thermostat commands, no guessing ambiguous mappings. See `## Increment 77` for full detail.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-02, even later same day" above] CURRENT STATE — 2026-09-02, later same day
+
+**Authoritative current state as of `## Increment 76` (2026-09-02), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-09-02 summary immediately below, now historical), this summary governs. Full detail in `## Increment 76` at the bottom of this file.
+
+1. **Thermostat manual Refresh — committed (`75490c4`), pushed, deploy triggered. ⚠️ NOT yet Production-verified live — see item 2.** VAs will be able to refresh current Nest/Cielo telemetry from `/thermostats` without leaving the dashboard, once confirmed live. Refresh only ever **reads** current state from configured providers and **writes StayWhile's own telemetry/status fields** — it never sends a physical thermostat command (no setpoint/mode/fan/schedule change), never creates a device, and never changes a property mapping.
+   - **Nest**: one bulk `NestClient.listDevices()` read; only updates `SmartDevice`/`ProviderDevice` rows that are **already enabled/mapped** — an unmapped or disabled device is never touched, created, or auto-mapped.
+   - **Cielo**: a dedicated `refreshCieloTelemetry()`, **deliberately separate from `syncCieloDevices()`** — the existing sync function can upsert-create a new `SmartDevice` row via `CIELO_PROPERTY_MAP`, which "Refresh" must never do; the refresh path only ever updates `SmartDevice` rows that already exist, and cannot create or map a device under any circumstance (proven by a dedicated test).
+   - **Provider isolation**: one provider failing (bad credentials, network error) never blocks or hides the other provider's real result — each is reported independently.
+   - **Ecobee is not included yet** — no real Ecobee client exists (see item 4).
+2. **⚠️ First real provider Refresh is PENDING manual Production test by the user.** No live Nest or Cielo API call has been made by this Refresh feature yet, in Production or otherwise — no Refresh has been executed anywhere outside of mocked tests. **Do not treat live Refresh behavior as Production-verified until the user runs it manually from the Production dashboard and reports the result.**
+3. **Production browser verification could not be performed this session** — the Claude-in-Chrome extension was not connected. Deployment was triggered by the push (Vercel's existing auto-deploy on `main`), but "the new deploy is live," "`/thermostats` loads normally," "Refresh appears for an authorized user," and "existing Controls UI still renders" are all **still unconfirmed** as of this increment — see `## Increment 76` for exactly what is and isn't known.
+4. **Ecobee credentials configured locally, not yet used.** Client ID + Client Secret for the SmartBuildings path are now configured locally for StayWhile — **values are never documented here or anywhere in this repo.** Ecobee implementation/authentication has **not** been started. The existing `EcobeeClient` stub/`.env.example`/README still model an older API-key credential shape — this mismatch is a recorded follow-up, not yet resolved.
+5. **Notion work from earlier today (Increment 75) is unaffected and remains Production-verified** — broader operational search, staff/contact-directory exclusion, read-only-by-construction, future in-dashboard-editing requirement recorded but not built. See the historical banner below for that full summary.
+6. **Credentials unchanged.** `NOTION_API_KEY`/`N8N_API_KEY` (exposed in an earlier session, client chose not to rotate) remain as recorded in Increment 75 — unaffected by this increment.
+7. **RBAC unchanged.** No permission or role was granted/changed. The Refresh button is now UX-gated to only render for an actor who already holds `smart_devices:update` (existing permission, no new grant) — a read-only actor never sees an unusable button. The actual VA role remains unconfirmed — still a testing prerequisite.
+8. **Revised execution priority, updated**: (1) ~~Notion search~~ done (Increment 75), (2) **thermostat manual Refresh — code shipped, awaiting the user's manual Production Refresh test (see item 2) before this is considered verified**, (3) OwnerRez/property cleanup, (4) status freshness (August UNKNOWN, Cielo/Bahamas investigation), (5) safe automatic device mapping, (6) controlled real Nest command test (explicit approval required), (7) Trane/Ecobee per readiness (Ecobee credentials now configured locally, connectivity phase not started), (8) team testing checklist, (9) Notion in-dashboard editing (blocked on Michelle/Kenny approval), (10) Notion altered/deleted-page alerts.
+9. **All standing safety rules unchanged** — client isolation, Production Supabase project identity, transaction-pooler `DATABASE_URL`, `DIRECT_URL` migration rules, no secrets in repo docs (including the new Ecobee credentials), protected legacy August houses, no physical lock commands, no physical Nest/Cielo commands, no guessing ambiguous mappings. See `## Increment 76` for the full detail.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-02, later same day" above] CURRENT STATE — 2026-09-02, earlier same day
+
+**Authoritative current state as of `## Increment 75` (2026-09-02).** Full detail in `## Increment 75`.
 
 1. **Notion broader operational search — ✅ COMPLETE, committed (`29d0acc`), pushed, deployed, Production-verified.** VAs can now search everything shared with the StayWhile Notion integration (SOPs, FAQs, property pages, guidebooks, policies, training manuals), not just "View of Listings" — server-side, real, paginated Notion `/search`, minimal result fields only. **Property Listings section retained unchanged, still 35/35 in Production.** **Search remains strictly read-only** — no create/update/delete/archive call exists anywhere in the client.
 2. **Staff/contact-directory content excluded from VA search, by real Notion database id, Production-verified.** People/Company Directory/Contact List databases never surface in search results — confirmed live (a "Kenny" query returned 0 results) — while operational content that happens to mention a staff member's name stays fully searchable (id-based exclusion only, never title/keyword-based).
@@ -38,12 +75,12 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 4. **Notion altered/deleted-page detection and alerts remain pending, separate future work** — unrelated to the search-exclusion feature above, not started, not designed further this increment.
 5. **Credentials unchanged.** Two credentials (`NOTION_API_KEY`, `N8N_API_KEY`) were exposed in an earlier session's tool output and the client has chosen to keep them as-is rather than rotate — recorded, not acted on further.
 6. **RBAC unchanged.** The actual VA role is still unconfirmed anywhere in this repo's data/config — recorded as a **testing prerequisite**, not guessed at.
-7. **Revised execution priority, updated**: (1) ~~Notion search~~ **done, see above**, (2) **thermostat manual Refresh/Sync — next priority, not started**, (3) OwnerRez/property cleanup (full addresses, timezone auto-sourcing, Poinciana exclusion, Sync Now), (4) status freshness (August UNKNOWN, Cielo/Bahamas investigation), (5) safe automatic device mapping (only after relationships are verified), (6) controlled real Nest command test (explicit approval required), (7) Trane/Ecobee per readiness, (8) team testing checklist, (9) Notion in-dashboard editing (blocked on Michelle/Kenny field/action approval — see item 3), (10) Notion altered/deleted-page alerts.
+7. **Revised execution priority, updated**: (1) ~~Notion search~~ **done, see above**, (2) **thermostat manual Refresh/Sync — next priority, not started**, (3) OwnerRez/property cleanup (full addresses, timezone auto-sourcing, Poinciana exclusion, Sync Now), (4) status freshness (August UNKNOWN, Cielo/Bahamas investigation), (5) safe automatic device mapping (only after relationships are verified), (6) controlled real Nest command test (explicit approval required), (7) Trane/Ecobee per readiness, (8) team testing checklist, (9) Notion in-dashboard editing (blocked on Michelle/Kenny field/action approval — see item 3), (10) Notion altered/deleted-page alerts. — **superseded, see current banner above.**
 8. **All standing safety rules unchanged** — client isolation, Production Supabase project identity, transaction-pooler `DATABASE_URL`, `DIRECT_URL` migration rules, no secrets in repo docs, protected legacy August houses, no physical lock commands, no physical Nest commands without explicit approval, no guessing ambiguous mappings. See `## Increment 75` for the full detail.
 
 ---
 
-# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-02, latest of all" above] CURRENT STATE — 2026-09-01, latest of all
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-02, earlier same day" above] CURRENT STATE — 2026-09-01, latest of all
 
 **Authoritative current state as of `## Increment 74` (2026-09-01).** Full detail in `## Increment 74`.
 
@@ -3487,3 +3524,124 @@ Exactly the 18 Notion-implementation files from commit `29d0acc` (see the commit
 ### Next step
 
 **Thermostat manual Refresh/Sync** is next, per the revised execution priority in the current-state banner at the top of this file — **not started**, per explicit instruction to stop after this HANDOFF update. Ecobee's credential-safe connectivity/discovery phase (see immediately above) is now unblocked whenever the user wants it prioritized, but has not been started either.
+
+---
+
+## Increment 76 — 2026-09-02 (later same day): Thermostat manual Refresh — architecture audit, implementation, Cielo safety fix, and RBAC-gated UX all complete; committed, pushed, deploy triggered — first real provider Refresh still pending manual Production test
+
+### Read-only architecture audit (preceded implementation)
+
+Before writing any code, audited the existing thermostat data flow: `/thermostats` reads only from `SmartDevice` (never a live provider call on page load); Nest telemetry only ever gets written at enable-time or via a real command's before/after confirmation reads — **there was no existing safe way to refresh a live Nest thermostat's displayed telemetry without either re-running full discovery (which doesn't touch already-enabled `SmartDevice` rows) or sending an actual physical command.** Cielo's `syncCieloDevices()` already behaves like a refresh end-to-end, but (see the Cielo safety finding below) turned out to be unsafe to reuse directly for this feature. Full audit findings were reported and approved before implementation began.
+
+### Thermostat manual Refresh — ✅ COMPLETE, committed, pushed, deploy triggered
+
+**Commit `75490c4`** — "Add manual thermostat Refresh — provider-aware, telemetry-only." 8 files (service + component + action + page wiring + tests). Pushed to `origin/main` (`92c0603..75490c4`). Vercel's existing auto-deploy on `main` was triggered by this push — **not independently confirmed Ready this increment** (see "Production verification — blocked" below).
+
+**What Refresh does, exactly**: reads current state from configured thermostat providers and writes it into StayWhile's own `SmartDevice`/`ProviderDevice` telemetry/status fields only. **It is READ/FETCH from providers + WRITE TELEMETRY TO STAYWHILE DB only** — confirmed by direct code inspection and dedicated tests:
+
+- **No physical thermostat command of any kind** — no temperature/mode/fan/schedule change. `thermostat-refresh.service.ts` imports no command-sending function at all; a dedicated source-level test reads the file's actual contents and asserts none of `executeNestThermostatCommand`/`sendNestThermostatCommand`/`SET_HEAT`/`SET_COOL`/`SET_RANGE`/`SET_MODE`/`SET_FAN` appear anywhere in it.
+- **Nest**: `refreshNestTelemetry()` — exactly one bulk `NestClient.listDevices()` read (never a per-device call, avoiding the exact P2024/connection-pool pattern from Increment 59), and **only ever updates `SmartDevice`/`ProviderDevice` rows that are already `enabled = true` and mapped** (queried via `ProviderDevice.findMany({ enabled: true, smartDeviceId: { not: null }, ... })`). Every write is `.update()` by an already-known id — never `.upsert()`/`.create()` — so this path cannot create a device, change a mapping, or enable/disable anything. A device the provider doesn't report this time is left completely untouched and counted separately, never pruned.
+- **Cielo — real safety finding, fixed before shipping**: the originally-planned reuse of the existing `syncCieloDevices()` was reviewed on request and found **unsafe for Refresh** — that function performs a genuine `prisma.smartDevice.upsert()` keyed on `CIELO_PROPERTY_MAP`, meaning the first time it runs after a new device is added to that env var, it **creates** a brand-new `SmartDevice` row. That's correct for its own job (bootstrap sync, still used unchanged by `/integrations`' "Sync Now") but wrong for "Refresh," which must only ever touch devices already represented in StayWhile. **Fixed**: a new, separate `refreshCieloTelemetry()` was built instead — starts from existing `SmartDevice` rows (`where: { provider: "CIELO" }`) only, never reads `CIELO_PROPERTY_MAP` at all, one bulk `CieloClient.listDevices()` read, updates only `status`/`lastSeenAt` on rows that already exist. **`smart-devices.service.ts`'s `syncCieloDevices()` itself was not touched at all.** A dedicated test proves the critical property directly: a Cielo device with no existing `SmartDevice` row is never created, even when the (mocked) live API reports it — zero API call is even made in that case, since there's nothing to refresh.
+- **Provider isolation**: `refreshThermostats()` runs Nest and Cielo independently, each in its own try/catch; one provider's failure (bad credentials, network error) is reported alongside the other's real result, never swallowed or masking a working provider.
+- **RBAC-gated UX, no grant/role change**: `/thermostats` now checks `hasPermission(actor, "smart_devices:update")` (existing permission, global — not property-scoped) and only renders the Refresh button when true. Real enforcement is unchanged — `refreshThermostats()`/`refreshThermostatsAction` both still call `assertPermission` themselves regardless of what the UI shows. A read-only actor never sees a button that would only fail on click. No permission or role was created or granted.
+- **UI**: one "Refresh" button on `/thermostats` (in `PageHeader`'s action slot) — idle → "Refreshing…" (disabled, prevents duplicate clicks) → success (per-provider line, e.g. "Nest: 31 devices refreshed.") → partial (one provider's real failure shown alongside the other's real success) → full failure. "Last refreshed" timestamp on success. `revalidatePath("/thermostats")` keeps the user on the page with the table showing the newly-written DB state, no manual reload needed.
+- **Ecobee/Trane**: not included — no real client exists for either yet; the architecture is ready for Ecobee to plug in as a third provider branch once a real client exists (see the Ecobee section below for its own separate status).
+
+### Test results, this increment
+
+- `thermostat-refresh.service.test.ts`: 28/28 (includes the dedicated Nest-no-create, Cielo-no-create, and provider-isolation proofs).
+- `RefreshThermostatsButton.test.tsx`: 8/8. New `thermostats/page.test.tsx` (Refresh-button authorization gating): 2/2.
+- `actions.test.ts`: 10/10.
+- Full smart-devices domain: 246/246. Full website suite: 691/691.
+- `website`/`@stayw/integrations` typecheck: both clean.
+- `next build`: succeeds (dummy, command-line-only n8n env overrides for the pre-existing, unrelated missing-webhook-secret gap already documented since Increment 54 — nothing written to disk, no real value read or displayed).
+
+### ⚠️ First real provider Refresh — PENDING, not yet Production-verified
+
+**No live Nest or Cielo API call has been made by this feature anywhere — not in Production, not manually by this session.** Per explicit instruction, this session did not execute Refresh, did not call the Nest or Cielo APIs for live verification, and did not send any physical thermostat command. **The user will perform the first real Refresh manually from the Production dashboard.** Do not treat live Refresh behavior (real Nest/Cielo data actually updating on `/thermostats`) as Production-verified until that manual test happens and is reported back — everything verified so far is code-level (typecheck/tests/build) and mocked-provider-level, not a real provider call.
+
+### Production verification — blocked, not skipped
+
+Attempted the same verification checklist as prior increments (deploy live, `/thermostats` loads, existing table renders, Refresh appears for an authorized user, existing Controls UI renders, no Refresh executed). `tabs_context_mcp` reported the Claude-in-Chrome browser extension is not connected — the same recurring limitation this file has hit before (see Increment 39/43). **None of the following could be independently confirmed this increment**: that the new deploy is Ready, that `/thermostats` loads normally in Production, that the existing thermostat table still renders, that Refresh appears for an authorized user, or that the existing Nest Controls UI still renders normally. Vercel CLI remains off-limits in this environment (standing rule, unchanged). **The push itself succeeded and Vercel's existing auto-deploy should be building/deploying this commit** — that is the only fact confirmed this increment; everything else needs either the browser extension reconnected or the user checking Production directly.
+
+### RBAC — unchanged, VA role still unconfirmed
+
+No permission or role was created, granted, or changed this increment. The Refresh button's visibility gate reuses the existing `smart_devices:update` permission exactly as already defined — see "RBAC-gated UX" above. The actual VA role remains unconfirmed anywhere in this repo's data/config — still a testing prerequisite, unchanged from Increment 75.
+
+### Ecobee — still not started, credentials still configured-but-unused
+
+Unchanged from earlier today: Ecobee API credentials (Client ID + Client Secret for the SmartBuildings path) are configured locally for StayWhile. **No Ecobee authentication, connectivity check, or discovery run has been performed — this increment did not touch Ecobee at all**, per explicit instruction. Credential values are never recorded here or anywhere in this repo. The existing `EcobeeClient` stub/`.env.example`/README mismatch (API-key shape vs. the real Client-ID/Client-Secret credentials now available) remains an open follow-up, not resolved.
+
+### Files changed this increment
+
+Exactly the 8 files in commit `75490c4`: `apps/website/app/(dashboard)/thermostats/page.tsx` + new `page.test.tsx`, `apps/website/src/domains/smart-devices/actions.ts` + `.test.ts`, new `services/thermostat-refresh.service.ts` + `.test.ts`, new `components/RefreshThermostatsButton.tsx` + `.test.tsx`. `HANDOFF.md` (this file) updated separately, this pass, not part of that commit. No schema, migration, RBAC, credential, or `.env*` file was touched. The pre-existing, unrelated uncommitted files (`.env.example`, `.gitignore`, `apps/website/app/(dashboard)/layout.tsx`, the `packages/database/*.mjs` diagnostic scripts, `thermostat-permission-gating.test.ts`) remain exactly as they were.
+
+### Next step
+
+Pending the user's manual Production Refresh test (see "First real provider Refresh — PENDING" above) and/or Production browser verification once available. Do not start Ecobee implementation/authentication until explicitly directed.
+
+---
+
+## Increment 77 — 2026-09-02 (later still): Thermostat Refresh investigation continued through commit `a3cfe40` — Production test after `75490c4` showed no observable execution; diagnostics added; form relocated as an unproven hypothesis; real root cause (React #418 hydration mismatch) diagnosed via live Production browser inspection and fixed — Thermostat Refresh remains NOT Production-verified
+
+### Production test after `75490c4` — Refresh appeared to do nothing
+
+After Increment 76's implementation was deployed, the user tested Refresh in Production. **Refresh appeared to do nothing observable**: clicking it produced no visible change, the "Last Synced" timestamps shown in the UI remained stale, and no live provider success (Nest or Cielo) was established. This is the real starting point for the investigation below — Increment 76's mocked/code-level verification did not carry over to a working Production experience.
+
+### `454ea6c` — Safe Refresh diagnostics
+
+Added structured `[thermostat-refresh]` logging across the manual Refresh path — request start, the real enforced authorization outcome (permission_granted/denied) at the service boundary, and per-provider eligible-row/API-returned/zero-matched/completed counts and outcome (success/not_configured/failure) for both Nest and Cielo, plus action-level success/failure — so the next Production attempt would be conclusively diagnosable. **No provider behavior, RBAC, or schema change.**
+
+**Subsequent Production test**: still no observable Refresh execution. Vercel inspection showed a `GET /thermostats` request but **no expected Server Action `POST`** and **no `[thermostat-refresh]` execution logs at all** — the click was never reaching the server action, ruling out a provider-side or authorization-logic failure as the cause and pointing at client-side form/event wiring instead.
+
+### `14744d1` — Refresh form relocation
+
+Moved `RefreshThermostatsButton` out of `PageHeader`'s `actions` prop and into the page body directly, matching the composition already proven to reliably submit for every other Server-Action form in the app (`DiscoverDevicesButton`, `SyncNowButton`) — `RefreshThermostatsButton` was the only immediate-submit form ever routed through `actions`. **This was a reasonable leading hypothesis at the time**, based directly on the observed no-POST/no-logs symptom above.
+
+**Subsequent Production evidence showed the same symptom persisted after this change. PageHeader placement was therefore not proven as the root cause.**
+
+### Browser diagnosis — React error #418 (hydration mismatch)
+
+Live Chrome DevTools inspection of a fresh Production `/thermostats` page load — **before Refresh was ever clicked** — showed a React production error #418 in the console. The installed React `19.2.8` source was inspected directly to confirm what #418 means: a server/client hydration mismatch. Auditing the thermostat client tree identified the cause: **ambient `toLocaleString()` timestamp rendering** (in `ThermostatsList`'s "Last synced"/"Last telemetry" display and `RefreshThermostatsButton`'s "Last refreshed" display) produces different output on Vercel's server runtime than in a viewer's local-timezone browser — nondeterministic SSR/client output, the textbook cause of #418.
+
+### `a3cfe40` — Timestamp hydration fix
+
+Introduced a shared, deterministic timestamp formatter with explicit UTC semantics, applied to all three affected displays (Last Synced, Last telemetry, Last refreshed) in place of ambient `toLocaleString()`. Tests prove the formatter produces identical output across multiple different ambient `TZ` values. **Full website suite: 706/706.** Relevant typechecks clean. Production build successful. This is the **confirmed root cause** of the #418 mismatch — React discarding and regenerating the un-isolated hydration unit that also contained the Refresh form, disrupting its event/action wiring before a user's first click — but see the critical status immediately below: the fix's real-world effect has not itself been observed.
+
+### ⚠️ CRITICAL — Thermostat Refresh remains NOT Production-verified
+
+`a3cfe40` is implemented, committed, and pushed — **but NOT YET PRODUCTION-VERIFIED.** None of the following has been confirmed in Production:
+
+- React error #418 disappeared
+- `/thermostats` hydrates cleanly
+- Refresh generates the expected Server Action request
+- `[thermostat-refresh]` logs execute
+- Nest telemetry refresh succeeds
+- Cielo telemetry refresh succeeds
+- "Last Synced" actually updates
+
+**No real successful provider Refresh has occurred anywhere, at any point, in this entire investigation.** Thermostat Refresh remains pending Production verification — that test is the explicit next step, not yet performed. **Do not state that a real successful provider Refresh has occurred.**
+
+### Separately recorded — Clerk development-keys warning (Production readiness, unrelated, NOT changed)
+
+During the same Production browser inspection, Chrome showed a Clerk console warning indicating **development keys are in use in Production.** This is unrelated to the Refresh/hydration investigation — a separate Production-readiness follow-up, recorded here for visibility. **Not changed, not investigated further, this increment.**
+
+### Ecobee — unchanged, still not started
+
+Restated for continuity: Ecobee Client ID + Client Secret remain configured **locally only** (never in this repo). Ecobee SmartBuildings authentication/connectivity/discovery **remains NOT started.** The existing `EcobeeClient` stub/`.env.example`/README still model the older API-key credential shape and will require a separate future architecture/auth update before Ecobee can be connected — unresolved, unchanged.
+
+### Physical command safety — reaffirmed
+
+**No physical Nest, Cielo, or Ecobee thermostat command (setpoint, mode, fan, schedule) has been sent at any point during this entire Refresh investigation** (`75490c4` through `a3cfe40`) — confirmed by the same source-level test from Increment 76 plus direct review of every commit's diff in this sequence. This HANDOFF-reconciliation pass itself did not run Refresh or call Nest/Cielo/Ecobee.
+
+### Pre-existing unrelated files — untouched
+
+`.env.example`, `.gitignore`, `apps/website/app/(dashboard)/layout.tsx`, `.claude/`, the `packages/database/*.mjs` diagnostic scripts, and `thermostat-permission-gating.test.ts` remain exactly as they were — not part of this investigation, not touched by this HANDOFF-reconciliation pass either.
+
+### Files changed, this increment
+
+`HANDOFF.md` only — a documentation-reconciliation pass recording Increment 76's actual Production outcome and the complete `454ea6c` / `14744d1` / browser-diagnosis / `a3cfe40` sequence through current HEAD. No application code, schema, RBAC, credential, or `.env*` file was touched, read, or inspected.
+
+### Next step
+
+**Production verification of the hydration fix and the Refresh feature together** — confirm React #418 is gone, `/thermostats` hydrates cleanly, and a real click produces the expected Server Action `POST`, `[thermostat-refresh]` logs, and a successful Nest and/or Cielo telemetry update. Not performed this pass, per explicit instruction to stop after the HANDOFF update.
