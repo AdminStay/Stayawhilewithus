@@ -28,7 +28,22 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 CURRENT STATE — 2026-09-02, even later same day (READ THIS FIRST — supersedes every earlier summary below)
+# 🔖 CURRENT STATE — 2026-09-03 (READ THIS FIRST — supersedes every earlier summary below)
+
+**Authoritative current state as of `## Increment 78` (2026-09-03), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the 2026-09-02 "even later same day" summary immediately below, now historical), this summary governs. Full detail in `## Increment 78` at the bottom of this file.
+
+1. **OwnerRez property reconciliation — Production-verified.** StayWhile `/properties` shows **36 properties**. OwnerRez remains **58 total / 38 active** (unchanged). Bird of Paradise and Once Upon a Pond — the two properties this file could not previously confirm — were directly verified present on the live StayWhile Properties page, both `ONBOARDING`. **The full 29-property "CREATE NOW" onboarding cohort identified across Increments 60–74 is now completely accounted for in StayWhile.**
+2. **All 6 human-approved legacy OwnerRez links are now Linked in Production** — Aqua Palm (already linked previously, now independently confirmed live for the first time), Bahamas, Bonjour AMI, Island Tides, Ocean Pearl, Sandy Nudes (all 5 confirmed one at a time this session via the existing, already-shipped "Confirm Link" workflow — `confirmOwnerRezLink()`, no code change). **Only `ownerRezPropertyId` changed on each of these 5 rows** — name/address/timezone/status/occupancy/devices/reservations/locks/thermostats all confirmed untouched, per the dedicated code audit performed before any click.
+3. **Post-link reconciliation confirms the matcher works exactly as designed**: OwnerRez's Active-unmatched bucket dropped from 8 to exactly **3** immediately after the 5 links — Miramar-Bliss (480401, "Miramar Bliss 2"), Starfish Waterfront (471634), Surfside Solace (456042). **None of these 3 is approved for creation** — Miramar-Bliss remains genuinely ambiguous (a real StayWhile Miramar Bliss property already exists; do not create a duplicate), Surfside Solace remains pending its earlier Dolphin/device-identity investigation, Starfish Waterfront remains deferred pending human confirmation. No device-name inference performed or permitted for any of the three.
+4. **Poinciana remains a separate, unresolved, private/non-rental question** — explicitly not folded into this OwnerRez reconciliation in either direction (see Increment 78 for the full reasoning already established in the prior audit).
+5. **No application code changes were required or made for any of the OwnerRez work above** — every result was produced by clicking the already-shipped `/properties/ownerrez` Confirm Link workflow directly in Production. No physical lock or thermostat command was sent.
+6. **Nest OAuth/Refresh — remains OPEN, unchanged, explicitly not conflated with the OwnerRez work above.** Refresh's Server Action still executes successfully; Cielo still refreshes 3 devices; **Nest still fails with OAuth token refresh HTTP 400**; the React #418 hydration fix (`a3cfe40`) remains separately Production-verified fixed. **No Google OAuth, Google Authorized Domain, Vercel domain, Nest credential, or application-URL change has been made.** Kenny is setting up a new domain dedicated to the StayWhile dashboard (the existing business domain is already used by OwnerRez) — this work stays paused until Kenny confirms that domain.
+7. **Revised execution priority, updated**: (1) OwnerRez/property cleanup — **substantially advanced this increment**, only Miramar-Bliss/Starfish Waterfront/Surfside Solace/Poinciana remain open, all correctly held back; (2) Nest OAuth production-readiness (Testing→In production, new domain, fresh refresh token) — **blocked on Kenny's domain setup**, do not proceed until confirmed; (3) status freshness (August UNKNOWN, Cielo/Bahamas investigation); (4) safe automatic device mapping; (5) controlled real Nest command test (explicit approval required, and blocked behind the OAuth fix regardless); (6) Trane/Ecobee per readiness; (7) team testing checklist; (8) Notion in-dashboard editing (blocked on Michelle/Kenny approval); (9) Notion altered/deleted-page alerts; (10) Clerk Production-keys follow-up.
+8. **All standing safety rules unchanged** — client isolation, Production Supabase project identity, transaction-pooler `DATABASE_URL`, `DIRECT_URL` migration rules, no secrets in repo docs, protected legacy August houses, no physical lock/thermostat commands, no guessing ambiguous mappings, no name-based device/property inference. See `## Increment 78` for full detail.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-03" above] CURRENT STATE — 2026-09-02, even later same day
 
 **Authoritative current state as of `## Increment 77` (2026-09-02), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-09-02 "later same day" summary immediately below, now historical), this summary governs. Full detail in `## Increment 77` at the bottom of this file.
 
@@ -3645,3 +3660,70 @@ Restated for continuity: Ecobee Client ID + Client Secret remain configured **lo
 ### Next step
 
 **Production verification of the hydration fix and the Refresh feature together** — confirm React #418 is gone, `/thermostats` hydrates cleanly, and a real click produces the expected Server Action `POST`, `[thermostat-refresh]` logs, and a successful Nest and/or Cielo telemetry update. Not performed this pass, per explicit instruction to stop after the HANDOFF update.
+
+---
+
+## Increment 78 — 2026-09-03: OwnerRez property reconciliation — Production-verified; all 6 approved legacy links confirmed live; Active-unmatched OwnerRez reduced 8 → 3; Nest OAuth/domain work remains explicitly separate and unchanged
+
+### Purpose of this increment
+
+Documentation-only, recording real Production verification and 5 real Production writes (each a single-field `ownerRezPropertyId` update via the already-shipped, already-audited "Confirm Link" workflow) performed directly by the user this session. No application code, schema, migration, environment variable, or dependency was changed. No Nest/Google OAuth/domain/Vercel change was made — that work is explicitly preserved as a separate, still-open thread (see "Nest / Domain status," below).
+
+### OwnerRez property reconciliation
+
+- **StayWhile `/properties`: 36 properties**, Production-confirmed. **OwnerRez: 58 total / 38 active**, unchanged from Increment 54's original pagination-verified figures.
+- The two properties this file's prior audit could not confirm — **Bird of Paradise** and **Once Upon a Pond** — were directly verified present on the live StayWhile Properties page, both `ONBOARDING`. Combined with the 6 already-confirmed-present stragglers from the same prior audit (Coco Vista, Robinson Recluse, Orion's Landing, Island SOS, Maison de la Mer, Royal Eden), **all 8 of the previously-outstanding "CREATE NOW" properties are now directly confirmed onboarded** — completing the full original 29-property CREATE NOW cohort first identified in Increment 63.
+- **28 → 36 is fully explained**: no code change exists anywhere in the repo for this growth (confirmed by `git log` search across all branches, prior session) — every one of these creates was performed the same way as every prior batch (Camingo, Fast Batches 1–3, etc.): one-at-a-time clicks of the already-shipped "Create StayWhile Property" button on `/properties/ownerrez`, requiring zero code deployment per property. This session's own work adds no new code either.
+
+### Approved legacy OwnerRez links — Production-verified, all 6 now Linked
+
+Before any click, this session performed a dedicated read-only code audit of `confirmOwnerRezLink()` (`ownerrez-link.service.ts`) and confirmed directly from source: **exactly one field is ever written — `ownerRezPropertyId`** — gated by RBAC (`properties:update`), gated by a hard-coded human-approved allow-list (`ownerrez-approved-links.ts`, exactly 6 entries), protected against a race/conflict by both a pre-check (`findUnique` by `ownerRezPropertyId`) and a DB-level `@unique` constraint backstop (caught via `isUniqueConstraintViolation`/`P2002`). `name`/`address*`/`timezone`/`status`/`bedroomCount`/`bathroomCount`/`maxOccupancy`/`internalCode` and every relation (`smartDevices`, `providerDevices`, `reservations`, `tasks`, etc.) are structurally untouched by this function — confirmed by the single-field `data` object in its own `update()` call, not merely by its doc comment.
+
+With that audit complete, the user confirmed 5 links one at a time directly in Production via the existing "Confirm Link" button — **no code was written or deployed for this**:
+
+- Bahamas → OwnerRez "The Bahamas," ID `377839` — Linked
+- Bonjour AMI → OwnerRez "Bonjour AMI," ID `432997` — Linked
+- Island Tides → OwnerRez "Island Tides," ID `355021` — Linked
+- Ocean Pearl → OwnerRez "Ocean Pearl," ID `431354` — Linked
+- Sandy Nudes → OwnerRez "Sandy Nudes," ID `355024` — Linked
+
+**Aqua Palm** (OwnerRez ID `386471`) had already been reported linked by the user in an earlier session (Increment 58/59) but was explicitly recorded then as "user-reported, not session-verified," with an open follow-up to independently confirm it. **This session's live view of `/properties/ownerrez` is the first actual independent confirmation of that old self-report** — Aqua Palm now shows Linked alongside the other 5.
+
+**All 6 of the human-approved legacy pairings are now Linked in Production**, closing out the oldest unresolved item in this file's entire OwnerRez thread.
+
+### Post-link reconciliation — direct Production evidence the matcher works as designed
+
+Before the 5 links, `/properties/ownerrez`'s Onboarding panel showed **Active (8)** unmatched OwnerRez rows: the 5 legacy pairings above (appearing there only because OwnerRez's own `internal_code` field for these records doesn't match StayWhile's `internalCode` convention — e.g. Miramar-Bliss's own record uses `"Miramar Bliss 2"`, not a dash-cased code — so the automatic matcher's rule 2 could never catch them; this is exactly why the human-approved allow-list exists) plus 3 genuinely unresolved records. **After the 5 links, the Active-unmatched bucket dropped to exactly 3**, confirming `matchOwnerRezProperties()`'s bucketing logic behaves exactly as its own code predicts — a linked property's `ownerRezPropertyId` now satisfies the exact-id-match rule and removes it from Unmatched on the very next render, with no separate mechanism needed:
+
+- **Miramar-Bliss** — OwnerRez ID `480401`, internal code "Miramar Bliss 2," address `24 Mainsail Dr, Miramar Beach, Florida 32550`.
+- **Starfish Waterfront** — OwnerRez ID `471634`, address `1426 Seaside Circle, Navarre, Florida 32566`.
+- **Surfside Solace** — OwnerRez ID `456042`, address `70 Dolphin St, Destin, Florida 32541`.
+
+### Safety / open items — none of these three approved for creation
+
+- **Miramar-Bliss**: an existing StayWhile Miramar Bliss property already exists (one of the 4 protected legacy August houses); the OwnerRez-side matching history remains genuinely ambiguous across 3 candidate records (389173/410682/480401 — see Increment 58). **Do not create a duplicate. Do not link or create.**
+- **Surfside Solace**: remains pending the earlier "Dolphin" lock/device-identity investigation (street-address similarity only, never confirmed). **Do not create yet.**
+- **Starfish Waterfront**: remains deferred, no device evidence exists. **Do not create yet.**
+- **No device-name inference was performed or is permitted for any of the three** — unchanged standing rule.
+- **Poinciana** remains a wholly separate, unresolved, private/non-rental question (a Nest thermostat with no OwnerRez correspondence at all, per Increment 60/63, referenced separately by Michelle as a private residence to exclude from operational views, Increment 74) — **explicitly not folded into this OwnerRez active/unmatched reconciliation in either direction.**
+
+### What did NOT happen this increment
+
+No physical lock or thermostat command was sent. No property was created. No OwnerRez write occurred (OwnerRez remains read-only from this app in every respect other than the pre-approved link-confirmation path used here). No schema/migration/RBAC/credential/`.env*` file was touched, read, or inspected. No application code was written or deployed.
+
+### Nest / Domain status — OPEN, unchanged, explicitly not conflated with the OwnerRez work above
+
+The Nest OAuth investigation and this OwnerRez reconciliation are unrelated threads that happened to run in the same session — kept fully separate here on purpose:
+
+- **Refresh's Server Action still executes successfully; Cielo still refreshes 3 devices; Nest still fails with OAuth token refresh HTTP 400.** The React error #418 hydration fix (`a3cfe40`) remains separately Production-verified fixed (confirmed in the same Production test that surfaced the Nest 400 — see Increment 77).
+- Google's OAuth consent screen remains in **Testing** status (Google's own documented 7-day Testing-mode refresh-token expiry is the leading, evidence-backed hypothesis for the 400 — still not proven via the actual Google error category, which this client still doesn't log).
+- **Moving to "In production" requires a verified, owned domain StayWhile controls** — confirmed via prior read-only audit that no such domain currently exists in this project (only the free `stayawhilewithus-website.vercel.app` alias, and a previously-considered `stayawhilewithus-dashboard.com` that was never purchased).
+- **Kenny is setting up a new domain dedicated to the StayWhile dashboard** (e.g. a `dashboard.`/`ops.` subdomain), specifically because the existing StayWhile business domain is already in use for OwnerRez and shouldn't be disturbed. **This work stays paused until Kenny confirms the domain/DNS setup** — per explicit instruction, no Google OAuth setting, Google Authorized Domain, Vercel domain, Nest credential, or application URL was touched this increment or is to be touched before that confirmation arrives.
+
+### Files changed this increment
+
+`HANDOFF.md` only. The pre-existing, unrelated uncommitted files (`.env.example`, `.gitignore`, `apps/website/app/(dashboard)/layout.tsx`, `.claude/`, the `packages/database/*.mjs` diagnostic scripts, `thermostat-permission-gating.test.ts`) remain exactly as they were, untouched.
+
+### Next step
+
+Two independent, unblocked-from-each-other threads remain: (1) the 3 remaining OwnerRez unmatched properties (Miramar-Bliss/Starfish Waterfront/Surfside Solace) need their own individual human-confirmation investigations before any create/link action, and the Poinciana question needs a direct answer from Michelle before any exclusion mechanism is designed; (2) the Nest OAuth/domain work remains fully paused pending Kenny's new-domain confirmation — do not resume it until that arrives.
