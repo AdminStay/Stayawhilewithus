@@ -14,6 +14,7 @@ vi.mock("../core", async (importOriginal) => {
 
 import {
   NestClient,
+  NestOAuthRefreshError,
   computeNestDeviceCapabilities,
   executeNestThermostatCommand,
   getSupportedNestControls,
@@ -338,6 +339,254 @@ describe("NestClient", () => {
       /token refresh failed with 401/,
     );
     expect(mockRequest).not.toHaveBeenCalled();
+  });
+
+  describe("OAuth failure diagnostic (NestOAuthRefreshError)", () => {
+    function mockFailedTokenFetch(
+      status: number,
+      body?: unknown,
+    ): ReturnType<typeof vi.fn> {
+      return vi.fn().mockResolvedValue({
+        ok: false,
+        status,
+        json:
+          body === undefined
+            ? async () => {
+                throw new Error("Unexpected token < in JSON");
+              }
+            : async () => body,
+      });
+    }
+
+    it("captures a real invalid_grant response correctly, and never calls the device API afterward", async () => {
+      global.fetch = mockFailedTokenFetch(400, {
+        error: "invalid_grant",
+        error_description: "Token has been expired or revoked.",
+      }) as unknown as typeof fetch;
+
+      const client = new NestClient(credentials);
+      const error = await client.listDevices().catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(NestOAuthRefreshError);
+      const diag = (error as NestOAuthRefreshError).diagnostic;
+      expect(diag.httpStatus).toBe(400);
+      expect(diag.oauthError).toBe("invalid_grant");
+      expect(diag.oauthErrorDescription).toBe(
+        "Token has been expired or revoked.",
+      );
+      expect(diag.clientIdPresent).toBe(true);
+      expect(diag.clientSecretPresent).toBe(true);
+      expect(diag.refreshTokenPresent).toBe(true);
+      expect(diag.clientIdHasWhitespace).toBe(false);
+      expect(diag.clientSecretHasWhitespace).toBe(false);
+      expect(diag.refreshTokenHasWhitespace).toBe(false);
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    it("never crashes on a malformed/non-JSON Google response — falls back to null error fields instead of throwing out of the diagnostic handler", async () => {
+      global.fetch = mockFailedTokenFetch(500) as unknown as typeof fetch;
+
+      const client = new NestClient(credentials);
+      const error = await client.listDevices().catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(NestOAuthRefreshError);
+      const diag = (error as NestOAuthRefreshError).diagnostic;
+      expect(diag.httpStatus).toBe(500);
+      expect(diag.oauthError).toBeNull();
+      expect(diag.oauthErrorDescription).toBeNull();
+      expect(mockRequest).not.toHaveBeenCalled();
+    });
+
+    it("never leaks unexpected/extra fields from Google's response — only the two named OAuth fields are ever extracted", async () => {
+      global.fetch = mockFailedTokenFetch(400, {
+        error: "invalid_grant",
+        error_description: "Token has been expired or revoked.",
+        // A hypothetical, real-world-implausible but defensively-tested
+        // case: Google's response body echoes something token/secret-shaped
+        // under a field name this code doesn't expect.
+        access_token: "should-never-appear-anywhere",
+        client_secret: "should-never-appear-anywhere-either",
+      }) as unknown as typeof fetch;
+
+      const client = new NestClient(credentials);
+      const error = await client.listDevices().catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(NestOAuthRefreshError);
+      const diag = (error as NestOAuthRefreshError).diagnostic;
+      expect(Object.keys(diag).sort()).toEqual(
+        [
+          "clientIdHasWhitespace",
+          "clientIdPresent",
+          "clientSecretHasWhitespace",
+          "clientSecretPresent",
+          "httpStatus",
+          "oauthError",
+          "oauthErrorDescription",
+          "refreshTokenHasWhitespace",
+          "refreshTokenPresent",
+        ].sort(),
+      );
+      expect(JSON.stringify(diag)).not.toContain("should-never-appear");
+      expect((error as Error).message).not.toContain("should-never-appear");
+    });
+
+    it("SECRET-SAFETY: the real refresh token, client secret, and client ID values never appear anywhere in the thrown error — message or diagnostic", async () => {
+      const realCredentials = {
+        clientId: "real-client-id-value-12345",
+        clientSecret: "real-client-secret-value-67890",
+        projectId: "test-project-id",
+        refreshToken: "real-refresh-token-value-abcdef",
+      };
+      global.fetch = mockFailedTokenFetch(400, {
+        error: "invalid_grant",
+        error_description: "Token has been expired or revoked.",
+      }) as unknown as typeof fetch;
+
+      const client = new NestClient(realCredentials);
+      const error = (await client
+        .listDevices()
+        .catch((e: unknown) => e)) as NestOAuthRefreshError;
+
+      const serialized = JSON.stringify({
+        message: error.message,
+        diagnostic: error.diagnostic,
+        name: error.name,
+      });
+      for (const secretValue of [
+        realCredentials.clientId,
+        realCredentials.clientSecret,
+        realCredentials.refreshToken,
+      ]) {
+        expect(serialized).not.toContain(secretValue);
+      }
+    });
+
+    it("reports presence=false for an empty-string credential, without ever including the (empty) value itself", async () => {
+      global.fetch = mockFailedTokenFetch(400, {
+        error: "invalid_grant",
+      }) as unknown as typeof fetch;
+
+      const client = new NestClient({
+        ...credentials,
+        clientSecret: "",
+      });
+      const error = (await client
+        .listDevices()
+        .catch((e: unknown) => e)) as NestOAuthRefreshError;
+
+      expect(error.diagnostic.clientSecretPresent).toBe(false);
+    });
+
+    it("reports whitespace=true for a credential with leading/trailing whitespace, without including the value", async () => {
+      global.fetch = mockFailedTokenFetch(400, {
+        error: "invalid_grant",
+      }) as unknown as typeof fetch;
+
+      const client = new NestClient({
+        ...credentials,
+        refreshToken: " test-refresh-token ",
+      });
+      const error = (await client
+        .listDevices()
+        .catch((e: unknown) => e)) as NestOAuthRefreshError;
+
+      expect(error.diagnostic.refreshTokenHasWhitespace).toBe(true);
+      expect(error.diagnostic.refreshTokenPresent).toBe(true);
+      expect(JSON.stringify(error.diagnostic)).not.toContain(
+        "test-refresh-token",
+      );
+    });
+
+    it("SANITIZATION: redacts oauthErrorDescription entirely if it happens to contain the actual configured refresh token value", async () => {
+      const realCredentials = {
+        ...credentials,
+        refreshToken: "sensitive-refresh-token-xyz",
+      };
+      global.fetch = mockFailedTokenFetch(400, {
+        error: "invalid_grant",
+        error_description:
+          "The refresh token sensitive-refresh-token-xyz is invalid.",
+      }) as unknown as typeof fetch;
+
+      const client = new NestClient(realCredentials);
+      const error = (await client
+        .listDevices()
+        .catch((e: unknown) => e)) as NestOAuthRefreshError;
+
+      expect(error.diagnostic.oauthErrorDescription).toBe(
+        "[redacted — response text unexpectedly matched a configured credential value]",
+      );
+      expect(error.diagnostic.oauthErrorDescription).not.toContain(
+        "sensitive-refresh-token-xyz",
+      );
+    });
+
+    it("SANITIZATION: redacts oauthErrorDescription entirely if it happens to contain the actual configured client secret value", async () => {
+      const realCredentials = {
+        ...credentials,
+        clientSecret: "sensitive-client-secret-abc",
+      };
+      global.fetch = mockFailedTokenFetch(400, {
+        error: "invalid_client",
+        error_description: "sensitive-client-secret-abc mismatch",
+      }) as unknown as typeof fetch;
+
+      const client = new NestClient(realCredentials);
+      const error = (await client
+        .listDevices()
+        .catch((e: unknown) => e)) as NestOAuthRefreshError;
+
+      expect(error.diagnostic.oauthErrorDescription).toBe(
+        "[redacted — response text unexpectedly matched a configured credential value]",
+      );
+    });
+
+    it("SANITIZATION: truncates an oversized oauthErrorDescription to 200 characters plus an ellipsis, never logging it in full", async () => {
+      const hugeDescription = "x".repeat(5000);
+      global.fetch = mockFailedTokenFetch(400, {
+        error: "invalid_request",
+        error_description: hugeDescription,
+      }) as unknown as typeof fetch;
+
+      const client = new NestClient(credentials);
+      const error = (await client
+        .listDevices()
+        .catch((e: unknown) => e)) as NestOAuthRefreshError;
+
+      expect(error.diagnostic.oauthErrorDescription).toHaveLength(201); // 200 chars + "…"
+      expect(error.diagnostic.oauthErrorDescription).toBe(
+        `${"x".repeat(200)}…`,
+      );
+    });
+
+    it("SANITIZATION: passes through a normal, short, credential-free description unchanged", async () => {
+      global.fetch = mockFailedTokenFetch(400, {
+        error: "invalid_grant",
+        error_description: "Token has been expired or revoked.",
+      }) as unknown as typeof fetch;
+
+      const client = new NestClient(credentials);
+      const error = (await client
+        .listDevices()
+        .catch((e: unknown) => e)) as NestOAuthRefreshError;
+
+      expect(error.diagnostic.oauthErrorDescription).toBe(
+        "Token has been expired or revoked.",
+      );
+    });
+
+    it("a successful token refresh is completely unaffected by this diagnostic path — same behavior as before", async () => {
+      const tokenFetch = mockTokenFetch();
+      global.fetch = tokenFetch as unknown as typeof fetch;
+      mockRequest.mockResolvedValueOnce({ devices: [] });
+
+      const client = new NestClient(credentials);
+      const devices = await client.listDevices();
+
+      expect(devices).toEqual([]);
+      expect(tokenFetch).toHaveBeenCalledTimes(1);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("validateCredentials() returns invalid with a reason when the request fails", async () => {

@@ -42,6 +42,138 @@ const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const TOKEN_REFRESH_SKEW_MS = 60_000;
 
 /**
+ * Every field here is deliberately safe to log/display: an HTTP status, at
+ * most Google's own two-field standard OAuth error shape (`error`/
+ * `error_description` — see RFC 6749 §5.2), and booleans about the three
+ * credential values — never the values themselves, never their lengths (no
+ * demonstrated diagnostic need for lengths, per explicit instruction).
+ * Built once, at the exact point a real Google response is in hand, so the
+ * caller (thermostat-refresh.service.ts) never needs to touch the raw
+ * Response or credentials itself to get a useful diagnostic.
+ */
+export interface NestOAuthDiagnostic {
+  httpStatus: number;
+  /** Google's own `error` field (e.g. "invalid_grant"), or null if the response body wasn't parseable JSON or didn't include one. */
+  oauthError: string | null;
+  /**
+   * Google's own `error_description` field — sanitized before it ever
+   * reaches this object (see sanitizeOAuthErrorDescription() below): capped
+   * at 200 chars, and replaced entirely with a fixed redaction marker if it
+   * happens to contain any of this request's own credential values. Null if
+   * Google didn't report one. Even sanitized, this is still meant for
+   * server-side structured logs only — the caller (thermostat-refresh.service.ts)
+   * never surfaces it to a dashboard user, only `.message` (always generic).
+   */
+  oauthErrorDescription: string | null;
+  clientIdPresent: boolean;
+  clientSecretPresent: boolean;
+  refreshTokenPresent: boolean;
+  clientIdHasWhitespace: boolean;
+  clientSecretHasWhitespace: boolean;
+  refreshTokenHasWhitespace: boolean;
+}
+
+/**
+ * Thrown only by getAccessToken() below on a failed token refresh. Carries
+ * a generic, UI-safe `.message` (unchanged wording from before this
+ * diagnostic was added, so existing callers/tests matching on it keep
+ * working) plus a separate, structured `.diagnostic` — the caller decides
+ * where each part goes (message to a VA-visible UI string, diagnostic to
+ * server-side structured logs only). This class never itself logs
+ * anything — this package has no logging side effects anywhere in its
+ * client code, matching its existing convention.
+ */
+export class NestOAuthRefreshError extends Error {
+  readonly diagnostic: NestOAuthDiagnostic;
+
+  constructor(diagnostic: NestOAuthDiagnostic) {
+    super(`Nest OAuth token refresh failed with ${diagnostic.httpStatus}`);
+    this.name = "NestOAuthRefreshError";
+    this.diagnostic = diagnostic;
+  }
+}
+
+function hasLeadingOrTrailingWhitespace(value: string): boolean {
+  return value !== value.trim();
+}
+
+/**
+ * Only ever extracts Google's own two standard OAuth error-response fields
+ * (RFC 6749 §5.2) — `error` and `error_description` — and only when each is
+ * actually a string. Every other field Google's response might contain
+ * (there shouldn't be any sensitive ones in an error response, but this
+ * never assumes that) is deliberately never read, logged, or returned. A
+ * non-JSON or unparseable body is treated the same as an absent one —
+ * never captured as raw text, per the "never log a complete unfiltered
+ * Google response" rule this exists to enforce.
+ */
+async function safeParseOAuthErrorBody(
+  response: Response,
+): Promise<Pick<NestOAuthDiagnostic, "oauthError" | "oauthErrorDescription">> {
+  try {
+    const body: unknown = await response.json();
+    if (body && typeof body === "object") {
+      const record = body as Record<string, unknown>;
+      return {
+        oauthError: typeof record.error === "string" ? record.error : null,
+        oauthErrorDescription:
+          typeof record.error_description === "string"
+            ? record.error_description
+            : null,
+      };
+    }
+  } catch {
+    // Non-JSON/unreadable body — deliberately not captured in any form.
+  }
+  return { oauthError: null, oauthErrorDescription: null };
+}
+
+/** Hard cap so a huge or malformed response body can never balloon a log line. */
+const MAX_OAUTH_ERROR_DESCRIPTION_LENGTH = 200;
+const REDACTED_OAUTH_ERROR_DESCRIPTION =
+  "[redacted — response text unexpectedly matched a configured credential value]";
+
+/**
+ * `error_description` is documented (RFC 6749 §5.2) as a static,
+ * human-readable explanation of the error type — Google's own real-world
+ * values for this field are short, fixed strings like "Token has been
+ * expired or revoked." or "Bad Request", never an echo of the request body
+ * — and a refresh-token grant sends no user-controlled/session data at all
+ * (no redirect_uri, no authorization code — those belong to a different
+ * grant type this client doesn't use), so the only values that could
+ * conceivably leak here are the three this specific request just sent:
+ * client_id, client_secret, refresh_token.
+ *
+ * This code does not simply trust that documented behavior, though —
+ * "documented" is not "guaranteed," and this is credential-adjacent data.
+ * It actively checks the description against the exact credential values
+ * this request used and redacts the entire description (never a partial/
+ * best-effort scrub) if any of them appear, rather than assuming Google's
+ * server-side behavior. Also bounds the length unconditionally, so even a
+ * legitimate but unexpectedly large description can't produce an
+ * oversized log line.
+ */
+function sanitizeOAuthErrorDescription(
+  description: string | null,
+  credentials: NestCredentials,
+): string | null {
+  if (!description) return null;
+
+  const knownCredentialValues = [
+    credentials.clientId,
+    credentials.clientSecret,
+    credentials.refreshToken,
+  ].filter((value) => value.length > 0);
+  if (knownCredentialValues.some((value) => description.includes(value))) {
+    return REDACTED_OAUTH_ERROR_DESCRIPTION;
+  }
+
+  return description.length > MAX_OAUTH_ERROR_DESCRIPTION_LENGTH
+    ? `${description.slice(0, MAX_OAUTH_ERROR_DESCRIPTION_LENGTH)}…`
+    : description;
+}
+
+/**
  * Real Nest integration client via Google's Smart Device Management (SDM)
  * API. Read (listDevices) and write (thermostat commands) — every command
  * method below maps 1:1 to a documented SDM ExecuteCommand, and none of
@@ -101,9 +233,28 @@ export class NestClient
     });
 
     if (!response.ok) {
-      throw new Error(
-        `Nest OAuth token refresh failed with ${response.status}`,
-      );
+      const { oauthError, oauthErrorDescription: rawOauthErrorDescription } =
+        await safeParseOAuthErrorBody(response);
+      throw new NestOAuthRefreshError({
+        httpStatus: response.status,
+        oauthError,
+        oauthErrorDescription: sanitizeOAuthErrorDescription(
+          rawOauthErrorDescription,
+          this.credentials,
+        ),
+        clientIdPresent: Boolean(this.credentials.clientId),
+        clientSecretPresent: Boolean(this.credentials.clientSecret),
+        refreshTokenPresent: Boolean(this.credentials.refreshToken),
+        clientIdHasWhitespace: hasLeadingOrTrailingWhitespace(
+          this.credentials.clientId,
+        ),
+        clientSecretHasWhitespace: hasLeadingOrTrailingWhitespace(
+          this.credentials.clientSecret,
+        ),
+        refreshTokenHasWhitespace: hasLeadingOrTrailingWhitespace(
+          this.credentials.refreshToken,
+        ),
+      });
     }
 
     const data = (await response.json()) as RawSdmTokenResponse;

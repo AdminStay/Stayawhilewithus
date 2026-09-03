@@ -34,12 +34,21 @@ vi.mock("@stayw/auth", () => ({
 // module does export command-sending functionality (executeNestThermostatCommand
 // etc.), but this mock only ever needs to prove what thermostat-refresh.service.ts
 // itself calls, and a mock this narrow means any accidental call to
-// anything else would throw "not a function" immediately.
-vi.mock("@stayw/integrations/nest", () => ({
-  NestClient: vi.fn().mockImplementation(() => ({
-    listDevices: mockListDevices,
-  })),
-}));
+// anything else would throw "not a function" immediately. NestOAuthRefreshError
+// is the one real (non-mocked) export passed through via importOriginal — a
+// pure, side-effect-free data class (see client.ts), needed so tests below
+// can construct a real instance of the exact error type
+// thermostat-refresh.service.ts checks for with `instanceof`.
+vi.mock("@stayw/integrations/nest", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@stayw/integrations/nest")>();
+  return {
+    NestOAuthRefreshError: actual.NestOAuthRefreshError,
+    NestClient: vi.fn().mockImplementation(() => ({
+      listDevices: mockListDevices,
+    })),
+  };
+});
 
 // Same discipline as the Nest mock above — CieloClient exposes only
 // listDevices() here, even though the real client has no control/command
@@ -52,6 +61,7 @@ vi.mock("@stayw/integrations/cielo", () => ({
 
 import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
+import { NestOAuthRefreshError } from "@stayw/integrations/nest";
 
 import {
   refreshCieloTelemetry,
@@ -779,5 +789,147 @@ describe("thermostat-refresh.service — diagnostic logging", () => {
     const serialized = JSON.stringify(loggedEvents());
     expect(serialized).not.toContain("secret-device-label");
     expect(serialized).not.toContain("rawTraits");
+  });
+
+  it("logs a nest_oauth_error_diagnostic event with the sanitized diagnostic fields when the Nest OAuth refresh itself fails", async () => {
+    // This describe block's beforeEach defaults providerDevice.findMany to
+    // [] (no eligible devices) — refreshNestTelemetry() would short-circuit
+    // before ever calling client.listDevices() otherwise, and the rejection
+    // below would never actually be exercised.
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      enabledProviderDevice("pd-1", "ext-1", "sd-1"),
+    ] as never);
+    mockListDevices.mockRejectedValueOnce(
+      new NestOAuthRefreshError({
+        httpStatus: 400,
+        oauthError: "invalid_grant",
+        oauthErrorDescription: "Token has been expired or revoked.",
+        clientIdPresent: true,
+        clientSecretPresent: true,
+        refreshTokenPresent: true,
+        clientIdHasWhitespace: false,
+        clientSecretHasWhitespace: false,
+        refreshTokenHasWhitespace: true,
+      }),
+    );
+
+    await refreshThermostats(actor);
+
+    expect(loggedEvents()).toContainEqual(
+      expect.objectContaining({
+        event: "nest_oauth_error_diagnostic",
+        actorUserId: "user-1",
+        httpStatus: 400,
+        oauthError: "invalid_grant",
+        oauthErrorDescription: "Token has been expired or revoked.",
+        clientIdPresent: true,
+        clientSecretPresent: true,
+        refreshTokenPresent: true,
+        clientIdHasWhitespace: false,
+        clientSecretHasWhitespace: false,
+        refreshTokenHasWhitespace: true,
+      }),
+    );
+  });
+
+  it("does NOT log a nest_oauth_error_diagnostic event for a non-OAuth Nest failure", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      enabledProviderDevice("pd-1", "ext-1", "sd-1"),
+    ] as never);
+    mockListDevices.mockRejectedValueOnce(
+      new Error("Request to /devices failed with 500"),
+    );
+
+    await refreshThermostats(actor);
+
+    expect(loggedEvents()).not.toContainEqual(
+      expect.objectContaining({ event: "nest_oauth_error_diagnostic" }),
+    );
+  });
+
+  it("UI-SAFETY: the ProviderRefreshOutcome.error surfaced to the dashboard stays generic — Google's real error_description text never appears in the returned outcome, even though it's present in the server-side diagnostic log", async () => {
+    const distinctiveGoogleText =
+      "This exact free-text sentence from Google must never reach a dashboard user.";
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      enabledProviderDevice("pd-1", "ext-1", "sd-1"),
+    ] as never);
+    mockListDevices.mockRejectedValueOnce(
+      new NestOAuthRefreshError({
+        httpStatus: 400,
+        oauthError: "invalid_grant",
+        oauthErrorDescription: distinctiveGoogleText,
+        clientIdPresent: true,
+        clientSecretPresent: true,
+        refreshTokenPresent: true,
+        clientIdHasWhitespace: false,
+        clientSecretHasWhitespace: false,
+        refreshTokenHasWhitespace: false,
+      }),
+    );
+
+    const result = await refreshThermostats(actor);
+
+    const nestOutcome = result.providers.find((p) => p.provider === "NEST");
+    expect(nestOutcome).toEqual({
+      provider: "NEST",
+      status: "failure",
+      error: "Nest OAuth token refresh failed with 400",
+    });
+    expect(JSON.stringify(result)).not.toContain(distinctiveGoogleText);
+
+    // The rich diagnostic legitimately reaches server-side logs — this is
+    // the intended split, not a gap: log-only, never in the returned value.
+    expect(
+      loggedEvents()
+        .map((e) => JSON.stringify(e))
+        .join(""),
+    ).toContain(distinctiveGoogleText);
+  });
+
+  it("SECRET-SAFETY: an OAuth diagnostic log entry never contains a credential value, only the presence/whitespace booleans", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      enabledProviderDevice("pd-1", "ext-1", "sd-1"),
+    ] as never);
+    mockListDevices.mockRejectedValueOnce(
+      new NestOAuthRefreshError({
+        httpStatus: 400,
+        oauthError: "invalid_grant",
+        oauthErrorDescription: "Token has been expired or revoked.",
+        clientIdPresent: true,
+        clientSecretPresent: true,
+        refreshTokenPresent: true,
+        clientIdHasWhitespace: false,
+        clientSecretHasWhitespace: false,
+        refreshTokenHasWhitespace: false,
+      }),
+    );
+
+    await refreshThermostats(actor);
+
+    const diagnosticEvent = loggedEvents().find(
+      (e) => e.event === "nest_oauth_error_diagnostic",
+    );
+    expect(diagnosticEvent).toBeDefined();
+    // Only the exact allowed keys ever exist on this event — booleans,
+    // numbers, short known strings, and a timestamp; nothing else can leak
+    // through, since a credential value would have to arrive under one of
+    // these exact, pre-approved key names to be visible at all, and none of
+    // them are ever assigned a credential value anywhere in this file.
+    expect(Object.keys(diagnosticEvent ?? {}).sort()).toEqual(
+      [
+        "event",
+        "actorUserId",
+        "timestamp",
+        "httpStatus",
+        "oauthError",
+        "oauthErrorDescription",
+        "clientIdPresent",
+        "clientSecretPresent",
+        "refreshTokenPresent",
+        "clientIdHasWhitespace",
+        "clientSecretHasWhitespace",
+        "refreshTokenHasWhitespace",
+      ].sort(),
+    );
   });
 });

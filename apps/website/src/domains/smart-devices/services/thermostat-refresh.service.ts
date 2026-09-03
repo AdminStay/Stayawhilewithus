@@ -3,7 +3,7 @@ import "server-only";
 import { assertPermission, type AuthContext } from "@stayw/auth";
 import { prisma, type Prisma } from "@stayw/database";
 import { CieloClient } from "@stayw/integrations/cielo";
-import { NestClient } from "@stayw/integrations/nest";
+import { NestClient, NestOAuthRefreshError } from "@stayw/integrations/nest";
 
 import { toSmartDeviceMetadata } from "./provider-devices.service";
 
@@ -370,11 +370,29 @@ async function refreshNestProvider(
       });
       return { provider: "NEST", status: "not_configured" };
     }
+    // A failed OAuth token refresh carries a much richer, still-fully-
+    // sanitized diagnostic (HTTP status, Google's own short error code/
+    // description, and credential-presence/whitespace booleans — never a
+    // credential value) — logged here, server-side only, under its own
+    // event name, and deliberately NEVER folded into `error` below. Google's
+    // error_description is real free-text authored by Google, not something
+    // this codebase controls the wording of — surfacing it straight to a
+    // dashboard user would be "excessive Google response information," not
+    // a safe/generic UI error, so it stays log-only.
+    if (err instanceof NestOAuthRefreshError) {
+      logThermostatRefresh("nest_oauth_error_diagnostic", {
+        actorUserId: actor.userId,
+        ...err.diagnostic,
+      });
+    }
     // Same message ProviderRefreshOutcome.error already carries back to the
     // browser via RefreshThermostatsButton — already safe to show a VA, so
     // already safe to log. Never the raw thrown object, only its message
     // (HttpClient-shaped errors in this codebase are always "Request to
-    // ... failed with <status>" — never a credential value).
+    // ... failed with <status>" — never a credential value; a
+    // NestOAuthRefreshError's own message is the same generic
+    // "Nest OAuth token refresh failed with <status>" shape, unchanged by
+    // the diagnostic addition above).
     const error = err instanceof Error ? err.message : String(err);
     logThermostatRefresh("provider_outcome", {
       actorUserId: actor.userId,
