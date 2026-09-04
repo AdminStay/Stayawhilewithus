@@ -17,6 +17,11 @@ import {
   unmapProviderDeviceSchema,
 } from "./schemas/provider-devices.schema";
 import {
+  logLockRefresh,
+  refreshAugustTelemetry,
+  type AugustRefreshResult,
+} from "./services/lock-refresh.service";
+import {
   sendNestThermostatCommand,
   type NestCommandResult,
 } from "./services/nest-commands.service";
@@ -40,6 +45,7 @@ import { getCurrentUser } from "@/platform/auth/get-current-user";
 
 const DEVICES_PAGE_PATH = "/integrations/devices";
 const THERMOSTATS_PAGE_PATH = "/thermostats";
+const LOCKS_PAGE_PATH = "/locks";
 
 export type NestCommandActionState = { status: "idle" } | NestCommandResult;
 
@@ -296,6 +302,61 @@ export async function refreshThermostatsAction(
     // Same message this action already returns to the browser — already
     // safe to log.
     logThermostatRefresh("action_failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return {
+      status: "failure",
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * The single entry point behind /locks' "Refresh telemetry" button —
+ * deliberately calls only refreshAugustTelemetry() (lock-refresh.service.ts),
+ * never syncAugustDevices() (the separate, legacy /integrations "Sync Now"
+ * mechanism, untouched by this action) and never discoverAugustDevices()/
+ * mapProviderDeviceToProperty()/unmapProviderDevice()/
+ * setProviderDeviceEnabled() (this file's own discovery/mapping actions
+ * above, also untouched here). Same three-state, "never throws to the
+ * caller" contract as refreshThermostatsAction above — a real failure
+ * (missing August credentials, RBAC denial, provider error) renders inline
+ * via RefreshLocksButton instead of only surfacing as the page-level error
+ * boundary. refreshAugustTelemetry() itself already enforces
+ * smart_devices:update — this action introduces no separate/broader
+ * permission check.
+ */
+export type RefreshAugustActionState =
+  | { status: "idle" }
+  | ({ status: "success"; refreshedAt: string } & AugustRefreshResult)
+  | { status: "failure"; error: string };
+
+export async function refreshAugustAction(
+  _prevState: RefreshAugustActionState,
+): Promise<RefreshAugustActionState> {
+  try {
+    const actor = await getCurrentUser();
+    const result = await refreshAugustTelemetry(actor);
+    // Keeps the user on /locks and shows the newly refreshed status,
+    // battery, lock state, Last Synced, and Last Telemetry without a manual
+    // reload — this page is a Server Component that reads fresh on every
+    // render, so revalidating it is sufficient (same pattern
+    // refreshThermostatsAction above uses for /thermostats).
+    revalidatePath(LOCKS_PAGE_PATH);
+    logLockRefresh("action_succeeded", { actorUserId: actor.userId });
+    return {
+      status: "success",
+      refreshed: result.refreshed,
+      notReturnedByProvider: result.notReturnedByProvider,
+      refreshedAt: new Date().toISOString(),
+    };
+  } catch (err) {
+    // Covers both a genuine top-level failure inside refreshAugustTelemetry()
+    // (e.g. an RBAC denial or missing August credentials) and anything
+    // unexpected before it, e.g. getCurrentUser() itself failing. Same
+    // message this action already returns to the browser — already safe to
+    // log.
+    logLockRefresh("action_failed", {
       error: err instanceof Error ? err.message : String(err),
     });
     return {

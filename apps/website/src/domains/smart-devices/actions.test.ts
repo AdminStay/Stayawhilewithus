@@ -1,17 +1,33 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it, vi } from "vitest";
 
 const {
   mockRevalidatePath,
   mockDiscoverNestDevices,
   mockDiscoverAugustDevices,
+  mockMapProviderDeviceToProperty,
+  mockSetProviderDeviceEnabled,
+  mockUnmapProviderDevice,
+  mockSendNestThermostatCommand,
   mockRefreshThermostats,
   mockLogThermostatRefresh,
+  mockRefreshAugustTelemetry,
+  mockLogLockRefresh,
 } = vi.hoisted(() => ({
   mockRevalidatePath: vi.fn(),
   mockDiscoverNestDevices: vi.fn(),
   mockDiscoverAugustDevices: vi.fn(),
+  mockMapProviderDeviceToProperty: vi.fn(),
+  mockSetProviderDeviceEnabled: vi.fn(),
+  mockUnmapProviderDevice: vi.fn(),
+  mockSendNestThermostatCommand: vi.fn(),
   mockRefreshThermostats: vi.fn(),
   mockLogThermostatRefresh: vi.fn(),
+  mockRefreshAugustTelemetry: vi.fn(),
+  mockLogLockRefresh: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({
@@ -25,13 +41,13 @@ vi.mock("@/platform/auth/get-current-user", () => ({
 vi.mock("./services/provider-devices.service", () => ({
   discoverNestDevices: mockDiscoverNestDevices,
   discoverAugustDevices: mockDiscoverAugustDevices,
-  mapProviderDeviceToProperty: vi.fn(),
-  setProviderDeviceEnabled: vi.fn(),
-  unmapProviderDevice: vi.fn(),
+  mapProviderDeviceToProperty: mockMapProviderDeviceToProperty,
+  setProviderDeviceEnabled: mockSetProviderDeviceEnabled,
+  unmapProviderDevice: mockUnmapProviderDevice,
 }));
 
 vi.mock("./services/nest-commands.service", () => ({
-  sendNestThermostatCommand: vi.fn(),
+  sendNestThermostatCommand: mockSendNestThermostatCommand,
 }));
 
 vi.mock("./services/thermostat-refresh.service", () => ({
@@ -39,9 +55,15 @@ vi.mock("./services/thermostat-refresh.service", () => ({
   logThermostatRefresh: mockLogThermostatRefresh,
 }));
 
+vi.mock("./services/lock-refresh.service", () => ({
+  refreshAugustTelemetry: mockRefreshAugustTelemetry,
+  logLockRefresh: mockLogLockRefresh,
+}));
+
 import {
   discoverAugustDevicesAction,
   discoverNestDevicesAction,
+  refreshAugustAction,
   refreshThermostatsAction,
 } from "./actions";
 
@@ -250,5 +272,170 @@ describe("refreshThermostatsAction", () => {
       "action_failed",
       expect.objectContaining({ error: "ForbiddenError" }),
     );
+  });
+});
+
+describe("refreshAugustAction", () => {
+  const IDLE_REFRESH = { status: "idle" as const };
+
+  it("returns the exact refresh counts and revalidates /locks on success", async () => {
+    mockRefreshAugustTelemetry.mockResolvedValueOnce({
+      refreshed: 37,
+      notReturnedByProvider: 0,
+    });
+
+    const result = await refreshAugustAction(IDLE_REFRESH);
+
+    expect(result.status).toBe("success");
+    if (result.status === "success") {
+      expect(result.refreshed).toBe(37);
+      expect(result.notReturnedByProvider).toBe(0);
+      expect(result.refreshedAt).toEqual(expect.any(String));
+    }
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+  });
+
+  it("returns a partial-failure result (some devices could not be refreshed) as a success state with the real counts", async () => {
+    mockRefreshAugustTelemetry.mockResolvedValueOnce({
+      refreshed: 35,
+      notReturnedByProvider: 2,
+    });
+
+    const result = await refreshAugustAction(IDLE_REFRESH);
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "success",
+        refreshed: 35,
+        notReturnedByProvider: 2,
+      }),
+    );
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+  });
+
+  it("returns a zero-eligible result correctly — distinct from a failure", async () => {
+    mockRefreshAugustTelemetry.mockResolvedValueOnce({
+      refreshed: 0,
+      notReturnedByProvider: 0,
+    });
+
+    const result = await refreshAugustAction(IDLE_REFRESH);
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: "success",
+        refreshed: 0,
+        notReturnedByProvider: 0,
+      }),
+    );
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+  });
+
+  it("returns a top-level failure state instead of throwing when refreshAugustTelemetry() fails (e.g. RBAC denial or missing August credentials), and does not revalidate", async () => {
+    mockRefreshAugustTelemetry.mockRejectedValueOnce(
+      new Error(
+        "August isn't configured — set AUGUST_IDENTIFIER/AUGUST_INSTALL_ID/AUGUST_ACCESS_TOKEN.",
+      ),
+    );
+
+    const result = await refreshAugustAction(IDLE_REFRESH);
+
+    expect(result).toEqual({
+      status: "failure",
+      error:
+        "August isn't configured — set AUGUST_IDENTIFIER/AUGUST_INSTALL_ID/AUGUST_ACCESS_TOKEN.",
+    });
+    expect(mockRevalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("never lets a non-Error throw crash the action — falls back to String(err)", async () => {
+    mockRefreshAugustTelemetry.mockRejectedValueOnce("raw string rejection");
+
+    const result = await refreshAugustAction(IDLE_REFRESH);
+
+    expect(result).toEqual({
+      status: "failure",
+      error: "raw string rejection",
+    });
+  });
+
+  it("logs action_succeeded on success", async () => {
+    mockLogLockRefresh.mockReset();
+    mockRefreshAugustTelemetry.mockResolvedValueOnce({
+      refreshed: 37,
+      notReturnedByProvider: 0,
+    });
+
+    await refreshAugustAction(IDLE_REFRESH);
+
+    expect(mockLogLockRefresh).toHaveBeenCalledWith(
+      "action_succeeded",
+      expect.objectContaining({ actorUserId: "user-1" }),
+    );
+  });
+
+  it("logs action_failed with the same sanitized message already returned to the UI on failure", async () => {
+    mockLogLockRefresh.mockReset();
+    mockRefreshAugustTelemetry.mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await refreshAugustAction(IDLE_REFRESH);
+
+    expect(mockLogLockRefresh).toHaveBeenCalledWith(
+      "action_failed",
+      expect.objectContaining({ error: "ForbiddenError" }),
+    );
+  });
+
+  it("delegates only to refreshAugustTelemetry() — never touches discovery, mapping, enablement, or Nest command functions, even on a real successful run", async () => {
+    mockRefreshAugustTelemetry.mockResolvedValueOnce({
+      refreshed: 37,
+      notReturnedByProvider: 0,
+    });
+
+    await refreshAugustAction(IDLE_REFRESH);
+
+    expect(mockRefreshAugustTelemetry).toHaveBeenCalledTimes(1);
+    expect(mockDiscoverAugustDevices).not.toHaveBeenCalled();
+    expect(mockDiscoverNestDevices).not.toHaveBeenCalled();
+    expect(mockMapProviderDeviceToProperty).not.toHaveBeenCalled();
+    expect(mockSetProviderDeviceEnabled).not.toHaveBeenCalled();
+    expect(mockUnmapProviderDevice).not.toHaveBeenCalled();
+    expect(mockSendNestThermostatCommand).not.toHaveBeenCalled();
+  });
+
+  it("SOURCE-LEVEL GUARANTEE: refreshAugustAction's own function body never references the legacy Sync Now path, discovery, mapping, enablement, or any lock/unlock or PIN/access-code identifier", () => {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(resolve(__dirname, "./actions.ts"), "utf8");
+
+    // Isolates just this one action's function body — actions.ts
+    // legitimately references discovery/mapping/enablement functions
+    // elsewhere, for their own actions (discoverAugustDevicesAction,
+    // setProviderDeviceEnabledAction, etc.), so a whole-file substring
+    // check would false-fail. Slices from this action's own declaration to
+    // the next top-level `export` after it.
+    const start = source.indexOf("export async function refreshAugustAction(");
+    expect(start).toBeGreaterThan(-1);
+    const rest = source.slice(start);
+    const nextExportOffset = rest.indexOf("\nexport ", 1);
+    const body =
+      nextExportOffset === -1 ? rest : rest.slice(0, nextExportOffset);
+
+    for (const forbidden of [
+      "syncAugustDevices",
+      "discoverAugustDevices",
+      "discoverNestDevices",
+      "mapProviderDeviceToProperty",
+      "setProviderDeviceEnabled",
+      "unmapProviderDevice",
+      "sendNestThermostatCommand",
+      "lockDevice",
+      "unlockDevice",
+      "accessCode",
+      "PIN",
+    ]) {
+      expect(body).not.toContain(forbidden);
+    }
   });
 });

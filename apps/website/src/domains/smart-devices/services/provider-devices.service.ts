@@ -35,8 +35,14 @@ export interface DiscoverySyncResult {
   detailFailures?: number;
 }
 
-/** Splits an array into consecutive chunks of at most `size` items each — used to bound how many August detail requests run concurrently. */
-function chunk<T>(items: readonly T[], size: number): T[][] {
+/**
+ * Splits an array into consecutive chunks of at most `size` items each —
+ * used to bound how many August detail requests run concurrently. Exported
+ * so lock-refresh.service.ts's refreshAugustTelemetry() can reuse the exact
+ * same batching helper discoverAugustDevices() already uses below, rather
+ * than a second, potentially-drifting copy.
+ */
+export function chunk<T>(items: readonly T[], size: number): T[][] {
   const chunks: T[][] = [];
   for (let i = 0; i < items.length; i += size) {
     chunks.push(items.slice(i, i + size));
@@ -236,8 +242,14 @@ export async function discoverNestDevices(
  * connections. 4-6 is small enough to stay well clear of August's own
  * unofficial API, while cutting total wall-clock time by roughly this
  * factor compared to one-at-a-time.
+ *
+ * Exported so lock-refresh.service.ts's refreshAugustTelemetry() reuses
+ * this exact same cap rather than defining its own — the resource-
+ * contention risk this constant guards against applies identically to any
+ * function issuing bounded-concurrency August detail requests, not just
+ * discovery.
  */
-const AUGUST_DETAIL_CONCURRENCY = 5;
+export const AUGUST_DETAIL_CONCURRENCY = 5;
 
 /**
  * August equivalent of discoverNestDevices() above, but split into two
