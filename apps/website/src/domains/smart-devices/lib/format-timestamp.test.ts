@@ -13,9 +13,18 @@ describe("formatTimestamp", () => {
     expect(formatTimestamp(null)).toBe("—");
   });
 
-  it("formats a known instant as an explicit, UTC-labeled string", () => {
+  it("formats a known summer instant in America/Chicago with the DST-aware CDT abbreviation", () => {
+    // 2026-09-02T05:29:00Z is during Central Daylight Time (UTC-5) —
+    // 05:29 UTC -> 00:29 America/Chicago, i.e. 12:29 AM CDT.
     const date = new Date("2026-09-02T05:29:00.000Z");
-    expect(formatTimestamp(date)).toBe("Sep 2, 2026, 5:29 AM UTC");
+    expect(formatTimestamp(date)).toBe("Sep 2, 2026, 12:29 AM CDT");
+  });
+
+  it("formats a known winter instant in America/Chicago with the DST-aware CST abbreviation, never a hard-coded CDT", () => {
+    // 2026-01-15T18:00:00Z is during Central Standard Time (UTC-6) —
+    // 18:00 UTC -> 12:00 America/Chicago, i.e. 12:00 PM CST.
+    const date = new Date("2026-01-15T18:00:00.000Z");
+    expect(formatTimestamp(date)).toBe("Jan 15, 2026, 12:00 PM CST");
   });
 
   /**
@@ -26,9 +35,9 @@ describe("formatTimestamp", () => {
    * viewer's browser, e.g. Asia/Manila, GMT+8) match, closing the real
    * React #418 hydration mismatch this function replaces the cause of. If
    * this function used ambient toLocaleString() instead, this exact test
-   * would fail — confirmed manually: the same instant renders as
-   * "9/2/2026, 1:29:00 PM" under TZ=Asia/Manila vs "9/2/2026, 5:29:00 AM"
-   * under TZ=UTC.
+   * would fail. America/Chicago is just as explicit/deterministic as the
+   * UTC it replaces — it's a fixed named zone, not an ambient default — so
+   * this guarantee holds unchanged.
    */
   it("produces identical output regardless of the runtime's ambient TZ — proves deterministic, explicit inputs rather than ambient locale/timezone", () => {
     const date = new Date("2026-09-02T05:29:00.000Z");
@@ -48,7 +57,7 @@ describe("formatTimestamp", () => {
     expect(underManilaTz).toBe(underNewYorkTz);
     expect(underManilaTz).toBe(underUtcTz);
     expect(underManilaTz).toBe(underAucklandTz);
-    expect(underManilaTz).toBe("Sep 2, 2026, 5:29 AM UTC");
+    expect(underManilaTz).toBe("Sep 2, 2026, 12:29 AM CDT");
   });
 
   it("accepts a plain Date-shaped value (not requiring a real Date instance) the same way the previous ambient formatter did", () => {
