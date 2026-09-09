@@ -164,9 +164,18 @@ export function LocksList({ locks }: { locks: LockWithProperty[] }) {
                           Attention needed — telemetry stale
                         </Badge>
                       )}
-                    {!offlineFlag && !staleFlag && unknownFlag && (
-                      <Badge tone="neutral">Connectivity not reported</Badge>
-                    )}
+                    {!offlineFlag &&
+                      !staleFlag &&
+                      unknownFlag &&
+                      lowBatteryFlag && (
+                        <Badge tone="warning">{`Connectivity not reported + low battery (${battery}%)`}</Badge>
+                      )}
+                    {!offlineFlag &&
+                      !staleFlag &&
+                      unknownFlag &&
+                      !lowBatteryFlag && (
+                        <Badge tone="neutral">Connectivity not reported</Badge>
+                      )}
                     {!offlineFlag &&
                       !staleFlag &&
                       !unknownFlag &&

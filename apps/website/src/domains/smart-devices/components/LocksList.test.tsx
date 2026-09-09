@@ -127,7 +127,7 @@ describe("LocksList — connectivity/telemetry Warnings wording", () => {
     ).toBeTruthy();
   });
 
-  it("UNKNOWN + fresh telemetry renders 'Connectivity not reported' (unchanged)", () => {
+  it("UNKNOWN + fresh telemetry + normal battery renders 'Connectivity not reported' (unchanged)", () => {
     renderLocks([
       makeLock({
         name: "Casa Del Mar Lock",
@@ -138,6 +138,21 @@ describe("LocksList — connectivity/telemetry Warnings wording", () => {
     expect(
       within(warningsCellFor("Casa Del Mar Lock")).getByText(
         "Connectivity not reported",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("UNKNOWN + fresh telemetry + low battery renders the combined connectivity+battery message (regression: previously hid the low battery entirely)", () => {
+    renderLocks([
+      makeLock({
+        name: "Las Sirenas - Front Door",
+        status: "UNKNOWN",
+        metadata: { telemetryUpdatedAt: FRESH_TELEMETRY, batteryLevel: 19 },
+      }),
+    ]);
+    expect(
+      within(warningsCellFor("Las Sirenas - Front Door")).getByText(
+        "Connectivity not reported + low battery (19%)",
       ),
     ).toBeTruthy();
   });
