@@ -7,12 +7,14 @@
  * whose internalCode has no entry here cannot be linked through that
  * service no matter what a request submits.
  *
- * Miramar Bliss (MIRAMAR-BLISS) is deliberately absent: its three OwnerRez
+ * Miramar Bliss (MIRAMAR-BLISS) was genuinely ambiguous across three OwnerRez
  * candidates (389173 "Miramar Bliss", 410682 "Miramar Bliss II", 480401
- * "Miramar-Bliss") remain genuinely ambiguous (see HANDOFF.md Increment 58)
- * and have not been approved. Adding it here is the only way it could ever
- * become linkable — a deliberate, separate, future code change, never an
- * inferred or default choice.
+ * "Miramar-Bliss") from HANDOFF.md Increment 58 onward. Michelle confirmed
+ * live (Sep 9, 2026 Touch Base #4) that 480401 is the correct record, and
+ * this was independently re-verified against fresh live Production UI
+ * evidence (2026-09-10, see HANDOFF.md) before this entry was added — the
+ * other two candidates (389173, 410682) remain deliberately unapproved and
+ * must never be added without their own separate, explicit approval.
  *
  * `ownerRezPropertyId` matches the string convention already used on
  * Property.ownerRezPropertyId (OwnerRez's own id is numeric; StayWhile
@@ -46,6 +48,11 @@ export const APPROVED_OWNERREZ_LINKS: readonly ApprovedOwnerRezLink[] = [
     propertyInternalCode: "ISLAND-TIDES",
     ownerRezPropertyId: "355021",
     ownerRezPropertyName: "Island Tides",
+  },
+  {
+    propertyInternalCode: "MIRAMAR-BLISS",
+    ownerRezPropertyId: "480401",
+    ownerRezPropertyName: "Miramar-Bliss",
   },
   {
     propertyInternalCode: "OCEAN-PEARL",

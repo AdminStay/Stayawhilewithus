@@ -102,7 +102,7 @@ describe("OwnerRezMatchReportPage — source-level wiring proof", () => {
 });
 
 describe("OwnerRezMatchReportPage — rendered output", () => {
-  it("renders a Confirm control for an approved, unlinked property, and no confirmation control at all for an unapproved property (e.g. Miramar Bliss)", async () => {
+  it("renders a Confirm control for each approved, unlinked property — including the now-approved Miramar Bliss (480401) — and never one per unapproved OwnerRez candidate", async () => {
     mockMatchOwnerRezProperties.mockResolvedValueOnce({
       configured: true,
       report: {
@@ -158,27 +158,48 @@ describe("OwnerRezMatchReportPage — rendered output", () => {
     const jsx = await OwnerRezMatchReportPage();
     render(jsx);
 
-    // The one approved, currently-unlinked property gets exactly one form/button.
-    expect(screen.getByRole("button", { name: "Confirm Link" })).toBeTruthy();
-    expect(document.querySelectorAll("form")).toHaveLength(1);
+    // Exactly two approved, currently-unlinked pairings exist in this
+    // report: Aqua Palm and the now-approved Miramar Bliss (480401). The
+    // other two real Miramar Bliss OwnerRez candidates in unmatchedOwnerRez
+    // (389173, 410682) have no allow-list entry of their own and must
+    // never produce an additional control.
+    expect(
+      screen.getAllByRole("button", { name: "Confirm Link" }),
+    ).toHaveLength(2);
+    const forms = Array.from(document.querySelectorAll("form"));
+    expect(forms).toHaveLength(2);
 
-    const form = document.querySelector("form");
-    expect(form?.querySelector('input[name="propertyId"]')).toHaveProperty(
-      "value",
-      "aqua-palm-uuid",
+    const aquaPalmForm = forms.find(
+      (f) =>
+        f.querySelector('input[name="propertyId"]')?.getAttribute("value") ===
+        "aqua-palm-uuid",
     );
     expect(
-      form?.querySelector('input[name="ownerRezPropertyId"]'),
+      aquaPalmForm?.querySelector('input[name="ownerRezPropertyId"]'),
     ).toHaveProperty("value", "386471");
 
-    // Miramar Bliss is not in APPROVED_OWNERREZ_LINKS, so the confirmation
-    // panel (scoped via the "Approved OwnerRez links" heading's section)
-    // never mentions it at all, even though it appears in the live report
-    // with three real OwnerRez candidates.
-    const panelSection = screen
-      .getByText("Approved OwnerRez links")
-      .closest("section") as HTMLElement;
-    expect(within(panelSection).queryByText(/Miramar/)).toBeNull();
+    const miramarForm = forms.find(
+      (f) =>
+        f.querySelector('input[name="propertyId"]')?.getAttribute("value") ===
+        "miramar-bliss-uuid",
+    );
+    expect(miramarForm).toBeTruthy();
+    expect(
+      miramarForm?.querySelector('input[name="ownerRezPropertyId"]'),
+    ).toHaveProperty("value", "480401");
+
+    // The panel only ever submits the one allow-listed id (480401) for
+    // Miramar Bliss — never 389173 or 410682 — no matter what the live
+    // report contains for those two unapproved candidates.
+    expect(
+      forms.some((f) =>
+        ["389173", "410682"].includes(
+          f
+            .querySelector('input[name="ownerRezPropertyId"]')
+            ?.getAttribute("value") ?? "",
+        ),
+      ),
+    ).toBe(false);
 
     // OwnerRezMatchReportPreview itself still renders the raw report
     // unchanged, including the Miramar Bliss row it's always shown.

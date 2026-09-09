@@ -47,8 +47,8 @@ function uniqueConstraintError() {
 }
 
 describe("APPROVED_OWNERREZ_LINKS", () => {
-  it("contains exactly the six human-approved mappings", () => {
-    expect(APPROVED_OWNERREZ_LINKS).toHaveLength(6);
+  it("contains exactly the seven human-approved mappings", () => {
+    expect(APPROVED_OWNERREZ_LINKS).toHaveLength(7);
     expect(
       APPROVED_OWNERREZ_LINKS.map((l) => l.propertyInternalCode).sort(),
     ).toEqual(
@@ -57,21 +57,33 @@ describe("APPROVED_OWNERREZ_LINKS", () => {
         "BAHAMAS",
         "BONJOUR-AMI",
         "ISLAND-TIDES",
+        "MIRAMAR-BLISS",
         "OCEAN-PEARL",
         "SANDY-NUDES",
       ].sort(),
     );
   });
 
-  it("does not contain Miramar Bliss under any internal code", () => {
-    expect(
-      APPROVED_OWNERREZ_LINKS.find(
-        (l) => l.propertyInternalCode === "MIRAMAR-BLISS",
-      ),
-    ).toBeUndefined();
+  it("approves Miramar Bliss for exactly its confirmed OwnerRez id (480401), and no other candidate", () => {
+    const miramar = APPROVED_OWNERREZ_LINKS.find(
+      (l) => l.propertyInternalCode === "MIRAMAR-BLISS",
+    );
+    expect(miramar).toEqual({
+      propertyInternalCode: "MIRAMAR-BLISS",
+      ownerRezPropertyId: "480401",
+      ownerRezPropertyName: "Miramar-Bliss",
+    });
+
+    // The two previously-ambiguous candidates must never sneak in under a
+    // different entry — exactly one MIRAMAR-BLISS entry exists, and its
+    // ownerRezPropertyId is exactly 480401, never 389173 or 410682.
+    const allMiramarEntries = APPROVED_OWNERREZ_LINKS.filter(
+      (l) => l.propertyInternalCode === "MIRAMAR-BLISS",
+    );
+    expect(allMiramarEntries).toHaveLength(1);
     expect(
       APPROVED_OWNERREZ_LINKS.some((l) =>
-        l.ownerRezPropertyName.toLowerCase().includes("miramar"),
+        ["389173", "410682"].includes(l.ownerRezPropertyId),
       ),
     ).toBe(false);
   });
@@ -129,9 +141,9 @@ describe("confirmOwnerRezLink", () => {
     },
   );
 
-  it.each(["389173", "410682", "480401"])(
-    "rejects Miramar Bliss even for its real OwnerRez candidate id %s — the service itself refuses it, not just the UI",
-    async (miramarOwnerRezId) => {
+  it.each(["389173", "410682"])(
+    "still rejects Miramar Bliss's two unapproved OwnerRez candidate ids (%s) — only 480401 is approved",
+    async (unapprovedOwnerRezId) => {
       vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
       vi.mocked(prisma.property.findUnique).mockResolvedValueOnce(
         makeUnlinkedProperty({
@@ -143,14 +155,20 @@ describe("confirmOwnerRezLink", () => {
       await expect(
         confirmOwnerRezLink(actor, {
           propertyId: PROPERTY_ID,
-          ownerRezPropertyId: miramarOwnerRezId,
+          ownerRezPropertyId: unapprovedOwnerRezId,
         }),
-      ).rejects.toThrow("not approved for OwnerRez linking");
+      ).rejects.toThrow("does not match the approved mapping");
 
       expect(prisma.property.update).not.toHaveBeenCalled();
       expect(recordAudit).not.toHaveBeenCalled();
     },
   );
+
+  // Miramar Bliss linking to its confirmed 480401 is already exercised by
+  // the generic it.each(APPROVED_OWNERREZ_LINKS) case above — that suite
+  // iterates the live exported array, so it automatically covers the new
+  // entry with the same assertions (including the single-field update and
+  // the exact audit payload) without needing a duplicate test here.
 
   it("rejects a tampered OwnerRez ID for an otherwise-approved property", async () => {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
