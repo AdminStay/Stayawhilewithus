@@ -260,3 +260,83 @@ describe("LocksList — connectivity/telemetry Warnings wording", () => {
     ).toBeTruthy();
   });
 });
+
+describe("LocksList — per-row spot-refresh action gating", () => {
+  it("renders no Actions column and no per-row button when canRefresh is omitted (default false) — existing behavior unchanged", () => {
+    renderLocks([makeLock({ name: "Ungated Lock" })]);
+    expect(screen.queryByText("Actions")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Refresh telemetry" }),
+    ).toBeNull();
+  });
+
+  it("renders no Actions column when canRefresh is true but no action is supplied", () => {
+    render(
+      <LocksList
+        locks={[makeLock({ name: "No Action Lock" })] as never}
+        canRefresh={true}
+      />,
+    );
+    expect(screen.queryByText("Actions")).toBeNull();
+  });
+
+  it("renders a per-row 'Refresh telemetry' button for an August lock when canRefresh + action are both supplied", () => {
+    const action = vi.fn();
+    render(
+      <LocksList
+        locks={[makeLock({ id: "lock-abc", name: "Gated Lock" })] as never}
+        canRefresh={true}
+        spotRefreshAction={action}
+      />,
+    );
+    expect(screen.getByText("Actions")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Refresh telemetry" }),
+    ).toBeTruthy();
+  });
+
+  it("each row's button submits that exact row's own SmartDevice.id, never another row's", () => {
+    const action = vi.fn();
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({ id: "lock-aaa", name: "Row A" }),
+            makeLock({ id: "lock-bbb", name: "Row B" }),
+          ] as never
+        }
+        canRefresh={true}
+        spotRefreshAction={action}
+      />,
+    );
+
+    const rowA = screen.getByText("Row A").closest("tr");
+    const rowB = screen.getByText("Row B").closest("tr");
+    if (!rowA || !rowB) throw new Error("Expected rows not found");
+
+    expect(within(rowA).getByDisplayValue("lock-aaa")).toBeTruthy();
+    expect(within(rowB).getByDisplayValue("lock-bbb")).toBeTruthy();
+  });
+
+  it("shows a placeholder, not a button, for a non-August row even when gated on", () => {
+    const action = vi.fn();
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              id: "lock-nest",
+              name: "Not August",
+              provider: "CIELO" as never,
+            }),
+          ] as never
+        }
+        canRefresh={true}
+        spotRefreshAction={action}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Refresh telemetry" }),
+    ).toBeNull();
+  });
+});

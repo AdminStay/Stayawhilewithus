@@ -1,7 +1,10 @@
 import { hasPermission } from "@stayw/auth";
 import { PageHeader } from "@stayw/ui";
 
-import { refreshAugustAction } from "@/domains/smart-devices/actions";
+import {
+  refreshAugustAction,
+  refreshAugustTelemetrySpotAction,
+} from "@/domains/smart-devices/actions";
 import { LocksList } from "@/domains/smart-devices/components/LocksList";
 import { RefreshLocksButton } from "@/domains/smart-devices/components/RefreshLocksButton";
 import { listSmartDevices } from "@/domains/smart-devices/services/smart-devices.service";
@@ -35,7 +38,11 @@ export default async function LocksPage() {
           <RefreshLocksButton action={refreshAugustAction} />
         </div>
       )}
-      <LocksList locks={locks} />
+      <LocksList
+        locks={locks}
+        canRefresh={canRefresh}
+        spotRefreshAction={refreshAugustTelemetrySpotAction}
+      />
     </div>
   );
 }

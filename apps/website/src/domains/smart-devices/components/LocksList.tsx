@@ -14,6 +14,7 @@ import {
 } from "@stayw/ui";
 import { BatteryLow, HelpCircle, Lock, WifiOff } from "lucide-react";
 
+import type { RefreshAugustSpotActionState } from "../actions";
 import {
   getBatteryLevel,
   getLockState,
@@ -23,6 +24,8 @@ import {
   isTelemetryStale,
   type SmartDevice,
 } from "../services/smart-devices.service";
+
+import { LockSpotRefreshButton } from "./LockSpotRefreshButton";
 
 type LockWithProperty = SmartDevice & { property: { name: string } };
 
@@ -49,7 +52,19 @@ const CONNECTIVITY_TONE: Record<LockWithProperty["status"], Tone> = {
   ERROR: "error",
 };
 
-export function LocksList({ locks }: { locks: LockWithProperty[] }) {
+export function LocksList({
+  locks,
+  canRefresh = false,
+  spotRefreshAction,
+}: {
+  locks: LockWithProperty[];
+  /** UX-only gate, matching every other write-capable button in this domain — assertPermission inside the server action remains the real enforcement. */
+  canRefresh?: boolean;
+  spotRefreshAction?: (
+    prevState: RefreshAugustSpotActionState,
+    formData: FormData,
+  ) => Promise<RefreshAugustSpotActionState>;
+}) {
   const total = locks.length;
   const online = locks.filter((l) => l.status === "ONLINE").length;
   const offline = locks.filter((l) => l.status === "OFFLINE").length;
@@ -102,6 +117,9 @@ export function LocksList({ locks }: { locks: LockWithProperty[] }) {
           <TableHeaderCell>Provider</TableHeaderCell>
           <TableHeaderCell>Last synced</TableHeaderCell>
           <TableHeaderCell>Last telemetry</TableHeaderCell>
+          {canRefresh && spotRefreshAction && (
+            <TableHeaderCell>Actions</TableHeaderCell>
+          )}
         </TableHead>
         <TableBody>
           {locks.map((lock) => {
@@ -197,6 +215,18 @@ export function LocksList({ locks }: { locks: LockWithProperty[] }) {
                 <TableCell className="text-ink-muted">
                   {formatTimestamp(telemetryUpdatedAt)}
                 </TableCell>
+                {canRefresh && spotRefreshAction && (
+                  <TableCell>
+                    {lock.provider === "AUGUST" ? (
+                      <LockSpotRefreshButton
+                        smartDeviceId={lock.id}
+                        action={spotRefreshAction}
+                      />
+                    ) : (
+                      <span className="text-ink-muted">—</span>
+                    )}
+                  </TableCell>
+                )}
               </TableRow>
             );
           })}
