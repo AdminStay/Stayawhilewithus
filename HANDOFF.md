@@ -28,7 +28,104 @@ See also the dedicated cross-session memory `project_dynamic_integration_config`
 
 ---
 
-# 🔖 CURRENT STATE — 2026-09-03 (READ THIS FIRST — supersedes every earlier summary below)
+# 🔖 CURRENT STATE — 2026-09-13 (READ THIS FIRST — supersedes every earlier summary below)
+
+**Authoritative current state as of `## Increment 85` (2026-09-13), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-09-11 summary immediately below, now historical), this summary governs. Full detail in `## Increment 85` at the bottom of this file.
+
+1. **A narrowly-scoped, per-row August telemetry "spot refresh" feature was built, tested, and deployed to Production** (`refreshAugustTelemetryForSelectedLocks()`, exact-`SmartDevice.id` selection only, GET-only, no create/upsert/mapping/`ProviderDevice` write, metadata merged not replaced, no lock/unlock/PIN path reachable — proven in tests). The first Production attempt against Bonjour AMI's locks failed with **401**. The prior August token had a documented 2026-09-12 expiry, and the 401 occurred immediately after that expiry, making token expiration the leading and strongly corroborated explanation — it was not independently proven as the exclusive server-side cause. There was no evidence of a defect in the new scoped-refresh implementation: its auth plumbing uses the existing August authentication path, identical to the already-relied-upon August paths.
+2. **August Production authentication has since been restored and independently verified.** The human user identified the correct existing StayWhile August account from the locally configured `AUGUST_IDENTIFIER`, renewed the login manually (interactive 2FA, outside this session), validated the fresh local credentials with a clean-terminal `check.ts` run, then updated the four August credential variables in the StayWhile Client C Production Vercel project and redeployed successfully. `AUGUST_PROPERTY_MAP`/`AUGUST_EXCLUDED_LOCK_IDS` were not touched.
+3. **Both Bonjour AMI locks were successfully refreshed in Production using the new per-row scoped action, with no 401.** Front Door: battery changed 90% → 89%; In Law: battery unchanged at 74%. Both show Healthy/Online, no stale-telemetry warning after refresh. Full before/after and exact timestamps in `## Increment 85`.
+4. **Not claimed**: that the original August-app-vs-StayWhile battery discrepancy is fully explained — the successful refresh confirms the values currently returned through StayWhile's August integration; provider telemetry timestamps can still legitimately be older than StayWhile's own sync timestamp, and that gap alone was not investigated further this increment.
+5. **Unchanged**: automatic August re-sync remains **not implemented** (no code evidence found otherwise); physical lock controls remain fully restricted — no lock/unlock/PIN operation exists or was performed at any point in this thread.
+6. **No credential value (access token, install ID, password, 2FA code) is recorded anywhere in this file.** No August API call, Sync Now, or additional Refresh occurred beyond the two verified spot-refreshes described above; no `.env.local`/Vercel change was made by Claude — both were changed only by the human user, directly.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-13" above] CURRENT STATE — 2026-09-11, latest (READ THIS FIRST — supersedes every earlier summary below)
+
+**Authoritative current state as of `## Increment 84` (2026-09-11), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-09-11 summary immediately below, now historical), this summary governs. Full detail in `## Increment 84` at the bottom of this file.
+
+1. **Notion — the Increment 75/76-vs-Sep 9-meeting documentation conflict is now RESOLVED via direct manual Production verification (Sep 10/11, 2026).** Live checks on `/notion` in Production: connection displays Connected; "View of Listings" displays Read access verified; Property Listings loads 35 of 35; the general "Search Notion" box is present and functional — a controlled search for a known existing listing ("Moonlit Cove") returned exactly 1 result, correctly classified as a Property listing with its address and an "Open in Notion" link. A search for "cleaning" returned 0 results — **not classified as a failure**, since whether a matching Notion item actually exists/is accessible was never established either way.
+2. **Notion capability status, now Production-verified where marked**: authentication/connection — **PRODUCTION VERIFIED**; Property Listings/read access — **PRODUCTION VERIFIED**; general Notion search — **PRODUCTION VERIFIED**. Unchanged, still **NOT IMPLEMENTED**: Notion-specific n8n operational workflows; page-change/deletion monitoring and alerts; in-dashboard Notion editing.
+3. **All Increment 83 findings remain unchanged and are not restated in full here** — Poinciana's confirmed-but-unauthorized identity, the transient Aqua Palm anomaly (both explanations still preserved), the controlled Refresh result and its careful non-"fully resolved" interpretation, Bonjour Upstairs's still-OPEN connectivity discrepancy (observations not simultaneous), and manual-only refresh cadence.
+4. **No application code, n8n, Notion write, database query/write, device/provider API call, or OwnerRez change occurred this increment.** `HANDOFF.md` is the only file touched.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-11, latest" above] CURRENT STATE — 2026-09-11, later (READ THIS FIRST — supersedes every earlier summary below)
+
+**Authoritative current state as of `## Increment 83` (2026-09-11), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-09-11 summary immediately below, now historical), this summary governs. Full detail in `## Increment 83` at the bottom of this file.
+
+1. **Poinciana — identity confirmed by Michelle, action still NOT authorized.** Michelle confirmed, replying specifically to the Poinciana question, that the Nest thermostat named "Poinciana" corresponds to OwnerRez property "Poinciana by the Bay" (OwnerRez ID `355019`, internal code "Poinciana," status **Inactive**). This resolves _identity only_. **Do not create/link a StayWhile Property or map/enable the thermostat** — the safe workflow still needs to be determined given the OwnerRez record is Inactive; the existing `CreatePropertyFromOwnerRezButton` UI only renders for Active OwnerRez records, so no create path currently exists for this specific record as the code stands today.
+2. **A transient Aqua Palm anomaly was investigated and remains partially unresolved, by design.** A brief window where `/thermostats` search for "Aqua Palm" returned 0 of 42 (having previously returned results, and later returning 2 of 42) was investigated read-only. Two candidate explanations remain open, deliberately not resolved to one: a genuine brief disable/re-enable of the device, or the browser's own back/forward cache showing a stale page — **the navigation method between the two observations is UNKNOWN and was not used to favor either explanation.** Separately, a `SmartDevice.updatedAt` timestamp change (12:43 PM → 7:37 PM the same day, Sep 9) independently proved a real database write occurred in that window — not merely a display artifact.
+3. **A controlled, single, manually-approved Production Thermostats Refresh was performed and completed successfully — Sep 10, 2026, 2:58 PM CDT.** Nest: 39 devices refreshed; Cielo: 3 devices refreshed; aggregate `/thermostats` counts unchanged at 42 total / 40 online / 2 non-online. Full before/after detail in `## Increment 83`.
+4. **Freshness was demonstrably contributing to at least some of the reported temperature discrepancies** — Aqua Palm - Living Room's current reading changed 74°F → 72°F immediately upon refresh; OUAP - living room changed 75°F/75°F → 74°F/72°F. **Not claimed as fully resolved** — no same-minute Google Home reading exists for the post-refresh moment to confirm agreement.
+5. **Bonjour - Upstairs remains an OPEN, unexplained connectivity discrepancy.** The controlled SDM refresh reported Bonjour - Upstairs ONLINE, while the team's earlier Google Home evidence showed Error/offline. Because those observations were not captured at the same moment, the discrepancy remains OPEN. A read-only code investigation confirmed our integration derives connectivity from exactly one field, `sdm.devices.traits.Connectivity.status`, modeled as `ONLINE`/`OFFLINE` only — no `ERROR` state exists anywhere in this integration's type system or Google's own documented trait. Two plausible, unproven explanations remain, neither favored: Google Home's consumer-app "Error" state may reflect device-health information the partner-facing SDM API never exposes at all, or the thermostat may have genuinely reconnected between the team's observation and our refresh.
+6. **Nest telemetry refresh is confirmed manual-only** — no cron/background/scheduled trigger exists anywhere in this codebase (`vercel.json` doesn't exist; no scheduling code references any smart-device/thermostat path). The observed ~19-hour staleness window plus the refresh's own before/after results are real evidence supporting evaluation of an automatic scheduled refresh — **not implemented, a read-only design proposal only was prepared this increment**, covering cadence, failure handling, rate limits, visibility of partial failures, overlap prevention, and independent Nest/Cielo scheduling. See the session record (not reproduced in full in this file) for the complete proposal.
+7. **All prior Increment 81/82 findings remain unchanged and are not restated in full here** — the 10 unresolved newly-authorized Nest devices, the Panhandle Hallway/Upstairs count anomaly, the two unresolved Miramar Bliss Nest thermostats, Miramar Bliss's completed OwnerRez link (separate from its Nest identity question), Dolphin- 2nd Floor resolved by the team, and every other open item listed in Increment 82's own "all other outstanding work" section.
+8. **No Nest discovery, mapping, enabling, thermostat command, setpoint/mode/fan/power change, OAuth/PCM change, OwnerRez create/link, or application-code change occurred this increment.** Exactly one Production Refresh (read-only with respect to physical devices, per the verified safety boundary) was performed, by Kris, with explicit pre-approval. `HANDOFF.md` is the only file touched.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-11, later" above] CURRENT STATE — 2026-09-11 (READ THIS FIRST — supersedes every earlier summary below)
+
+**Authoritative current state as of `## Increment 82` (2026-09-11), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-09-10 summary immediately below, now historical), this summary governs. Full detail in `## Increment 82` at the bottom of this file.
+
+1. **Poinciana — new evidence, still OPEN, not resolved.** A live OwnerRez Match Report record now shows: name "Poinciana by the Bay," OwnerRez ID `355019`, internal code "Poinciana," status **Inactive**. **This has NOT been established as the correct match for the Nest thermostat named "Poinciana"** — the shared name alone is not evidence, per the standing no-fuzzy-matching rule. No property has been created or linked. Michelle/Kenny confirmation is needed on whether "Poinciana by the Bay" (355019) is the correct property. Whether a non-deleted StayWhile `Property` row for Poinciana already exists is still unconfirmed (no Production DB access this session) — the dropdown-exclusion code path was independently confirmed (see Increment 81/82: only `deletedAt` matters, no status/OwnerRez-link filter), which narrows but doesn't resolve the cause.
+2. **New team QA — Bonjour Upstairs connectivity discrepancy (OPEN).** Google Home reports the device as Error/offline; StayWhile's dashboard shows it Online (73°F current, 72°F setpoint). Not yet attributed to either side being wrong — tracked as a connectivity/status-freshness investigation.
+3. **New team QA — OUAP Living Room temperature/setpoint discrepancy (OPEN).** Google Home: 72°F indoor / 72°F set. StayWhile: 75°F current / 75°F set. Unlike the Aqua Palm example, **both** current temperature and setpoint disagree here.
+4. **Three concrete Nest QA cases now exist**, together treated as evidence for one focused telemetry-freshness/source investigation, not proof of a single root cause: Aqua Palm - Living Room (ambient-only, 71°F vs 74°F, setpoint agrees), OUAP - Living Room (ambient + setpoint, 72/72 vs 75/75), Bonjour Upstairs (connectivity/status, Error/offline vs Online).
+5. **A read-only code-path investigation into Nest telemetry was completed this session** (not yet a conclusion, no fix applied) — see `## Increment 82` for the full trace: SDM fields → `metadata.currentTemperature`/`targetTemperature`/`mode`/`humidity`/`telemetryUpdatedAt` (`toSmartDeviceMetadata()`, `provider-devices.service.ts`); connectivity is a **stored** `SmartDevice.status` value, never recomputed live on page render; two concrete, code-confirmed mechanisms exist that can leave stale data displayed as current — (a) enabling a device copies its discovery-time snapshot with zero live API call, and (b) a "successful" manual Refresh explicitly leaves any device the provider's bulk read didn't return in `notReturnedByProvider`, completely untouched, while still reporting overall success.
+6. **All prior Increment 81 findings remain unchanged**: Dolphin- 2nd Floor resolved by the team; unresolved newly-authorized Nest count still 10; Miramar Bliss OwnerRez linking still complete and separate from its 2 unresolved Nest thermostats; Panhandle Hallway/Upstairs count anomaly still an open possibility, not acted on.
+7. **No Nest API call, discovery, DB query, DB write, mapping, enabling, thermostat command, OAuth/PCM change, OwnerRez create/link, or application-code change occurred this increment.** `HANDOFF.md` is the only file touched.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-11" above] CURRENT STATE — 2026-09-10, latest (READ THIS FIRST — supersedes every earlier summary below)
+
+**Authoritative current state as of `## Increment 81` (2026-09-10), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-09-10 "later same day" summary immediately below, now historical), this summary governs. Full detail in `## Increment 81` at the bottom of this file.
+
+1. **"Dolphin- 2nd Floor" (Surfside Solace) is now RESOLVED — mapped and Enabled in Production.** `externalDeviceId AVPHwEuS2f_u5l8XXj447FVnUTvwF2R32kUvhGhg7d65R4GPRptsMpBBqIyd06pp15iv2l71dRnJHzIMFIDZulD8jo2Qeg` now shows Property = Surfside Solace, Status = Enabled, Connectivity = ONLINE, confirmed via Production screenshots. **This was done by the StayWhile team during their own daily QA testing — not by Claude or Kris, and not through this session's controlled reconciliation.** Do not map or enable it again.
+2. **Root cause of the earlier spelling ambiguity resolved**: the true original PCM authorization target was `"Dolphin- 2nd Floor"` (no space before the hyphen) — confirmed by the user against the original authorization evidence. The two local, untracked diagnostic scripts (`packages/database/reconcile-nest-newly-authorized-devices.mjs`, `investigate-nest-unresolved-devices.mjs`) hard-code `"Dolphin - 2nd Floor"` (**with** a space) — this is a transcription error in the diagnostic tooling itself, not evidence the live device was ever ambiguous. **Confirmed this session that correcting that string in the two scripts would have zero Production/application effect**: both files are untracked (never committed), and a repo-wide search found no import or reference to either filename anywhere in application code, `package.json` scripts, or build/CI config — they are standalone, manually-run, one-off diagnostic scripts only. Not corrected yet, pending separate approval.
+3. **The newly-authorized unresolved Nest device count is now 10, down from 11.** All 10 remain untouched, grouped by live generic roomName: Hallway (3), Living Room (2), Panhandle Upstairs (1), Downstairs (1), Kitchen (1), Roseadre Upstairs (2). No mapping, enabling, or inference was performed for any of them.
+4. **The Panhandle Hallway/Upstairs count anomaly (3 live Hallway vs 2 approved; 1 live Panhandle Upstairs vs 2 approved) remains an open, unresolved possibility, not a conclusion** — it is not being used to infer which specific device is mislabeled.
+5. **Miramar Bliss OwnerRez linking remains COMPLETE (unchanged from Increment 80) — but this is explicitly separate from Nest identity.** The two Miramar Bliss Nest thermostats ("Miramar Bliss - Living Room," "Miramar Bliss - upstairs") remain unresolved; the successful OwnerRez property link must never be read as evidence for either thermostat's identity.
+6. **New team QA finding — Poinciana**: Poinciana is a pre-existing `ProviderDevice` (not one of the 17 newly-authorized devices), unmapped since before this session. During Production QA, the StayWhile team attempted to map it and could not, because Poinciana was not available in the Property dropdown at all. **Tracked as OPEN**: reconcile whether the correct StayWhile/OwnerRez property record exists and why it's unavailable in the property selector — do not create a property or map/enable the thermostat until that reconciliation is complete. (An older, unconfirmed possibility — that Poinciana is a private, non-rental Michelle residence — was recorded historically in Increment 74; that is not restated here as part of the current authoritative status. See `## Increment 81` for detail.)
+7. **New team QA finding — Aqua Palm - Living Room temperature discrepancy**: Google Home reports current temperature 71°F (setpoint 72°F, agreeing); StayWhile's dashboard reports current temperature 74°F (same 72°F setpoint). **A concrete 3°F current-temperature discrepancy, setpoint unaffected.** This is a real Production example supporting the previously-reported general ~1–2°F discrepancy pattern. **Tracked as OPEN** — Nest telemetry freshness/source investigation, cause not yet assumed (see `## Increment 81` for the specific candidate explanations to check).
+8. **The StayWhile team is now actively surfacing Production discrepancies through daily QA** (this increment's Dolphin/Poinciana/Aqua Palm findings are all examples) — treat future team-reported findings the same way: as real evidence requiring investigation, never dismissed or assumed resolved without verification.
+9. **No Nest API call, discovery, DB query, DB write, mapping, enabling, thermostat command, OAuth/PCM change, OwnerRez change, application-code change, diagnostic-script edit, commit, push, or deploy occurred this increment.** `HANDOFF.md` is the only file touched.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-10, latest" above] CURRENT STATE — 2026-09-10, later same day (READ THIS FIRST — supersedes every earlier summary below)
+
+**Authoritative current state as of `## Increment 80` (2026-09-10), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the earlier 2026-09-10 summary immediately below, now historical), this summary governs. Full detail in `## Increment 80` at the bottom of this file.
+
+1. **Miramar Bliss OwnerRez reconciliation/linking is COMPLETE, Production-verified.** The existing StayWhile property Miramar Bliss (`MIRAMAR-BLISS`) is now linked to OwnerRez ID `480401` ("Miramar-Bliss," internal code "Miramar Bliss 2") — the exact record Michelle confirmed live in the Sep 9, 2026 Touch Base #4 meeting, independently re-verified against fresh Production UI evidence before the allow-list change was made (see Increment 79's follow-on work) and now confirmed Linked after Confirm Link was clicked in Production.
+2. **Verified via live Production UI**: Miramar Bliss shows `Linked` to OwnerRez `480401`; the Onboarding panel's Active-unmatched count dropped `1 → 0`; the Match Report's "Unmatched in OwnerRez" dropped `21 → 20`; "Unmatched StayWhile properties" dropped `1 → 0`. No duplicate property was created — this write path has no create capability, only a single-field update on the existing row.
+3. **Existing device associations confirmed intact**: Miramar Bliss's two August locks ("Miramar Bliss - Front Door," "Mother In Law - Door") were visually re-verified still correctly associated with Miramar Bliss after the link.
+4. **Cielo's historical "Miramar Blis - MIL" device's current presence is explicitly NOT confirmed** — a `/thermostats` search for "Miramar" returned **0 of 41 thermostats**. This must not be read as proof the device is gone (naming/search-term mismatch is possible), only that its presence could not be confirmed this pass. Tracked as part of the still-open Cielo Production verification item, not resolved here.
+5. **The two newly-authorized Miramar Nest thermostats (Miramar Bliss - Living Room, Miramar Bliss - upstairs) are untouched and not addressed by any of the above.** The 0-of-41 thermostat search result must not be used to infer anything about them — they are unmapped/disabled and would not appear in that search regardless of their true identity. They remain part of the unresolved 11-device Nest identity work, to be handled separately.
+6. **No application code was changed this increment.** No discovery, mapping, enabling, provider refresh, device command, commit, push, or deploy occurred.
+7. **All other outstanding work remains exactly as recorded in Increment 79** (below) — untouched by this increment.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-10, later same day" above] CURRENT STATE — 2026-09-10 (READ THIS FIRST — supersedes every earlier summary below)
+
+**Authoritative current state as of `## Increment 79` (2026-09-10), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the 2026-09-03 summary immediately below, now historical), this summary governs. Full detail in `## Increment 79` at the bottom of this file.
+
+1. **The 6 confirmed Nest devices are mapped and enabled in Production.** Dolphin - 1st Floor → Surfside Solace, Dolphin - 3rd Floor → Surfside Solace, BOP - Man Cave → Bird of Paradise, Island SOS → Island SOS, Family Room → Starfish Waterfront, and the exact confirmed Starfish "Upstairs" `ProviderDevice` (`668f10d6-0a4b-4984-ad7e-e23d914113bc`) → Starfish Waterfront. All six were mapped and enabled one at a time through the real, authenticated Production `/integrations/devices` UI (the existing `mapProviderDeviceToPropertyAction`/`setProviderDeviceEnabledAction` forms) — no script, no direct DB write, no bypass of RBAC/audit.
+2. **Verified via live Production UI, not a database query**: filtering `/integrations/devices` to Provider = Nest, Mapping = All, Status = Enabled shows **38 of 93 devices** (93 = all providers combined; 38 = Nest enabled). Previously recorded baseline was 32 Nest enabled+mapped — the +6 matches exactly. Per-device Connectivity was also confirmed live: all five non-Starfish devices show **ONLINE**; the Starfish "Upstairs" device correctly still shows **OFFLINE** (provider-reported, unaltered by mapping/enabling — this is expected, not a failure).
+3. **What was NOT independently re-verified this session, stated explicitly rather than assumed**: the resulting `SmartDevice` (NEST) row count was not separately read from `/thermostats` this pass, so "38" is confirmed for enabled+mapped `ProviderDevice` rows only — the equivalent `SmartDevice` total is expected to also be 38 (one upsert per newly-enabled device, matching the code path already read in a prior increment) but is **not independently confirmed** and should be treated as pending until read directly. No byte-for-byte pre-write DB snapshot of the existing 33 `ProviderDevice`/32 `SmartDevice` rows was captured before these writes (no Production DB access was available in-session at that point) — this increment's "no unexpected existing mapping changed" conclusion rests on live UI spot-checks plus the prior session's own dry-run/audit of the two functions' code, not a full diff.
+4. **The remaining 11 of the 17 newly-discovered Nest devices remain Unmapped/Discovered, untouched.** No name-based/fuzzy mapping was performed or attempted for any of them.
+5. **All other outstanding work is unchanged and explicitly preserved, not resolved by this increment**: Miramar Bliss OwnerRez reconciliation/linking (Michelle's meeting confirmation of OwnerRez ID `480401` still not independently re-verified/acted on), the ~1–2°F Nest temperature-reading discrepancy (not yet investigated), the August battery-freshness discrepancy and promised-but-unverified automatic resync, Cielo Production verification (rich-telemetry feature implemented/reviewed, still local/uncommitted), the Notion operational-workflow reconciliation (n8n, dashboard search conflict, change/deletion alerts), Ecobee/Honeywell/Trane connectivity work, automatic OwnerRez new-listing onboarding design, the Airbnb alteration-request task feature, and sortable columns.
+6. **No application code was changed this increment.** No discovery was run, no thermostat/lock command was sent, no OAuth/PCM/OwnerRez/Vercel change was made, nothing was committed/pushed/deployed. Only `HANDOFF.md` was edited.
+7. **All standing safety rules unchanged** — client isolation, Production Supabase project identity, no fuzzy/name-based device-property mapping ever, no physical lock command, no thermostat setpoint/mode/fan/power command, UNKNOWN/OFFLINE preferred over a guessed connectivity state, OwnerRez remains the property source of truth, Production DB defaults read-only. See `## Increment 79` for full detail.
+
+---
+
+# 🔖 [HISTORICAL — superseded by "CURRENT STATE — 2026-09-10" above] CURRENT STATE — 2026-09-03 (READ THIS FIRST — supersedes every earlier summary below)
 
 **Authoritative current state as of `## Increment 78` (2026-09-03), the latest increment in this file.** Read this summary first; where it conflicts with anything below (including the 2026-09-02 "even later same day" summary immediately below, now historical), this summary governs. Full detail in `## Increment 78` at the bottom of this file.
 
@@ -3726,4 +3823,621 @@ The Nest OAuth investigation and this OwnerRez reconciliation are unrelated thre
 
 ### Next step
 
-Two independent, unblocked-from-each-other threads remain: (1) the 3 remaining OwnerRez unmatched properties (Miramar-Bliss/Starfish Waterfront/Surfside Solace) need their own individual human-confirmation investigations before any create/link action, and the Poinciana question needs a direct answer from Michelle before any exclusion mechanism is designed; (2) the Nest OAuth/domain work remains fully paused pending Kenny's new-domain confirmation — do not resume it until that arrives.
+**Reconciled against later-verified state — see the Sep 9, 2026 Touch Base #4 section below for full detail; this paragraph is kept current, not a historical snapshot.** Of the 3 properties flagged above as needing individual human-confirmation investigation: **Surfside Solace and Starfish Waterfront are both now created and independently Production-verified** (OwnerRez IDs `456042`/`471634`, both `ONBOARDING`, StayWhile `/properties` count confirmed at 38) — neither is an open unmatched-property investigation anymore. **Miramar Bliss remains open** — it still requires exact OwnerRez reconciliation/linking (not creation; a StayWhile Miramar Bliss property already exists as one of the 4 protected legacy August houses) before any of its devices can be connected; Michelle's Sep 9, 2026 meeting confirmation that OwnerRez ID `480401`/"Miramar Bliss 2" is the correct record is recorded as evidence toward resolving this, but has not yet been independently re-verified or acted on in a Production session — **do not create a duplicate property.** The Poinciana question remains open pending a direct answer from Michelle, unchanged.
+
+The Nest OAuth/domain thread has moved: the underlying **authorization/access problem is resolved** — Panhandle, Roseadre, and Starfish-waterfront were all granted PCM access this session, bringing live SDM visibility to 50 devices (up from the single-structure/33-device baseline this paragraph originally described) — so this is no longer "paused pending Kenny's new-domain confirmation" as a blocking description of current work (the separate Testing-vs-In-production OAuth publishing-status/domain question may still be open in its own right, but is independent of the authorization work described here). **Nest discovery/upsert against Production is complete and independently Production-verified PASS** (33 existing + 17 newly discovered, all 17 confirmed unmapped/disabled with zero side effects). Immediate remaining Nest work: controlled mapping/enabling of only the 6 confirmed devices, and only after explicit approval — not yet executed. The remaining 11 of the 17 new devices stay unmapped pending stronger/human evidence; do not infer them from generic room names, counts, or ordering. Poinciana should remain in its currently-verified disabled/unmapped state unless later explicitly resolved.
+
+---
+
+## Sep 9, 2026 — Touch Base #4 Decisions & Follow-ups
+
+Meeting notes only — records what Kenny/Michelle/Kris discussed, decided, committed to, and flagged as open in the Sep 9, 2026 touch-base. Where a meeting statement conflicts with technical state independently verified in this session's own Production diagnostics, **the verified technical state is authoritative**; the meeting statement is preserved below only as context for what the client believed/observed at the time. Nothing in this section marks any item complete solely because it was discussed or promised — completion status is stated explicitly per item.
+
+### OwnerRez / Properties
+
+- **OwnerRez remains the property source of truth** — unchanged standing rule.
+- **Surfside Solace and Starfish Waterfront are now in StayWhile** — matches this session's own Production-verified property creation (both created from their authoritative OwnerRez records, IDs `456042`/`471634`, both `ONBOARDING`; StayWhile `/properties` count independently confirmed at 38 after both creates).
+- **Miramar Bliss** shows Active in OwnerRez but "Not yet in StayWhile" in the Match Report. This is consistent with the long-standing unresolved ambiguity recorded since Increment 58/78 above (3 candidate OwnerRez records — `389173`/`410682`/`480401` — none previously preferred).
+- **New in this meeting**: Michelle confirmed live that the OwnerRez property ID shown for Miramar Bliss (per the Match Report, i.e. `480401`/"Miramar Bliss 2") is the correct Miramar Bliss property. This is a real, human-sourced narrowing of the prior 3-candidate ambiguity — **recorded as meeting evidence, not yet independently re-verified in a Production session, and not yet acted on**. **Do NOT blindly create a duplicate property.** Reconcile/link the exact confirmed OwnerRez record safely (same "Confirm Link"-style workflow already used for the 6 approved legacy pairings, or equivalent) before connecting any of Miramar Bliss's devices to it.
+- **Long-term requirement (new, not yet designed or built)**: a newly activated/created OwnerRez listing should be automatically detected and created/linked in StayWhile by stable OwnerRez identity, without requiring Michelle/Kenny to manually reconcile every routine new listing. A manual administrative option should remain available as a fallback, but automatic OwnerRez sync is the desired normal workflow going forward. **Nothing has been built for this yet** — no design, no code.
+- Kenny/Michelle suggested testing this future automatic-sync capability using a temporary activation/deactivation of an old, already-known property (e.g. Dream Anchor/Evergreen) rather than risking a real new listing. **This test has NOT happened.** It requires coordination/approval before changing any OwnerRez state, and depends on the automatic-sync feature above being built first.
+
+### Nest
+
+- Meeting discussion reported the backend reaching 50 visible Nest thermostats. **This is superseded by this session's own later, independently Production-verified technical state**, which is authoritative:
+  - **50 total live SDM devices**, confirmed via a fully paginated live pull, cross-checked against a fixed single-request pagination-safety test (PASS: single request already returns all 50, no `nextPageToken`, ID sets identical to the paginated pull — confirmed live, not assumed).
+  - Prior **33** `ProviderDevice` rows + exactly **17** newly discovered, via `discoverNestDevices()` run against Production and independently re-verified read-only afterward (PASS).
+  - All 17 new rows confirmed `propertyId: null`, `enabled: false`, `smartDeviceId: null` — zero side effects on mapping/enabling.
+  - Existing enabled+mapped count remains **32** (Bonjour AMI 3/3, Royal Palms 2/2 among them; Poinciana remains disabled/unmapped, as before).
+  - Total NEST `SmartDevice` rows remains **32** — discovery confirmed to create zero `SmartDevice` rows and to leave zero references to any of the 17 new `externalDeviceId`s.
+- **Bonjour AMI and Royal Palms were already fully resolved earlier this session** (Bonjour AMI: 3/3 Nest thermostats mapped+enabled, root cause of the earlier "only 1 of 3 visible" issue was map-vs-enable being separate steps, not a bug; Royal Palms: both "Gameroom" and "hallway" thermostats identified via Kenny's on-site physical relabeling, cross-referenced by exact stable SDM ID, then mapped+enabled) — unchanged, still correct, not re-opened by this meeting.
+- **Final mapping remains deliberately controlled — never guess a property from a generic room name** (e.g. "Hallway," "Living Room," "Upstairs," "Downstairs," "Kitchen" alone). This is an active, enforced discipline in this session's own read-only reconciliation tooling, not just a stated intention.
+- **Six of the 17 newly-discovered devices have confirmed device/property identities** (via exact live SDM full-name or unique-suffix matching against the already-approved PCM device list, plus Kenny/Michelle's direct Starfish-waterfront zone confirmation): `Dolphin - 1st Floor` → Surfside Solace, `Dolphin - 3rd Floor` → Surfside Solace, `BOP - Man Cave` → Bird of Paradise, `Island SOS` → Island SOS, Starfish-waterfront "Upstairs" (exact `ProviderDevice` ID `668f10d6-0a4b-4984-ad7e-e23d914113bc`) → Starfish Waterfront, Starfish-waterfront "Family Room" → Starfish Waterfront. **Mapping/enabling has NOT been executed for any of these 6** — a dry-run-only plan was prepared and reviewed; no `mapProviderDeviceToProperty()`/`setProviderDeviceEnabled()` call has been made.
+- **The remaining 11 of the 17 newly-discovered devices still require human/original-PCM evidence** — Google's SDM API exposes no model/serial/firmware field, no additional stable identifier beyond `customName` (empty for all 17) and `roomName`, so devices whose live `roomName` is a bare generic word (Hallway/Living Room/Upstairs/Downstairs/Kitchen), or where two live devices share an identical `roomName` (both Roseadre devices report "Upstairs"), remain explicitly unresolved pending human confirmation — not inferred by elimination, count, or ordering. A spelling check for "Dolphin- 2nd Floor" vs the approved "Dolphin - 2nd Floor" was also built into the tooling, deliberately never auto-normalized.
+- **New feedback from the meeting**: the team reports an approximate 1–2°F discrepancy between the Nest/Google Home app's current temperature reading and the StayWhile dashboard's displayed value. **Not yet investigated.** Before attributing a cause, check telemetry freshness (when the dashboard's stored reading was last actually refreshed vs. when Google Home's live reading was taken) and the reading's real source — do not assume a provider bug, a StayWhile bug, or a stale-cache explanation without evidence.
+
+### August
+
+- The team is **NOT yet testing physical lock controls** — lock status/connectivity is not considered reliable enough yet. **Keep physical lock controls restricted** until mapping/status reliability is independently verified. (No lock/unlock/PIN capability exists in this codebase at all currently — this restriction is currently enforced by the absence of the feature, not merely by policy.)
+- Only **four locks** were being reported as fully online at meeting time. (Not independently re-verified against Production in this section — see the existing August connectivity-UNKNOWN investigation elsewhere in this file/session history: Production August fleet is 43 SmartDevices, 4 ONLINE, 0 OFFLINE, 39 UNKNOWN, with evidence pointing primarily to a provider/telemetry limitation rather than an application write bug. The "four locks online" figure the client reported matches this independently-verified ONLINE count.)
+- **Michelle reported concrete battery discrepancies** at meeting time:
+  - Bonjour Front Door: StayWhile dashboard showed 90%, August's own app showed 80%.
+  - Bonjour In-law: StayWhile dashboard showed 74%, August's own app showed 63%.
+  - **Treat this as an OPEN investigation, not a confirmed cause.** Determine whether August's own API-reported battery values/timestamps are simply stale relative to when the dashboard was last refreshed vs. when the operator checked the August app live — a manual dashboard refresh and the underlying device's actual telemetry freshness are two separate concepts, and conflating them would misattribute the discrepancy. **Do not claim "provider delay" (or any other specific cause) as proven until verified against real data.**
+  - An **automatic re-sync** capability for August telemetry was discussed/promised in the meeting but is **not yet verified complete** — track as pending, not done.
+
+### Cielo / other thermostat providers
+
+- Cielo properties discussed in the meeting: **Sandy Nudes, Island Tides, Bahamas**.
+- **Cielo Production verification remains pending** — the Cielo rich-telemetry feature (parses/stores temperature, mode, fan, humidity, power, timestamp from Cielo's existing `/web/devices` response) has been fully implemented and reviewed this session but remains local/uncommitted, blocked on the still-undecided question of how to safely execute one controlled Production test of it (a Vitest `server-only`/module-resolution blocker prevented running the real code path directly; a faithful reimplementation script exists as a fallback but has not been used, per explicit instruction to prefer the real code path).
+- **Ecobee/API work remains pending/in process** — credentials configured locally only, SmartBuildings authentication/connectivity/discovery not started (unchanged from Increment 77/78's recorded state).
+- **Honeywell API access/follow-up remains pending** — architecturally, `HONEYWELL` exists only in the `SmartDeviceProvider` enum, not `IntegrationProvider`, so no real connection can exist until that gap is addressed; unchanged.
+- **Trane is not connected** — confirmed this session by direct schema inspection: no `TRANE` value exists anywhere in `SmartDeviceProvider`, no client package exists. Blocked on Michelle providing Trane credentials via the team's approved password manager and reconfirming the Ocean Pearl property/device details (unchanged dependency from earlier in this file).
+
+### Notion
+
+- **Authentication/credential connection is complete.**
+- **Operational functionality is NOT complete.** Explicitly pending, per the meeting:
+  - n8n Notion workflows
+  - dashboard Notion search (note: a read-only operational Notion search feature was previously recorded elsewhere in this file as shipped/Production-verified — Increment 75/76 — reconcile this apparent conflict with the client directly rather than assuming either record is wrong; recorded here verbatim as the client's own meeting statement, not resolved in this pass)
+  - page change/deletion monitoring and alerts
+  - Production verification (of whichever of the above is not yet independently confirmed live)
+- **Dashboard editing of Notion information was discussed in the meeting, but is NOT implemented** — do not mark it built. (Prior sessions explicitly deferred in-dashboard Notion editing pending Michelle/Kenny's field/action approval — still blocked on that approval as far as this file's record shows.)
+- Kris told the client the goal is meaningful Notion functionality ready to demonstrate/test by the next meeting. **Track this as a meeting commitment/target, not a completed feature.**
+
+### Airbnb alteration requests / Tasks
+
+- The client does **not** need a broad Airbnb dashboard integration right now.
+- **Specific requested functionality (new, not yet designed or built)**: detect/handle Airbnb guest alteration requests that OwnerRez does not clearly alert the team about.
+- Preferred output is a **StayWhile task**, not an email notification.
+- Task category should be **"Alteration Requests."**
+- The task must be visible to the appropriate working VA(s) — since the VA schedule changes, **static/permanent assignment to one VA is unsafe** and should not be implemented.
+- Michelle said the VA schedule is maintained in a **Google Sheet** and will provide access/a link (not yet received, as of this meeting record).
+- Future automation should use the current schedule/availability to route the task, rather than permanently assigning it to a specific VA.
+- **The exact assignment workflow still needs design/verification — do not implement random or default assignment without explicit approval.**
+
+### Team testing / QA
+
+- VAs are currently doing **daily testing** of Nest/Google Home and Cielo thermostat functionality where available.
+- **Lock testing is intentionally deferred** until August status/mapping is reliable — consistent with the August section above.
+- Michelle will continue sending **daily discrepancy feedback** as more functionality becomes testable.
+- **Treat all such feedback as Production QA findings requiring investigation** — never automatically assume the dashboard or the provider is at fault without checking.
+
+### Dashboard UI
+
+- Kenny requested **sortable columns** to make dashboard tables easier to review. **Track as a pending UI requirement** unless independently confirmed already implemented and verified — not confirmed as of this record.
+
+### Timeline / client commitment
+
+- Kris communicated approximately **2–3 more weeks** to reach a solid Production-ready state.
+- Intended approach: roughly two weeks to complete core remaining work, followed by final live/end-to-end testing, cleanup, reliability testing, permissions/safety checks, QA, and onboarding.
+- **Kenny explicitly established October 1, 2026 as the target deadline** for the overall system to be completed/Production-ready.
+- **Treat October 1, 2026 as the current client-facing target, not a guarantee** — external API/provider blockers (Nest OAuth production-status/domain work, Trane/Ecobee/Honeywell credential dependencies, etc.) could affect it.
+
+### Current immediate technical priority after this meeting
+
+Preserving the later-verified session state as authoritative, the priority order is:
+
+1. Nest discovery is complete and independently Production-verified PASS (50 live devices, 33+17, all 17 correctly unmapped/disabled, zero side effects) — this step itself is done.
+2. Prepare/execute **only** the 6 safely-confirmed Nest device mappings, and only after explicit approval — not yet executed.
+3. Leave the remaining 11 ambiguous Nest devices unmapped until stronger evidence exists.
+4. Resolve the Miramar Bliss OwnerRez reconciliation (per Michelle's meeting confirmation, still not independently re-verified/acted on) before mapping any of its devices.
+5. Design and build automatic OwnerRez new-listing onboarding (currently nonexistent) — including the proposed Dream Anchor/Evergreen test, once approved.
+6. Investigate the new Nest temperature discrepancy report (~1–2°F).
+7. Investigate the August battery-freshness discrepancy and the promised-but-unverified automatic resync.
+8. Complete Cielo Production verification (the already-built rich-telemetry feature).
+9. Complete the pending Notion operational workflows (n8n, dashboard search reconciliation, change/deletion alerts, Production verification).
+10. Continue remaining integrations/automation and QA work toward the October 1, 2026 target.
+
+### Safety rules — reaffirmed, unchanged by this meeting
+
+- No physical lock command (lock/unlock/PIN) without explicit approval — and no such capability exists in this codebase at all currently.
+- No thermostat setpoint/mode/fan/power command without explicit approval.
+- No fuzzy/automatic device-property mapping — ever, for any provider.
+- **UNKNOWN is preferable to falsely reporting ONLINE/OFFLINE** — never guess a connectivity state.
+- OwnerRez remains the property source of truth.
+- Production DB work defaults to read-only; any exact write requires explicit, scoped approval before execution.
+
+### Files changed this update
+
+`HANDOFF.md` only — meeting notes/decisions recorded, integrated with and cross-referenced against this session's own independently-verified technical state. No application code, schema, credential, `.env*`, PCM/OAuth, or Production data was touched by this update. No device was mapped/enabled, no discovery was run, no device command was sent, no OwnerRez state was changed, nothing was committed/pushed/deployed.
+
+---
+
+## Increment 79 — 2026-09-10: the 6 confirmed Nest devices mapped and enabled in Production via the real dashboard UI; verified live via Production UI (32 → 38 Nest enabled+mapped); remaining 11 ambiguous devices and all other outstanding threads explicitly preserved, untouched
+
+### Purpose of this increment
+
+Execute — with explicit, scoped approval obtained in-conversation — exactly the 6 confirmed-identity Nest device mappings/enables identified in the Sep 9, 2026 Touch Base #4 section above, then verify the result. No other Nest device, no other provider, no OwnerRez state, and no application code was touched.
+
+### Access constraint that shaped how this was executed
+
+This session had **no Production database access** (only the local `staywhile_dev` `DATABASE_URL`/`DIRECT_URL` exist in this environment's `.env`/`.env.local`) and **no connected browser-automation session** (the Claude-in-Chrome extension was not connected). Per explicit instruction, neither gap was worked around by substituting the local dev database or by asking the user to expose Production credentials in chat. Instead, the six writes were performed by the user directly, one device at a time, through the real, already-authenticated Production `/integrations/devices` UI — the same `mapProviderDeviceToPropertyAction` "Map" form and `setProviderDeviceEnabledAction` "Enable" form every other device in this app already uses (read directly from `DiscoveredDevicesList.tsx` this session to confirm each form submits the exact `ProviderDevice.id` via a hidden field, never a name-based lookup). This means the writes went through the app's real `assertPermission`/`recordAudit` layer, unlike a raw-script write would have.
+
+**Consequence, stated explicitly**: because there was no Production DB access at any point in this increment, no pre-write byte-for-byte snapshot of the existing 33 `ProviderDevice` rows / 32 `SmartDevice` rows was captured, and the originally-planned automated preflight (re-read the six rows, confirm zero pre-existing `SmartDevice` collision on `[provider, externalDeviceId]`, snapshot the fleet) was not executed by Claude as a discrete step. The user proceeded directly with the six UI actions. Verification below is therefore based on **live Production UI observation plus the last independently-verified baseline recorded in this file (Sep 9, 2026 Touch Base #4)**, not a database diff.
+
+### Six devices mapped and enabled — Production-verified via UI
+
+| Device (`discoveredName`)                                                                          | `ProviderDevice.id`                    | Property            | Result                |
+| -------------------------------------------------------------------------------------------------- | -------------------------------------- | ------------------- | --------------------- |
+| Dolphin - 1st Floor                                                                                | `8c63e5b7-36b8-41b1-a62d-7315d80913eb` | Surfside Solace     | Enabled / ONLINE      |
+| Dolphin - 3rd Floor                                                                                | `fb580aa4-a44b-4a91-a031-428102e889dd` | Surfside Solace     | Enabled / ONLINE      |
+| BOP - Man Cave                                                                                     | `5b8232b0-08b6-4163-b0c9-277b58c9422c` | Bird of Paradise    | Enabled / ONLINE      |
+| Island SOS                                                                                         | `dd2ac77f-8db4-416a-abe6-418bb1521b97` | Island SOS          | Enabled / ONLINE      |
+| Upstairs (exact confirmed row only — externalDeviceId ending `...cClc6wDf2mZJckNPL1CDS0wkRSyiiqg`) | `668f10d6-0a4b-4984-ad7e-e23d914113bc` | Starfish Waterfront | Enabled / **OFFLINE** |
+| Family Room                                                                                        | `5287cd20-1bf7-4485-a32e-19faf342f2a6` | Starfish Waterfront | Enabled / ONLINE      |
+
+**The Starfish "Upstairs" device's OFFLINE connectivity is expected and correct** — mapping/enabling never calls the Nest API or alters `connectivityStatus`; it was OFFLINE before this increment and remains so, per the provider's own last-reported state. This must not be treated as a mapping failure or "fixed."
+
+**Disambiguation note preserved**: multiple live Nest devices share the bare room name "Upstairs." The row mapped above was identified and verified strictly by its exact `ProviderDevice.id`/`externalDeviceId` — never by name or row position — consistent with the standing no-fuzzy-matching rule.
+
+### Verification performed (live Production UI, not a database query)
+
+On `/integrations/devices`, filtered to **Provider = Nest, Mapping = All, Status = Enabled**: the UI showed **38 of 93 devices** (93 = combined total across all providers, i.e. Nest + August; 38 = Nest devices currently enabled). The previously recorded baseline (Sep 9, 2026 Touch Base #4, above) was 32 Nest enabled+mapped `ProviderDevice` rows — **32 → 38 is exactly the expected +6.**
+
+**Explicitly NOT independently re-verified this increment, so not claimed as confirmed:**
+
+- The resulting **NEST `SmartDevice` row count** (expected 38, mirroring the `ProviderDevice` count 1:1 per `setProviderDeviceEnabled()`'s upsert logic read in a prior increment) was not separately read from `/thermostats` this pass. Treat as **pending** until directly confirmed.
+- A **full row-level diff** of the pre-existing 33 `ProviderDevice` rows (i.e., proof that literally none of them changed) was not performed — no pre-write snapshot exists to diff against. The live checks that were performed (searching for each of the 6 target devices/rooms by exact name, confirming the "Upstairs" search returned the intended row plus other still-untouched rows, and reading the 32→38 aggregate count) are the evidence actually in hand.
+- **Miramar Bliss**: spot-checked — no row's Property column showed "Miramar Bliss" as a result of this increment's actions. Not a claim that Miramar Bliss's own long-standing OwnerRez ambiguity is resolved (it is not — see below).
+
+### Remaining 11 ambiguous Nest devices — untouched, unchanged
+
+The 11 of the 17 newly-discovered Nest devices that lack a confirmed identity (bare generic `roomName`s — Hallway/Living Room/Upstairs/Downstairs/Kitchen — and the duplicate Roseadre "Upstairs" pair) were **confirmed via live Production UI this increment** to still show **Unmapped / Discovered** — no database query was run against them post-write, so this is a UI observation, not a fresh DB-verified fact. The **`propertyId: null`, `enabled: false`, `smartDeviceId: null`** field-level state for these 11 is carried over from the last independently DB-verified check, recorded in the Sep 9, 2026 Touch Base #4 section above, prior to this batch — it was not re-queried against the database this increment. Nothing observed in the UI this increment indicates any of these 11 rows changed. **No name-based, elimination-based, or ordering-based inference was performed or is permitted for any of them.**
+
+### What did NOT happen this increment
+
+No application code was changed. No Nest discovery/API call was made (this increment used only already-discovered rows from the prior session's discovery run). No thermostat setpoint/mode/fan/power command was sent. No lock/unlock/PIN command was sent (no such capability exists in this codebase). No OAuth/PCM/Google/Vercel-domain change was made. No OwnerRez write occurred. No property was created. No commit, push, or deploy occurred — `HANDOFF.md` is the only file touched.
+
+### All other outstanding work — explicitly preserved, not addressed this increment
+
+Unchanged from the Sep 9, 2026 Touch Base #4 section above: Miramar Bliss OwnerRez reconciliation/linking (still not independently re-verified/acted on despite Michelle's meeting confirmation of OwnerRez ID `480401`), the automatic OwnerRez new-listing onboarding design (not started), the ~1–2°F Nest temperature-reading discrepancy (not investigated), the August battery-freshness discrepancy and the promised-but-unverified automatic August resync, Cielo Production verification (rich-telemetry feature implemented/reviewed, still local/uncommitted), the Notion operational-workflow reconciliation (n8n workflows, dashboard-search conflict, change/deletion alerts, in-dashboard editing still blocked on Michelle/Kenny field approval), Ecobee (credentials local-only, SmartBuildings auth/connectivity not started), Honeywell (no `IntegrationProvider` enum value yet), Trane (not connected, blocked on Michelle's credentials), the Airbnb alteration-request task feature (not designed), and sortable dashboard columns (not implemented).
+
+### Safety rules — reaffirmed, unchanged by this increment
+
+- No fuzzy/automatic/name-based device-property mapping — ever, for any provider.
+- No physical lock command (lock/unlock/PIN) — no such capability exists in this codebase.
+- No thermostat setpoint/mode/fan/power command without explicit approval — none was sent.
+- UNKNOWN/OFFLINE is preferable to a guessed connectivity state — the Starfish device's OFFLINE status was correctly left untouched.
+- OwnerRez remains the property source of truth.
+- Production DB work defaults to read-only; the six writes this increment were each individually pre-approved by exact `ProviderDevice.id` before execution.
+
+### Files changed this increment
+
+`HANDOFF.md` only. No other file in the repository was read, written, staged, or committed as part of this increment. The pre-existing uncommitted files noted in earlier increments (`.env.example`, `.gitignore`, `apps/website/app/(dashboard)/layout.tsx`, the `provider-devices`/`thermostat-refresh`/`cielo` service and test changes, `.claude/`, and the `packages/database/*.mjs` diagnostic scripts) remain exactly as they were before this increment — untouched by this update.
+
+---
+
+## Increment 80 — 2026-09-10 (later same day): Miramar Bliss OwnerRez reconciliation/linking COMPLETE — Production-verified link, no duplicate property, existing August associations intact; Cielo's historical Miramar device presence NOT confirmed (separate open item); the two Miramar Nest thermostats remain untouched
+
+### Purpose of this increment
+
+Record the completed resolution of the Miramar Bliss OwnerRez ambiguity, open since Increment 58: the code change adding `MIRAMAR-BLISS → 480401` to `APPROVED_OWNERREZ_LINKS` (committed `85dc068`, pushed to `main`, Vercel deployment confirmed via GitHub commit status) was followed by the user clicking Confirm Link directly in the real, authenticated Production `/integrations/devices`... `/properties/ownerrez` UI. This increment documents the resulting Production-verified state only — no code, discovery, mapping, provider refresh, or device command was touched in this pass.
+
+### Miramar Bliss — linked, Production-verified
+
+- **Existing StayWhile property**: Miramar Bliss, internal code `MIRAMAR-BLISS` — one of the 4 protected legacy August houses, unchanged in identity since Increment 20.
+- **Correct OwnerRez record**, per Michelle's live confirmation (Sep 9, 2026 Touch Base #4) and this session's own fresh Production UI re-verification before the code change: OwnerRez ID `480401`, name "Miramar-Bliss," internal code "Miramar Bliss 2."
+- **Confirm Link was executed in Production.** The live UI now shows Miramar Bliss as `Linked` to OwnerRez `480401`.
+- **Match report deltas, all directly observed**:
+  - Onboarding panel's Active-unmatched count: **1 → 0** ("No unmatched active OwnerRez properties.")
+  - Match Report Preview's "Unmatched in OwnerRez": **21 → 20**
+  - Match Report Preview's "Unmatched StayWhile properties": **1 → 0**
+- **No duplicate property was created.** `confirmOwnerRezLink()` has no create path — it only ever updates one existing row's `ownerRezPropertyId` field, confirmed by direct code read before this link was approved (see Increment 78's original audit, unchanged since).
+
+### Existing device associations — confirmed intact
+
+Visually re-verified in Production after the link:
+
+- Miramar Bliss - Front Door → Miramar Bliss
+- Mother In Law - Door → Miramar Bliss
+
+Both August locks remain correctly associated, exactly as before the link — consistent with `confirmOwnerRezLink()`'s single-field write having no code path that touches `SmartDevice`/`ProviderDevice` rows.
+
+### Cielo's historical Miramar device — presence NOT confirmed this increment
+
+A `/thermostats` search for "Miramar" returned **0 of 41 thermostats**. **This must not be read as confirmation that the historical Cielo "Miramar Blis - MIL" device (last seen in Increment 21, flagged possibly missing from the live API as far back as Increment 26) is currently absent** — a naming/search-term mismatch remains possible and wasn't ruled out. This is explicitly tracked as part of the still-open **Cielo Production verification** item (rich-telemetry feature implemented/reviewed, still local/uncommitted — unchanged from Increment 78/79), not resolved by this search.
+
+### The two Miramar Nest thermostats — untouched, not addressed
+
+"Miramar Bliss - Living Room" and "Miramar Bliss - upstairs" (the two Nest devices documented from the approved PCM/Panhandle authorization list, per the prior session's correction) remain unmapped/disabled, part of the 11 still-unresolved newly-discovered Nest devices. **The 0-of-41 thermostat search result above must not be used to infer anything about these two** — an unmapped/disabled device would not appear in that search regardless of its true identity, so the null result is uninformative about them specifically. No name-based/fuzzy mapping was performed or is permitted. To be handled separately, after this OwnerRez link's verification (this increment).
+
+### What did NOT happen this increment
+
+No application code was changed. No OwnerRez discovery/sync was run. No Nest device was mapped or enabled. No provider refresh was run. No physical-device (lock or thermostat) command was sent. No commit, push, or deploy occurred — `HANDOFF.md` is the only file touched.
+
+### All other outstanding work — unchanged, not addressed this increment
+
+Unchanged from Increment 79: the remaining 11 unresolved Nest devices (including the two Miramar ones above), the ~1–2°F Nest temperature-reading discrepancy, the August battery-freshness discrepancy and unverified automatic resync, Cielo Production verification, the Notion operational-workflow reconciliation, Ecobee/Honeywell/Trane connectivity work, automatic OwnerRez new-listing onboarding design, the Airbnb alteration-request task feature, and sortable dashboard columns.
+
+### Safety rules — reaffirmed, unchanged by this increment
+
+- No fuzzy/automatic/name-based device-property mapping — ever, for any provider.
+- No physical lock or thermostat command was sent.
+- OwnerRez remains the property source of truth; this link used only the pre-approved, human-reviewed allow-list entry — no inference.
+- Production DB work defaults to read-only; the one link write this increment was individually pre-approved before execution.
+
+### Files changed this increment
+
+`HANDOFF.md` only.
+
+---
+
+## Increment 81 — 2026-09-10 (later still): Dolphin- 2nd Floor RESOLVED by the StayWhile team's own daily QA (not by Claude/Kris); unresolved Nest count 11 → 10; new team QA findings recorded — Poinciana dropdown gap and a concrete Aqua Palm temperature discrepancy — both OPEN, not resolved
+
+### Purpose of this increment
+
+Reconcile new Production QA evidence supplied by the user against the prior read-only reconciliation (Increment 80's follow-on work), and record the resulting authoritative state. **This increment is HANDOFF documentation only** — no Nest API call, discovery, DB query, DB write, mapping, enabling, thermostat command, OAuth/PCM change, OwnerRez change, application-code change, or diagnostic-script edit was performed.
+
+### 1. Dolphin- 2nd Floor — RESOLVED, attribution matters
+
+- **True original PCM authorization target, per the user's confirmation against the original evidence**: `"Dolphin- 2nd Floor"` (no space before the hyphen) → Surfside Solace, `externalDeviceId AVPHwEuS2f_u5l8XXj447FVnUTvwF2R32kUvhGhg7d65R4GPRptsMpBBqIyd06pp15iv2l71dRnJHzIMFIDZulD8jo2Qeg`.
+- **The two local, untracked diagnostic scripts contain a transcription error**, not a live-data ambiguity: `reconcile-nest-newly-authorized-devices.mjs:115` and `investigate-nest-unresolved-devices.mjs:105` both hard-code `"Dolphin - 2nd Floor"` (**with** a space) — this was investigated this session (`git log -S"Dolphin" --all -- HANDOFF.md` and a full-repo grep for both spellings) and confirmed to be the two scripts' own copy, not sourced from any other file in this repo that could adjudicate which spelling is correct. The scripts' spelling is now understood to be the error.
+- **Would correcting the two scripts' spelling have any Production/application effect? No.** Confirmed this session: both files are untracked (`git status` shows `??`, never committed), and a repo-wide search (application code, `package.json` scripts, build/CI config) found zero imports or references to either filename anywhere. They are standalone scripts, run manually from the CLI by a human, with no wiring into the deployed application at all. Correcting the string would only change what a human sees if they manually re-run one of these scripts later — it cannot affect Production today either way. **Not corrected this increment, pending separate approval**, per explicit instruction.
+- **New Production evidence — resolved via the StayWhile team's own daily QA, not this session's reconciliation work**: the team reported finding `Dolphin- 2nd Floor` unmapped during testing, and manually mapped and enabled it themselves. Production screenshots supplied by the user confirm: Device `Dolphin- 2nd Floor`, Provider Nest, Property Surfside Solace, Connectivity **ONLINE**, Status **Enabled**.
+- **Attribution, explicit**: this mapping/enabling action was performed by the StayWhile team during their own Production testing — **not by Claude, not by Kris, not through this session's controlled 6-device batch (Increment 79) or any subsequent action here.** Do not map or enable this device again; it is already done.
+- **Unresolved newly-authorized Nest device count moves from 11 → 10.**
+
+### 2. Remaining 10 unresolved newly-authorized Nest devices
+
+No elimination, counts, row order, telemetry, fuzzy matching, generic-name assumption, or "which property should have a thermostat" reasoning was used below — grouping is purely by literal live `roomName`, exactly as supplied.
+
+**Hallway (3)** — Panhandle:
+
+- `AVPHwEvTwJiCjpTlHoxUrk-2NyYpmS8i3UoTSKKTRBvZGL0ygq3mRsSRfhP5JhfxxI_Hb87IG3-HfRbqH2F5ZsT7NckMeQ`
+- `AVPHwEtxCk5_g7XtJ1wysTa5odfeMuAAMhb2s6Sc-jpy6jT7uH_94NpJNbHEPbEiE2IfBPUZBP_TEGdz4QOaKPA8N5nTuQ`
+- `AVPHwEtQ_41brijIwa98IToow6MbUuiEfaRuYfqDqIHjKkRK5CS5p-KYnAI1RiD6zUTD4NZR-VG6z9exLvKfWTMJ5s19gQ`
+
+**Living Room (2)** — Panhandle:
+
+- `AVPHwEupOrb2KeQ0TpbDNmM2SIx07rHYMzfHCo-ttpxXPMBhRQcuXhV0m0pbcDxdbeBoWSfVjXomGrlp8LxqV09ox3aleA`
+- `AVPHwEt4hXa9MSCgFAxFipK5qMyA7-OALC90V9tCm9AXm7Xtc0QyIg66b83FdC3VznfLcieOwqyYFUuLJrE8l1fDNs91jQ`
+
+**Upstairs, Panhandle (1)**:
+
+- `AVPHwEvBItYFYnH1FJgBnSgP9Gn7L_dRqfJFXiNt3zT6SjPa9BeBpbDyOr-e4M0tFwCkDspdrKFpqqJjS-XEis4skKsKtA`
+
+**Downstairs (1)** — Panhandle:
+
+- `AVPHwEvf8tc1OffZt77A5U7iUqq22SVYhQcSxEbCETkHC8v13CF8j4z8HD1H4ttcBGGLuiPhzvqQjDqScXu-f1DVEIhqbA`
+
+**Kitchen (1)** — Panhandle:
+
+- `AVPHwEsRn7cIcB-L8u71SAVApTWd0K8PI0jM1ctQSjUPzCOei_V8JSSr8VDY_6OZtmMcY9YRj7kUF5PiL5HcH5CYd3EHFA`
+
+**Roseadre Upstairs (2)**:
+
+- `AVPHwEuJG-k_EmHHAUmoryCuP8efh3JF6UGzFfWzntL4kmaz6GAz8RX8fzAzmzgPrF772iveJKYS9gYCnaxcN9FmOzPt_A`
+- `AVPHwEsLBqAFYfGo_2ARqnQQVB63t33TV7ouGIgfiHLC7DkKkDooQJLDrQq2vPkKvvNG6qqkU8hnTxoMWOJ9Vzm2FM1H1g`
+
+**The Panhandle count anomaly is preserved as an open question, not a conclusion**: the approved list expects 2 Hallway targets (Aloha, Island Tides) but 3 live devices report "Hallway"; it expects 2 Panhandle Upstairs targets (Casa Blanca, Miramar Bliss) but only 1 live device reports "Upstairs." This numeric mismatch is evidence-consistent with one Hallway-labeled device actually being a mislabeled Upstairs unit, **but this is explicitly not being inferred or acted on** — it only means the candidate pool for "Miramar Bliss - upstairs" and "Casa Blanca - Upstairs" may need to include the 3 Hallway devices, pending human confirmation.
+
+**Smallest human-confirmation questions for Michelle/Kenny:**
+
+1. For the 3 Panhandle devices currently labeled "Hallway" in Google Home: which property/room does each physically belong to? (Aloha by the Sea and Island Tides are the two expected — but per the count anomaly above, one of the three may actually belong to Casa Blanca or Miramar Bliss instead of a genuine hallway. Exact `externalDeviceId`s listed above.)
+2. For the 2 Panhandle devices labeled "Living Room": which belongs to Bird of Paradise and which (if either) to Miramar Bliss?
+3. For the 1 Panhandle device labeled "Upstairs": is this Casa Blanca's or Miramar Bliss's thermostat?
+4. For the 1 device labeled "Downstairs" and the 1 labeled "Kitchen": please explicitly confirm these are Casa Blanca and Magnolia respectively (each currently has only one same-named approved candidate, but per standing policy a bare generic name is never trusted without confirmation — the Hallway/Upstairs anomaly above is concrete proof why).
+5. For the 2 Roseadre devices, both labeled "Upstairs": which is Roseate Madre's and which is Sandy Nudes's? (Same physical on-site identification method already used successfully for Royal Palms.)
+
+**The most durable fix, recommended but not yet actioned**: have Kenny relabel each of these devices' Google Home room name to include the property (mirroring the fix already proven for Royal Palms, Bird of Paradise, and the Dolphin floors) — this would resolve all 10 automatically on the next reconciliation pass, without manual ID cross-referencing.
+
+### 3. Miramar Bliss — OwnerRez resolved, Nest thermostats still separate and unresolved
+
+Restating Increment 80's already-complete OwnerRez result (unchanged, not re-verified again this increment): Miramar Bliss (`MIRAMAR-BLISS`) is Linked to OwnerRez `480401` ("Miramar-Bliss," internal code "Miramar Bliss 2"); Active-unmatched `1 → 0`; "Unmatched in OwnerRez" `21 → 20`; "Unmatched StayWhile properties" `1 → 0`; no duplicate property created; existing Miramar Bliss August lock associations confirmed intact.
+
+**Explicitly separate**: the two Miramar Bliss Nest thermostats ("Miramar Bliss - Living Room," "Miramar Bliss - upstairs") remain unresolved. **The successful OwnerRez property link is not evidence for either thermostat's identity** and must never be treated as such. Their candidate `externalDeviceId` pools (not a choice between them):
+
+- "Miramar Bliss - Living Room": the 2 Living Room devices listed in §2 above, indistinguishable from Bird of Paradise's identical candidate pool.
+- "Miramar Bliss - upstairs": the 1 Panhandle Upstairs device listed in §2 above, plus — per the count anomaly — possibly one of the 3 Hallway devices. No choice made.
+
+### 4. New team QA — Poinciana (OPEN, separate reconciliation issue)
+
+**Current authoritative status**:
+
+- Poinciana is a pre-existing Nest `ProviderDevice`.
+- It is not one of the 17 newly-authorized Nest devices.
+- It remains unmapped.
+- During Production QA, the StayWhile team attempted to map it but could not, because Poinciana was not available in the Property dropdown.
+- **OPEN**: reconcile whether the correct StayWhile/OwnerRez property record exists, and why it is unavailable in the property selector.
+- Do not create a property or map/enable the thermostat until that reconciliation is complete.
+
+**Older historical context, not part of the current authoritative status above**: Poinciana was previously flagged (Increment 74) as possibly a private, non-rental Michelle residence, deliberately excluded from operational property views pending her direct confirmation. That was never independently confirmed as current fact, and the team's active attempt to map it this increment is new evidence worth weighing against it — preserved here for history, not restated as today's explanation.
+
+### 5. New team QA — Aqua Palm - Living Room temperature discrepancy (OPEN)
+
+Concrete Production example reported by the team:
+
+- **Google Home**: current temperature 71°F, setpoint 72°F.
+- **StayWhile dashboard**: current temperature 74°F, setpoint 72°F.
+- **Setpoint agrees exactly (72°F both sides).** The discrepancy is isolated to the current/ambient temperature reading: **3°F difference.**
+
+This is real Production evidence supporting the previously-reported general ~1–2°F Nest temperature discrepancy pattern (Sep 9, 2026 Touch Base #4, above) — now with a concrete device and numbers. **Tracked as OPEN — Nest telemetry freshness/source investigation.** No cause is assumed. Candidate explanations to investigate, none preferred:
+
+1. StayWhile is displaying stale stored telemetry.
+2. Google/Nest telemetry and StayWhile's refresh timing genuinely differ (readings taken at different moments).
+3. The Nest API would return a fresher value than what's currently stored, if re-queried now.
+4. StayWhile is reading/displaying the wrong temperature field entirely.
+5. A separate timestamp/cache/sync issue not yet identified.
+
+No thermostat command is required to investigate this — it's a read/telemetry question, not a control question.
+
+### 6. Team daily QA — ongoing evidence source
+
+This increment's three findings (Dolphin resolved by the team, Poinciana dropdown gap, Aqua Palm temperature discrepancy) all originated from the StayWhile team's own daily Production QA testing, not from this session's reconciliation work. **Treat future team-reported findings the same way going forward**: as real Production evidence requiring investigation, never assumed resolved or dismissed without verification — consistent with the standing rule already recorded in the Sep 9, 2026 Touch Base #4 section above.
+
+### What did NOT happen this increment
+
+No Nest API call. No discovery. No database query. No database write. No device mapped, enabled, or disabled by Claude/Kris. No thermostat command, setpoint, mode, fan, or power change. No OAuth/PCM change. No OwnerRez change or additional link. No property created. No application code changed. No diagnostic script edited. No commit, push, deploy, or Vercel CLI action. `HANDOFF.md` is the only file touched.
+
+### All other outstanding work — unchanged, not addressed this increment
+
+Unchanged from Increment 80: the 10 unresolved Nest devices above (superseding the prior 11-device count), the Cielo Miramar device presence question, Cielo Production verification generally, the August battery-freshness discrepancy and unverified automatic resync, the Notion operational-workflow reconciliation, Ecobee/Honeywell/Trane connectivity work, automatic OwnerRez new-listing onboarding design, the Airbnb alteration-request task feature, and sortable dashboard columns. Newly added this increment: the Poinciana dropdown/reconciliation gap, and the Aqua Palm temperature discrepancy investigation.
+
+### Safety rules — reaffirmed, unchanged by this increment
+
+- No fuzzy/automatic/name-based device-property mapping — ever, for any provider.
+- No elimination-, count-, or ordering-based mapping — the Panhandle Hallway/Upstairs anomaly is recorded as an open question, never acted on.
+- No physical lock or thermostat command was sent; none is needed for the temperature investigation.
+- OwnerRez remains the property source of truth; no new property created for Poinciana.
+- Production DB work defaults to read-only; no write occurred this increment except to `HANDOFF.md`.
+
+### Files changed this increment
+
+`HANDOFF.md` only.
+
+---
+
+## Increment 82 — 2026-09-11: new Production QA evidence recorded (Poinciana's OwnerRez candidate found but Inactive and unconfirmed; Bonjour Upstairs connectivity discrepancy; OUAP ambient+setpoint discrepancy); read-only Nest telemetry code-path investigation completed, no fix applied
+
+### Purpose of this increment
+
+Record new Production QA evidence supplied by the user, and perform a read-only source-code investigation into how Nest telemetry (current temperature, setpoint, connectivity) flows from the SDM API into StayWhile's database and dashboard, to inform (not yet resolve) the growing set of team-reported discrepancies. **No Nest API call, discovery, DB query/write, mapping, enabling, thermostat command, OAuth/PCM change, OwnerRez action, or application-code change was performed.**
+
+### 1. Poinciana — OwnerRez candidate found, not confirmed, still OPEN
+
+Fresh Production OwnerRez Match Report evidence:
+
+- OwnerRez name: **Poinciana by the Bay**
+- OwnerRez ID: **355019**
+- Internal code: **Poinciana**
+- OwnerRez status: **Inactive**
+
+**This record's existence does not establish it as the correct match for the Nest thermostat named "Poinciana."** The shared name is not evidence under this project's standing no-fuzzy/no-name-based-matching rule — the same discipline already applied to every other property/device pairing in this file. **Do not create or link a Poinciana StayWhile property. Do not map or enable the Poinciana thermostat.** Michelle/Kenny confirmation is needed on whether "Poinciana by the Bay" (355019) is in fact the property the Nest device represents.
+
+**Still unresolved from the prior increment's code investigation**: whether a non-deleted StayWhile `Property` row for Poinciana already exists. That investigation (Increment 81 follow-on, same session) established precisely how the `/integrations/devices` Property dropdown is built — `listProperties()` (`apps/website/src/domains/properties/services/properties.service.ts:18-24`) filters only on `deletedAt: null`, with no status or OwnerRez-link condition, and `DiscoveredDevicesList.tsx`'s dropdown applies no further filtering — so a status-based or OwnerRez-link-based exclusion is ruled out by code; only "no property row exists" or "a property row exists but is soft-deleted" remain possible. Neither has been confirmed, since no Production DB access was available.
+
+### 2. New team QA — Bonjour Upstairs connectivity discrepancy (OPEN)
+
+- Google Home: Error/offline.
+- StayWhile dashboard: Online, current temperature 73°F, setpoint 72°F.
+
+**Not yet attributed to either side being wrong.** See §4 below for the code-path findings this connects to.
+
+### 3. New team QA — OUAP - Living Room temperature/setpoint discrepancy (OPEN)
+
+- Google Home: 72°F indoor / 72°F set.
+- StayWhile dashboard: 75°F current / 75°F set.
+
+**Differs from the Aqua Palm example** (Increment 81, unchanged: Google Home 71°F actual/72°F set vs StayWhile 74°F actual/72°F set — setpoint agreed there): here **both** current temperature and setpoint disagree, not just the ambient reading.
+
+**Three concrete Nest QA cases now exist together**: Aqua Palm (ambient-only discrepancy), OUAP (ambient + setpoint discrepancy), Bonjour Upstairs (connectivity/status discrepancy). Treated as evidence for one focused telemetry-freshness/source investigation — explicitly not proof of a single root cause, and not attributed to StayWhile, Google Home, or the Nest API being "wrong" without further evidence.
+
+### 4. Read-only Nest telemetry code-path investigation — findings, no fix applied
+
+Traced end-to-end from the SDM API through to the `/thermostats` display, reading `provider-devices.service.ts`, `thermostat-refresh.service.ts`, `thermostat-metadata.ts`, `ThermostatsList.tsx`, and `schema.prisma` directly (no live API call):
+
+- **SDM fields → metadata**: `toSmartDeviceMetadata()` (`provider-devices.service.ts:99-118`) maps `ambientTemperatureCelsius` → `currentTemperature`, `heatCelsius ?? coolCelsius` → `targetTemperature`, `thermostatMode` → `mode`, `ambientHumidityPercent` → `humidity`, all Fahrenheit-converted, only ever set when the provider actually reported the field (never a fabricated default).
+- **Where they're stored**: all four live inside `SmartDevice.metadata` (a JSON column, `schema.prisma:411`) — there are no dedicated `currentTemperature`/`targetTemperature` columns. Connectivity is a separate, real enum column: `SmartDevice.status` (`ONLINE | OFFLINE | ERROR | UNKNOWN`, `schema.prisma:409,839-844`).
+- **Two distinct timestamps exist, and they can diverge**: `SmartDevice.updatedAt` (Prisma's auto-managed "when StayWhile last wrote this row") vs `metadata.telemetryUpdatedAt` (a manually-set field — "the provider's own last-telemetry timestamp," per `thermostat-metadata.ts`'s own doc comment). The `/thermostats` table's visible timestamp column shows `updatedAt`; the row's tooltip separately shows `telemetryUpdatedAt` as "Last telemetry: ...". These are not always the same moment.
+- **How ONLINE/OFFLINE is decided**: `connectivityLabel(thermostat.status)` (`ThermostatsList.tsx:87-89`) reads the **stored** `SmartDevice.status` value directly — it is never recomputed live from a fresh Connectivity check at page-render time. What's displayed is whatever was last written to that column.
+- **Can a "successful" Refresh leave a device's old telemetry displayed? Yes, confirmed by code.** `refreshNestTelemetry()` (`thermostat-refresh.service.ts:99-206`) makes one bulk `listDevices()` call and only writes to devices matched by `externalDeviceId` in that response; any enabled device the provider's bulk read doesn't happen to return that time is counted in `notReturnedByProvider` and is "left completely untouched" (its own code comment) — status, metadata, and telemetry all stay exactly as they were — while the overall refresh still reports `status: "success"` to the UI.
+- **Can a row be showing its original discovery snapshot rather than live telemetry? Yes, confirmed by code.** `setProviderDeviceEnabled()` (read in an earlier increment) builds the new `SmartDevice`'s initial `status`/`metadata` from the already-existing `ProviderDevice.connectivityStatus`/`rawMetadata` — i.e., whatever was captured the last time discovery ran — and makes **zero** live Nest API call at enable time (confirmed by that function's own doc comment: "enabling makes zero provider API calls"). That snapshot can already be stale the moment a device is enabled, and stays exactly as-is until a human manually clicks "Refresh" afterward — and even then, only if that specific device happens to be included in the next Refresh's bulk response (see previous bullet).
+- **A real, asymmetric finding**: `refreshCieloTelemetry()` explicitly updates `SmartDevice.lastSeenAt` on every successful match; `refreshNestTelemetry()` does not — for Nest devices, `SmartDevice.lastSeenAt` is not a reliable freshness signal at all. `updatedAt` (row-write time) and `metadata.telemetryUpdatedAt` (provider-claimed observation time) are the two fields that actually matter for Nest.
+
+**None of this was tested against live Production data this increment** — it explains _mechanisms_ the discrepancies are consistent with, not which mechanism actually caused any specific one of the three QA cases above.
+
+### Recommended next diagnostic step (not executed)
+
+For each of the three QA devices (Aqua Palm - Living Room, OUAP - Living Room, Bonjour Upstairs), read-only in Production: hover/inspect the `/thermostats` row's tooltip to see its exact `telemetryUpdatedAt` value, compare it against `updatedAt`, and compare both against the moment the team actually observed the Google Home reading. If `telemetryUpdatedAt` is materially older than the observation moment, that's direct, device-specific evidence for "stale data displayed" (either the never-refreshed-since-enable case or the not-returned-by-provider case) rather than a genuine live provider/StayWhile disagreement. This requires no code change, no API call, and no write — only reading what's already displayed.
+
+### What did NOT happen this increment
+
+No Nest API call. No discovery. No database query or write. No device mapped, enabled, or disabled. No thermostat command, setpoint, mode, fan, or power change. No OAuth/PCM change. No OwnerRez create or link. No property created. No application code changed. No commit, push, or deploy. `HANDOFF.md` is the only file touched.
+
+### All other outstanding work — unchanged, not addressed this increment
+
+Unchanged from Increment 81: the 10 unresolved newly-authorized Nest devices, the Panhandle Hallway/Upstairs count anomaly, the two unresolved Miramar Bliss Nest thermostats, the Cielo Miramar device presence question, Cielo Production verification generally, the August battery-freshness discrepancy and unverified automatic resync, the Notion operational-workflow reconciliation, Ecobee/Honeywell/Trane connectivity work, automatic OwnerRez new-listing onboarding design, the Airbnb alteration-request task feature, and sortable dashboard columns.
+
+### Safety rules — reaffirmed, unchanged by this increment
+
+- No fuzzy/name-based property matching — Poinciana's OwnerRez candidate is recorded as a candidate only, not acted on.
+- No property created or linked; no device mapped, enabled, or commanded.
+- No Nest API call was made to investigate the temperature/connectivity discrepancies — the investigation this increment was code-only.
+- Production DB work defaults to read-only; no write occurred this increment except to `HANDOFF.md`.
+
+### Files changed this increment
+
+`HANDOFF.md` only.
+
+---
+
+## Increment 83 — 2026-09-11: Poinciana identity confirmed by Michelle (action still not authorized); transient Aqua Palm search anomaly investigated (two explanations preserved, unresolved); one controlled Production Nest/Cielo Refresh completed — freshness confirmed as a real contributing factor; Bonjour Upstairs connectivity discrepancy investigated at the code level, remains OPEN; manual-only refresh cadence confirmed; read-only automatic-refresh design proposal prepared, not implemented
+
+### Purpose of this increment
+
+Record several pieces of evidence and one controlled Production action gathered across this session's ongoing Nest telemetry investigation: Michelle's identity confirmation for Poinciana, a transient search anomaly investigated read-only, the results of one explicitly pre-approved controlled Refresh, a code-level investigation into why Bonjour - Upstairs disagrees with Google Home on connectivity, confirmation that refresh is manual-only, and a read-only design proposal for an automatic refresh (not built).
+
+### 1. Poinciana — identity confirmed, action still not authorized
+
+Michelle replied, specifically to the Poinciana question, **"Yes, that's the correct thermostat for that property."** Recorded as human confirmation of exactly this pair:
+
+- Nest thermostat currently named "Poinciana" ↔ OwnerRez property **"Poinciana by the Bay"**, OwnerRez ID **355019**, internal code **Poinciana**, status **Inactive** in Production.
+
+This resolves the identity question only. **No property has been created or linked. No device has been mapped or enabled.** A safe linking/creation workflow still needs to be determined specifically because the OwnerRez record is Inactive — direct code inspection this session (`OwnerRezOnboardingPanel.tsx`) confirmed the existing "Create StayWhile Property" button only renders for the Active OwnerRez list; the Inactive list renders only a neutral badge, no button. As the code stands today, there is no existing UI path to create a property from this specific record at all.
+
+### 2. Transient Aqua Palm search anomaly — investigated, two explanations preserved
+
+A `/thermostats` search for "Aqua Palm" briefly returned **0 of 42** (having previously matched, and shortly after returning **2 of 42** — "Aqua Palm - dbl room" and "Aqua Palm - Living room," both freshly visible). Investigated read-only:
+
+- `isThermostatVisible()` (`smart-devices.service.ts`) hides a Nest `SmartDevice` entirely from `/thermostats` whenever its linked `ProviderDevice.enabled` is false — a real, one-click "Disable" action already exists. A brief disable/re-enable is one plausible explanation.
+- Next.js 15's default client router-cache `staleTime` for dynamic pages is `0` (no `staleTimes` override found in `next.config.js`), making an ordinary in-app navigation unlikely to serve stale data — but the **browser's own back/forward cache (bfcache)**, which Next.js doesn't control, remains a separate possible explanation if the browser Back button was used between the two observations.
+- **The navigation method between the two observations is UNKNOWN and was explicitly not used to favor either explanation** — both are preserved as possibilities only, not findings, per direct instruction.
+- **Independently proven, not speculative**: Aqua Palm - Living Room's `Last synced` (`SmartDevice.updatedAt`) genuinely changed from Sep 9, 12:43 PM CDT to Sep 9, 7:37 PM CDT between two observations — since `updatedAt` only moves on a real database write, this proves an actual write occurred in that window (consistent with either explanation above, but ruling out "pure display artifact with zero underlying change" for that specific difference).
+
+### 3. Controlled Production Refresh — completed, Sep 10, 2026, 2:58 PM CDT
+
+Performed by Kris, with explicit pre-approval, after the safety boundary was independently re-verified from source code (no command import, no upsert, no mapping/enabling path, read-only Nest/Cielo API calls only, routine OAuth access-token refresh only — no consent/scope change).
+
+**Result**: Nest 39 devices refreshed; Cielo 3 devices refreshed. Aggregate `/thermostats` counts unchanged: 42 total / 40 online / 2 non-online.
+
+**Pre-refresh, all three devices identical**: Last synced / Last telemetry = Sep 9, 2026, 7:37 PM CDT.
+
+| Device                  | Before                             | After                                                                                 |
+| ----------------------- | ---------------------------------- | ------------------------------------------------------------------------------------- |
+| Aqua Palm - Living room | ONLINE, 74°F current / 72°F target | ONLINE, 72°F current / 72°F target, Last synced/telemetry → Sep 10, 2026, 2:58 PM CDT |
+| OUAP - living room      | ONLINE, 75°F current / 75°F target | ONLINE, 74°F current / 72°F target, Last synced/telemetry → Sep 10, 2026, 2:58 PM CDT |
+| Bonjour - Upstairs      | ONLINE, 73°F current / 72°F target | ONLINE, 73°F current / 72°F target, Last synced/telemetry → Sep 10, 2026, 2:58 PM CDT |
+
+All three timestamps advanced identically, proving all three were returned and processed by this refresh.
+
+**Interpretation, stated carefully**:
+
+- **Freshness was demonstrably contributing to at least some of the reported discrepancies** — Aqua Palm's current reading changed immediately upon refresh (74°F → 72°F); OUAP's changed on both current and target (75°F/75°F → 74°F/72°F).
+- **Not claimed as fully resolved** — no same-minute Google Home reading exists for the post-refresh moment, so agreement with the live provider state at that instant is not independently confirmed.
+- **Bonjour - Upstairs remains OPEN** — its values didn't change at all (already 73°F/72°F before and after). **The controlled SDM refresh reported Bonjour - Upstairs ONLINE, while the team's earlier Google Home evidence showed Error/offline. Because those observations were not captured at the same moment, the discrepancy remains OPEN** — stale telemetry alone does not explain it either way. See §4.
+
+### 4. Bonjour - Upstairs connectivity discrepancy — code-level investigation, still OPEN
+
+Traced exactly which SDM field feeds our connectivity value: `packages/integrations/src/nest/capabilities.ts:32,93,111-112` reads **`sdm.devices.traits.Connectivity.status`** — the one and only source. Typed in `packages/integrations/src/nest/types.ts:50` as `"ONLINE" | "OFFLINE"` — **no `ERROR` state exists anywhere in this integration's type model**, matching Google's own documented SDM trait definition (genuinely a two-value enum, not a StayWhile omission). No other trait in our full catalog (`Info`, `Temperature`, `Humidity`, `ThermostatHvac`, `ThermostatMode`, `ThermostatTemperatureSetpoint`, `ThermostatEco`, `Fan`, `Settings`) represents device health or error state.
+
+**Two plausible, unproven explanations, neither favored**:
+
+1. Google Home's consumer-app "Error" state may reflect device-health information (Wi-Fi/power/firmware/wiring signals) that the partner-facing SDM API structurally never exposes — a visibility gap, not a bug.
+2. The thermostat may have genuinely reconnected between the team's Google Home observation and our controlled refresh — a real state change over time.
+
+**Recommended verification for the next recurrence** (not yet executed): have the team capture Google Home's state, then perform one controlled StayWhile Refresh within the same 1–2 minute window, and compare results immediately — same-moment evidence would meaningfully narrow between the two explanations above.
+
+### 5. Refresh cadence — confirmed manual-only
+
+Re-confirmed this increment: no `vercel.json` exists anywhere in this repo, and no cron/schedule code references any smart-device or thermostat path. **Nest and Cielo telemetry refresh happens exclusively when a human clicks the "Refresh" button on `/thermostats`** — there is no automatic path today. The ~19-hour staleness window observed before this increment's controlled refresh, combined with the refresh's own before/after results, is real evidence supporting evaluation of an automatic scheduled refresh. **Not implemented.** A read-only design proposal was prepared this increment (failure handling, rate-limit considerations, partial-failure/`notReturnedByProvider` visibility, overlap prevention, independent Nest/Cielo scheduling) and shared directly with the user in-session — not reproduced here in full to keep this file from duplicating a document that isn't yet an implementation decision. No code was written for it. **Cadence is explicitly TBD, not an approved or recorded implementation decision** — a specific interval was floated only as a preliminary design idea requiring separate provider-quota/rate-limit verification for both Nest and Cielo before any number is treated as real. That verification has not happened yet and must occur before scheduling is implemented.
+
+### What did NOT happen this increment
+
+No Nest discovery. No device mapped, enabled, or disabled by Claude. No thermostat command, setpoint, mode, fan, or power change. No OAuth/PCM consent/scope change (the one routine access-token refresh inside the approved Refresh call is not a consent/scope change). No OwnerRez record created or linked. No application code changed. No commit, push, or deploy. Exactly one Production write occurred — the pre-approved, safety-verified Refresh click, performed by Kris, not Claude. `HANDOFF.md` is the only file touched by this documentation pass.
+
+### All other outstanding work — unchanged, not addressed this increment
+
+Unchanged from Increment 82: the 10 unresolved newly-authorized Nest devices, the Panhandle Hallway/Upstairs count anomaly, the two unresolved Miramar Bliss Nest thermostats, the Cielo Miramar device presence question, Cielo Production verification generally, the August battery-freshness discrepancy and unverified automatic resync, the Notion operational-workflow reconciliation, Ecobee/Honeywell/Trane connectivity work, automatic OwnerRez new-listing onboarding design, the Airbnb alteration-request task feature, and sortable dashboard columns. Newly open as of this increment: the safe Poinciana linking workflow (Inactive-OwnerRez-record gap in the existing Create UI), the Bonjour Upstairs connectivity explanation, and the automatic-refresh design decision.
+
+### Safety rules — reaffirmed, unchanged by this increment
+
+- No fuzzy/name-based property matching — Poinciana's identity came from explicit human confirmation, not inference.
+- No property created or linked; no device mapped, enabled, or commanded.
+- The one Refresh performed was independently safety-verified from source code before approval, and confirmed read-only with respect to physical devices.
+- No automatic/scheduled refresh was implemented — proposal only, explicitly not code.
+- Production DB work defaults to read-only; the one write this increment was individually pre-approved before execution.
+
+### Files changed this increment
+
+`HANDOFF.md` only.
+
+---
+
+## Increment 84 — 2026-09-11: Notion dashboard manually Production-verified — resolves the Increment 75/76-vs-Sep 9-meeting conflict; connection, Property Listings, and general search all confirmed live; n8n workflows, change/deletion monitoring, and in-dashboard editing confirmed still not implemented
+
+### Purpose of this increment
+
+Record direct manual Production verification of the Notion dashboard (`/notion`), resolving the documentation conflict flagged in Increment 82/83 between Increment 75/76's "Production-verified" claim and the Sep 9, 2026 meeting notes' "still pending" statement. **Documentation only — no application code, n8n, Notion write, database query/write, device/provider API call, or OwnerRez change was made.**
+
+### Evidence — Production `/notion`, Sep 10/11, 2026
+
+- **Connection status**: displays **Connected**.
+- **"View of Listings"**: displays **Read access verified**.
+- **Property Listings**: loads **35 of 35** listings.
+- **General "Search Notion"**: present and functional.
+  - Search for **"cleaning"** returned **0 results** — **not classified as a failure**: whether a matching, accessible Notion item genuinely exists for that term was never independently established, so a zero-result search proves nothing either way on its own.
+  - Controlled search for a known existing listing, **"Moonlit Cove"**, returned exactly **1 result** — displayed as "Moonlit Cove," correctly classified as a **Property listing**, with its address and an **"Open in Notion"** link. This is the positive-control test that actually confirms the search path works end-to-end against real Notion content.
+
+### Resolved capability status
+
+| Capability                                 | Status                                                                           |
+| ------------------------------------------ | -------------------------------------------------------------------------------- |
+| Authentication/credential connection       | **PRODUCTION VERIFIED**                                                          |
+| Property Listings / read access            | **PRODUCTION VERIFIED**                                                          |
+| General Notion search                      | **PRODUCTION VERIFIED**                                                          |
+| Notion-specific n8n operational workflows  | **NOT IMPLEMENTED** (unchanged)                                                  |
+| Page-change/deletion monitoring and alerts | **NOT IMPLEMENTED** (unchanged)                                                  |
+| In-dashboard Notion editing                | **NOT IMPLEMENTED** (unchanged, blocked on Michelle/Kenny field/action approval) |
+
+**The Increment 75/76-vs-Sep 9-meeting conflict is now resolved**: the code-level evidence gathered earlier this session (commit `29d0acc`, clean/committed, matching Increment 75's own citation) is now corroborated by direct live Production verification. The Sep 9 meeting's "still pending" statement is therefore no longer treated as evidence that the search feature is missing or broken. The reason for the discrepancy between the meeting statement and the previously deployed feature was not independently established.
+
+### What did NOT happen this increment
+
+No application code changed. No n8n workflow created or modified. No Notion write of any kind. No database query or write. No device/provider (Nest/Cielo/August) API call. No OwnerRez change. No commit, push, or deploy. `HANDOFF.md` is the only file touched.
+
+### All other outstanding work — unchanged, not addressed this increment
+
+Unchanged from Increment 83: Poinciana's safe linking workflow (blocked on its Inactive OwnerRez status), the two unresolved Miramar Bliss Nest thermostats, the 10 unresolved newly-authorized Nest devices generally, the Panhandle Hallway/Upstairs count anomaly, Bonjour Upstairs's connectivity discrepancy, the automatic-refresh cadence decision (still TBD pending provider-specific verification), OwnerRez automatic new-listing onboarding, August battery freshness/automatic resync, Cielo Production verification, and the still-not-implemented Notion n8n workflows/monitoring/editing recorded above.
+
+### Safety rules — reaffirmed, unchanged by this increment
+
+- No Notion write capability exists or was added — search/read-only remains the entire surface.
+- No n8n workflow was created, triggered, or modified.
+- Production DB work defaults to read-only; no write occurred this increment except to `HANDOFF.md`.
+
+### Files changed this increment
+
+`HANDOFF.md` only.
+
+---
+
+## Increment 85 — 2026-09-13: August Production authentication restored after a documented token expiry; the new per-row August spot-refresh verified working in Production for both Bonjour AMI locks
+
+### Purpose of this increment
+
+Record the resolution of the 401 hit by the first controlled Production use of the new August spot-refresh feature (built and deployed in the prior session), and the subsequent Production verification of that feature once authentication was restored.
+
+### The 401 and its root cause
+
+The first scoped Production refresh attempt against a Bonjour AMI lock returned **401 authentication failure**. Investigation (read-only, code-level) found: the new feature's August authentication path is identical to the existing, already-relied-upon `refreshAugustTelemetry()`/`syncAugustDevices()` paths (same four env vars, same `AugustClient` construction) — not a defect in the new code. HANDOFF's own existing record (Increment 20/21) documented the prior login's token as **valid until 2026-09-12**; the 401 was observed on 2026-09-13, one day past that documented expiry. This was recorded as the leading explanation, not independently proven beyond that alignment, since `AugustClient` has no automatic token-refresh mechanism (confirmed absent from the client's source) — August's own documented auth model requires periodic re-issuing via a separate interactive login, never an automatic runtime refresh.
+
+### Account identification and credential renewal — performed by the human user, not Claude
+
+- The existing StayWhile Client C August account was identified from the locally configured `AUGUST_IDENTIFIER` (read-only comparison against two candidate accounts the user held; neither raw candidate matched until the stored value's `email:` scheme prefix was accounted for — the underlying account is a business-domain address, confirmed to match one of the two candidates once that prefix was recognized). No credential value was printed in that process beyond the identifier itself, at the user's explicit direction scoped to that one variable only.
+- The user manually re-ran the August login (interactive 2FA, in their own terminal — this session did not and cannot perform this step).
+- A brand-new terminal (no pre-existing exported `AUGUST_*` variables) successfully ran the read-only `check.ts`, validating the freshly-written local credentials before anything was propagated further.
+- The four August credential variables (`AUGUST_IDENTIFIER`, `AUGUST_INSTALL_ID`, `AUGUST_ACCESS_TOKEN`, `AUGUST_BRAND`) were updated directly by the user in the StayWhile Client C Production Vercel project, followed by a successful Production redeploy. **`AUGUST_PROPERTY_MAP` and `AUGUST_EXCLUDED_LOCK_IDS` were not changed.** No credential value is recorded in this file, and none was exposed at any point in this session.
+
+### Production scoped verification — both Bonjour AMI locks, no 401
+
+| Lock                     | Result                    | Status | Lock state | Battery             | Health  | Last synced                          | Provider telemetry                    |
+| ------------------------ | ------------------------- | ------ | ---------- | ------------------- | ------- | ------------------------------------ | ------------------------------------- |
+| Bonjour AMI – Front Door | Refresh succeeded, no 401 | ONLINE | Unlocked   | **89%** (was 90%)   | Healthy | 9/12/2026 9:45:28 PM America/Chicago | 9/12/2026 1:53:20 AM America/Chicago  |
+| Bonjour AMI – In Law     | Refresh succeeded, no 401 | ONLINE | Locked     | **74%** (unchanged) | Healthy | 9/12/2026 9:45:58 PM America/Chicago | 9/11/2026 11:47:33 PM America/Chicago |
+
+Both rows cleared their prior "Attention needed — telemetry stale" warning after this refresh.
+
+### Conclusions
+
+- **August Production authentication is restored and independently verified** via the two successful scoped refreshes above.
+- **The new per-row scoped refresh path is verified working in Production** for both Bonjour locks — the exact feature this thread set out to validate.
+- **The earlier failed 401 attempt did not justify, and was not used as a basis for, any device-mapping or telemetry change** — it made zero database writes (proven in code/tests, Increment prior to this one), and nothing about device mappings was touched as a result of it.
+- **Not claimed**: that the original August-app-vs-StayWhile battery discrepancy (Front Door 90%→80% reported gap; In Law 74%→63% reported gap) is now fully explained. This refresh confirms the values currently returned through StayWhile's August integration are working correctly end-to-end — it does not establish why the August mobile app's own reading might differ at any given moment, since provider telemetry timestamps can legitimately be older than StayWhile's own sync timestamp (visible directly in the table above: both locks' "Provider telemetry" column is many hours older than "Last synced").
+- **Automatic August re-sync remains NOT IMPLEMENTED** — unchanged from prior increments; no code evidence was found this pass to suggest otherwise.
+- **Physical lock controls remain fully restricted** — no lock/unlock/PIN capability exists in this codebase, and none was invoked at any point in this entire thread.
+
+### What did NOT happen this increment (by Claude)
+
+No August API call was made by Claude. No Sync Now was run. No additional Refresh beyond the two verified scoped results above was performed. No `.env.local` or Vercel change was made by Claude — both were changed only by the user, directly, in their own environment/dashboard. No lock/unlock/PIN operation occurred. No credential value (access token, install ID, password, 2FA code, or any other secret) is recorded in this file or was exposed in this session.
+
+### Safety rules — reaffirmed, unchanged by this increment
+
+- No credential/secret value is ever written into this file.
+- No lock/unlock/PIN capability exists or was invoked.
+- No fuzzy/automatic device-property mapping — unaffected by this increment, not touched.
+- Production DB/config work defaults to read-only from this session's side; the credential and redeploy changes described above were performed directly by the user, not by Claude.
+
+### Files changed this increment
+
+`HANDOFF.md` only.
