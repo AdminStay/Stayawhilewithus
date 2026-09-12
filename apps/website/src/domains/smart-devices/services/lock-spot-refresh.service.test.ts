@@ -401,6 +401,36 @@ describe("refreshAugustTelemetryForSelectedLocks", () => {
     expect(mockRecordAudit).not.toHaveBeenCalled();
   });
 
+  it("a provider failure (e.g. a real 401 from August) makes zero DB writes — the row's stored battery/status/telemetry are left exactly as they were", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
+      augustLockRow({
+        id: LOCK_ID,
+        metadata: { batteryLevel: 90, lockState: "locked" },
+        status: "ONLINE",
+      }),
+    ] as never);
+    mockGetLockDetail.mockRejectedValueOnce(
+      new Error("Request to /locks/ext-lock-1 failed with 401"),
+    );
+
+    const result = await refreshAugustTelemetryForSelectedLocks(actor, {
+      smartDeviceIds: [LOCK_ID],
+    });
+
+    expect(result).toEqual([
+      {
+        smartDeviceId: LOCK_ID,
+        result: "provider_failure",
+        error: "Request to /locks/ext-lock-1 failed with 401",
+      },
+    ]);
+    // The update call happens strictly after a successful getLockDetail()
+    // inside the same try block — a rejection jumps straight to the catch,
+    // so smartDevice.update must never be called at all for this row.
+    expect(prisma.smartDevice.update).not.toHaveBeenCalled();
+    expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+
   it("throws a clear configuration error, before any row lookup, when August isn't configured", async () => {
     restoreEnv();
 
