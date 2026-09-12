@@ -318,6 +318,82 @@ export async function refreshThermostatsAction(
 }
 
 /**
+ * The single entry point behind /locks' per-row "Refresh telemetry" action
+ * — deliberately calls only refreshAugustTelemetryForSelectedLocks()
+ * (lock-spot-refresh.service.ts) with exactly the one SmartDevice.id this
+ * row submits, never syncAugustDevices() (the legacy, whole-fleet
+ * /integrations "Sync Now" mechanism) and never
+ * refreshAugustTelemetry()/discoverAugustDevices()/
+ * mapProviderDeviceToProperty()/unmapProviderDevice()/
+ * setProviderDeviceEnabled() — every one of those stays completely
+ * untouched by this action. refreshAugustTelemetryForSelectedLocks() itself
+ * already enforces smart_devices:update; this action introduces no
+ * separate/broader permission check. Never throws to the caller for an
+ * expected per-device outcome (not_found/invalid_selection/
+ * provider_failure) — those render inline via the row's own button; only a
+ * genuinely unexpected top-level error (including an RBAC denial) is
+ * caught and reported the same way, same convention as every other action
+ * in this file.
+ *
+ * Placed deliberately before refreshAugustAction below, not after — an
+ * existing source-level test isolates that function's body by slicing from
+ * its declaration to the next top-level `export`, so anything appended
+ * after it (including this block's own doc comment) would otherwise be
+ * misread as part of refreshAugustAction's own body.
+ */
+export type RefreshAugustSpotActionState =
+  | { status: "idle" }
+  | { status: "success"; outcome: SpotRefreshOutcome }
+  | { status: "failure"; error: string };
+
+export async function refreshAugustTelemetrySpotAction(
+  _prevState: RefreshAugustSpotActionState,
+  formData: FormData,
+): Promise<RefreshAugustSpotActionState> {
+  try {
+    const actor = await getCurrentUser();
+    const input = refreshAugustSpotSchema.parse({
+      smartDeviceIds: [formData.get("smartDeviceId")],
+    });
+    const [outcome] = await refreshAugustTelemetryForSelectedLocks(
+      actor,
+      input,
+    );
+    if (!outcome) {
+      // Structurally unreachable — the schema requires at least one id and
+      // the service returns exactly one outcome per requested id — but
+      // never assume an invariant blindly rather than narrow the type.
+      throw new Error("No refresh outcome was returned.");
+    }
+    if (outcome.result === "success") {
+      // Keeps the user on /locks and shows the newly refreshed status,
+      // battery, lock state, Last Synced, and Last Telemetry for this row
+      // without a manual reload — same pattern refreshAugustAction below
+      // uses for the whole-fleet refresh.
+      revalidatePath(LOCKS_PAGE_PATH);
+    }
+    logLockSpotRefresh("action_completed", {
+      actorUserId: actor.userId,
+      smartDeviceId: outcome.smartDeviceId,
+      result: outcome.result,
+    });
+    return { status: "success", outcome };
+  } catch (err) {
+    // Covers both a genuine top-level failure (RBAC denial, missing August
+    // credentials, malformed id) and anything unexpected before it, e.g.
+    // getCurrentUser() itself failing. Same message this action already
+    // returns to the browser — already safe to log.
+    logLockSpotRefresh("action_failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return {
+      status: "failure",
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
  * The single entry point behind /locks' "Refresh telemetry" button —
  * deliberately calls only refreshAugustTelemetry() (lock-refresh.service.ts),
  * never syncAugustDevices() (the separate, legacy /integrations "Sync Now"
@@ -363,76 +439,6 @@ export async function refreshAugustAction(
     // message this action already returns to the browser — already safe to
     // log.
     logLockRefresh("action_failed", {
-      error: err instanceof Error ? err.message : String(err),
-    });
-    return {
-      status: "failure",
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
-
-/**
- * The single entry point behind /locks' per-row "Refresh telemetry" action
- * — deliberately calls only refreshAugustTelemetryForSelectedLocks()
- * (lock-spot-refresh.service.ts) with exactly the one SmartDevice.id this
- * row submits, never syncAugustDevices() (the legacy, whole-fleet
- * /integrations "Sync Now" mechanism) and never
- * refreshAugustTelemetry()/discoverAugustDevices()/
- * mapProviderDeviceToProperty()/unmapProviderDevice()/
- * setProviderDeviceEnabled() — every one of those stays completely
- * untouched by this action. refreshAugustTelemetryForSelectedLocks() itself
- * already enforces smart_devices:update; this action introduces no
- * separate/broader permission check. Never throws to the caller for an
- * expected per-device outcome (not_found/invalid_selection/
- * provider_failure) — those render inline via the row's own button; only a
- * genuinely unexpected top-level error (including an RBAC denial) is
- * caught and reported the same way, same convention as every other action
- * in this file.
- */
-export type RefreshAugustSpotActionState =
-  | { status: "idle" }
-  | { status: "success"; outcome: SpotRefreshOutcome }
-  | { status: "failure"; error: string };
-
-export async function refreshAugustTelemetrySpotAction(
-  _prevState: RefreshAugustSpotActionState,
-  formData: FormData,
-): Promise<RefreshAugustSpotActionState> {
-  try {
-    const actor = await getCurrentUser();
-    const input = refreshAugustSpotSchema.parse({
-      smartDeviceIds: [formData.get("smartDeviceId")],
-    });
-    const [outcome] = await refreshAugustTelemetryForSelectedLocks(
-      actor,
-      input,
-    );
-    if (!outcome) {
-      // Structurally unreachable — the schema requires at least one id and
-      // the service returns exactly one outcome per requested id — but
-      // never assume an invariant blindly rather than narrow the type.
-      throw new Error("No refresh outcome was returned.");
-    }
-    if (outcome.result === "success") {
-      // Keeps the user on /locks and shows the newly refreshed status,
-      // battery, lock state, Last Synced, and Last Telemetry for this row
-      // without a manual reload — same pattern refreshAugustAction above
-      // uses for the whole-fleet refresh.
-      revalidatePath(LOCKS_PAGE_PATH);
-    }
-    logLockSpotRefresh("action_completed", {
-      actorUserId: actor.userId,
-      smartDeviceId: outcome.smartDeviceId,
-      result: outcome.result,
-    });
-    return { status: "success", outcome };
-  } catch (err) {
-    // Covers both a genuine top-level failure (RBAC denial, missing August
-    // credentials, malformed id) and anything unexpected before it, e.g.
-    // getCurrentUser() itself failing. Same message this action already
-    // returns to the browser — already safe to log.
-    logLockSpotRefresh("action_failed", {
       error: err instanceof Error ? err.message : String(err),
     });
     return {

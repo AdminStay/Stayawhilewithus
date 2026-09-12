@@ -16,6 +16,8 @@ const {
   mockLogThermostatRefresh,
   mockRefreshAugustTelemetry,
   mockLogLockRefresh,
+  mockRefreshAugustTelemetryForSelectedLocks,
+  mockLogLockSpotRefresh,
 } = vi.hoisted(() => ({
   mockRevalidatePath: vi.fn(),
   mockDiscoverNestDevices: vi.fn(),
@@ -28,6 +30,8 @@ const {
   mockLogThermostatRefresh: vi.fn(),
   mockRefreshAugustTelemetry: vi.fn(),
   mockLogLockRefresh: vi.fn(),
+  mockRefreshAugustTelemetryForSelectedLocks: vi.fn(),
+  mockLogLockSpotRefresh: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({
@@ -60,10 +64,17 @@ vi.mock("./services/lock-refresh.service", () => ({
   logLockRefresh: mockLogLockRefresh,
 }));
 
+vi.mock("./services/lock-spot-refresh.service", () => ({
+  refreshAugustTelemetryForSelectedLocks:
+    mockRefreshAugustTelemetryForSelectedLocks,
+  logLockSpotRefresh: mockLogLockSpotRefresh,
+}));
+
 import {
   discoverAugustDevicesAction,
   discoverNestDevicesAction,
   refreshAugustAction,
+  refreshAugustTelemetrySpotAction,
   refreshThermostatsAction,
 } from "./actions";
 
@@ -437,5 +448,112 @@ describe("refreshAugustAction", () => {
     ]) {
       expect(body).not.toContain(forbidden);
     }
+  });
+});
+
+describe("refreshAugustTelemetrySpotAction", () => {
+  const IDLE_SPOT = { status: "idle" as const };
+  const REAL_ROW_ID = "11111111-1111-1111-1111-111111111111";
+
+  function formDataFor(smartDeviceId: string): FormData {
+    const fd = new FormData();
+    fd.set("smartDeviceId", smartDeviceId);
+    return fd;
+  }
+
+  it("a real row submission with only smartDeviceId passes action validation and calls the service with exactly [smartDeviceId] — proves the FormData shape (one id) matches what the schema/service actually expect (an array)", async () => {
+    mockRefreshAugustTelemetryForSelectedLocks.mockResolvedValueOnce([
+      { smartDeviceId: REAL_ROW_ID, result: "success" },
+    ]);
+
+    const result = await refreshAugustTelemetrySpotAction(
+      IDLE_SPOT,
+      formDataFor(REAL_ROW_ID),
+    );
+
+    expect(mockRefreshAugustTelemetryForSelectedLocks).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "user-1" }),
+      { smartDeviceIds: [REAL_ROW_ID] },
+    );
+    expect(result).toEqual({
+      status: "success",
+      outcome: { smartDeviceId: REAL_ROW_ID, result: "success" },
+    });
+  });
+
+  it("revalidates /locks only when the outcome is success", async () => {
+    mockRefreshAugustTelemetryForSelectedLocks.mockResolvedValueOnce([
+      { smartDeviceId: REAL_ROW_ID, result: "success" },
+    ]);
+
+    await refreshAugustTelemetrySpotAction(IDLE_SPOT, formDataFor(REAL_ROW_ID));
+
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+  });
+
+  it("does not revalidate on a provider_failure outcome", async () => {
+    mockRefreshAugustTelemetryForSelectedLocks.mockResolvedValueOnce([
+      {
+        smartDeviceId: REAL_ROW_ID,
+        result: "provider_failure",
+        error: "August API 500",
+      },
+    ]);
+
+    const result = await refreshAugustTelemetrySpotAction(
+      IDLE_SPOT,
+      formDataFor(REAL_ROW_ID),
+    );
+
+    expect(result).toEqual({
+      status: "success",
+      outcome: {
+        smartDeviceId: REAL_ROW_ID,
+        result: "provider_failure",
+        error: "August API 500",
+      },
+    });
+    expect(mockRevalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("returns a top-level failure state instead of throwing on a malformed/missing id, and never calls the service", async () => {
+    const fd = new FormData(); // no smartDeviceId set at all
+
+    const result = await refreshAugustTelemetrySpotAction(IDLE_SPOT, fd);
+
+    expect(result.status).toBe("failure");
+    expect(mockRefreshAugustTelemetryForSelectedLocks).not.toHaveBeenCalled();
+    expect(mockRevalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("returns a top-level failure state instead of throwing when the service call fails (e.g. RBAC denial), and does not revalidate", async () => {
+    mockRefreshAugustTelemetryForSelectedLocks.mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    const result = await refreshAugustTelemetrySpotAction(
+      IDLE_SPOT,
+      formDataFor(REAL_ROW_ID),
+    );
+
+    expect(result).toEqual({ status: "failure", error: "ForbiddenError" });
+    expect(mockRevalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("delegates only to refreshAugustTelemetryForSelectedLocks() — never touches discovery, mapping, enablement, the whole-fleet refresh, or Nest command functions", async () => {
+    mockRefreshAugustTelemetryForSelectedLocks.mockResolvedValueOnce([
+      { smartDeviceId: REAL_ROW_ID, result: "success" },
+    ]);
+
+    await refreshAugustTelemetrySpotAction(IDLE_SPOT, formDataFor(REAL_ROW_ID));
+
+    expect(mockRefreshAugustTelemetryForSelectedLocks).toHaveBeenCalledTimes(1);
+    expect(mockDiscoverAugustDevices).not.toHaveBeenCalled();
+    expect(mockDiscoverNestDevices).not.toHaveBeenCalled();
+    expect(mockMapProviderDeviceToProperty).not.toHaveBeenCalled();
+    expect(mockSetProviderDeviceEnabled).not.toHaveBeenCalled();
+    expect(mockUnmapProviderDevice).not.toHaveBeenCalled();
+    expect(mockSendNestThermostatCommand).not.toHaveBeenCalled();
+    expect(mockRefreshAugustTelemetry).not.toHaveBeenCalled();
   });
 });
