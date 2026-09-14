@@ -9,6 +9,9 @@ import {
   type RefreshAugustSpotInput,
 } from "../schemas/lock-spot-refresh.schema";
 
+import { AUGUST_DETAIL_CONCURRENCY, chunk } from "./provider-devices.service";
+import { isDemoSmartDevice } from "./smart-devices.service";
+
 import { recordAudit } from "@/platform/audit/record-audit";
 
 /**
@@ -39,6 +42,26 @@ import { recordAudit } from "@/platform/audit/record-audit";
  *
  * Each requested id is resolved and refreshed independently — one device's
  * provider-call failure never affects another's result.
+ *
+ * Safe for controlled full-fleet use: requests are processed in
+ * AUGUST_DETAIL_CONCURRENCY-sized batches (chunk(), imported from
+ * provider-devices.service.ts — the exact same helper/constant
+ * discoverAugustDevices() and refreshAugustTelemetry() already use, not a
+ * second copy), so no more than that many `getLockDetail()` calls (and
+ * their immediate DB round trips) are ever in flight at once, regardless
+ * of how many ids are requested. This guards against the same resource-
+ * contention pattern (Production's `pgbouncer` connection_limit=1 pool
+ * starving under one long-running invocation) that AUGUST_DETAIL_CONCURRENCY
+ * was introduced to fix elsewhere — see that constant's own doc comment.
+ * Batches run strictly one after another; within a batch, each id's own
+ * try/catch still means one device's failure can never affect another's
+ * outcome, in the same batch or a different one.
+ *
+ * A row whose externalDeviceId is demo data (isDemoSmartDevice(), the same
+ * check every other part of this app already uses — never a second
+ * "demo-" check) is treated as invalid_selection: no August call is made
+ * for it, and no write is attempted, same as a wrong-provider/wrong-type
+ * row.
  */
 
 export type SpotRefreshResultCode =
@@ -141,90 +164,115 @@ export async function refreshAugustTelemetryForSelectedLocks(
     requestedCount: input.smartDeviceIds.length,
   });
 
-  const outcomes = await Promise.all(
-    input.smartDeviceIds.map(
-      async (smartDeviceId): Promise<SpotRefreshOutcome> => {
-        const row = existingById.get(smartDeviceId);
-        if (!row) {
-          logLockSpotRefresh("not_found", {
-            actorUserId: actor.userId,
-            smartDeviceId,
-          });
-          return { smartDeviceId, result: "not_found" };
-        }
-        if (row.provider !== "AUGUST" || row.deviceType !== "LOCK") {
-          // No August API call is made for this id at all — an
-          // invalid-selection row is rejected before any provider contact,
-          // never coerced into a real call.
-          logLockSpotRefresh("invalid_selection", {
-            actorUserId: actor.userId,
-            smartDeviceId,
-            provider: row.provider,
-            deviceType: row.deviceType,
-          });
-          return { smartDeviceId, result: "invalid_selection" };
-        }
+  // One id's outcome, fully self-contained — never throws, always resolves,
+  // so batching this in Promise.all below can never let one device's
+  // failure abort or affect another's, in the same batch or a different
+  // one. Kept as its own named function (not inlined in the batch loop)
+  // purely for readability; behavior is unchanged from before batching was
+  // added.
+  async function refreshOne(
+    smartDeviceId: string,
+  ): Promise<SpotRefreshOutcome> {
+    const row = existingById.get(smartDeviceId);
+    if (!row) {
+      logLockSpotRefresh("not_found", {
+        actorUserId: actor.userId,
+        smartDeviceId,
+      });
+      return { smartDeviceId, result: "not_found" };
+    }
+    if (row.provider !== "AUGUST" || row.deviceType !== "LOCK") {
+      // No August API call is made for this id at all — an
+      // invalid-selection row is rejected before any provider contact,
+      // never coerced into a real call.
+      logLockSpotRefresh("invalid_selection", {
+        actorUserId: actor.userId,
+        smartDeviceId,
+        provider: row.provider,
+        deviceType: row.deviceType,
+      });
+      return { smartDeviceId, result: "invalid_selection" };
+    }
+    if (isDemoSmartDevice(row)) {
+      // Same "no provider call, no write" treatment as any other
+      // invalid-selection row — demo data was never a real August lock.
+      logLockSpotRefresh("invalid_selection", {
+        actorUserId: actor.userId,
+        smartDeviceId,
+        reason: "demo_device",
+      });
+      return { smartDeviceId, result: "invalid_selection" };
+    }
 
-        try {
-          // The one and only real August call this function makes per
-          // device — the same already-audited GET-only method every other
-          // August refresh path uses (no new endpoint).
-          const detail = await client.getLockDetail(row.externalDeviceId);
+    try {
+      // The one and only real August call this function makes per
+      // device — the same already-audited GET-only method every other
+      // August refresh path uses (no new endpoint).
+      const detail = await client.getLockDetail(row.externalDeviceId);
 
-          const existingMetadata =
-            (row.metadata as Record<string, unknown> | null) ?? {};
-          const mergedMetadata = mergeAugustLockMetadata(existingMetadata, {
-            batteryLevel: detail.batteryLevel,
-            lockState: detail.lockState,
-            telemetryUpdatedAt: detail.telemetryUpdatedAt,
-          });
+      const existingMetadata =
+        (row.metadata as Record<string, unknown> | null) ?? {};
+      const mergedMetadata = mergeAugustLockMetadata(existingMetadata, {
+        batteryLevel: detail.batteryLevel,
+        lockState: detail.lockState,
+        telemetryUpdatedAt: detail.telemetryUpdatedAt,
+      });
 
-          const updated = await prisma.smartDevice.update({
-            where: { id: row.id },
-            data: {
-              status: detail.connectivity,
-              metadata: mergedMetadata as Prisma.InputJsonValue,
-              lastSeenAt: detail.seenAt ? new Date(detail.seenAt) : null,
-            },
-          });
+      const updated = await prisma.smartDevice.update({
+        where: { id: row.id },
+        data: {
+          status: detail.connectivity,
+          metadata: mergedMetadata as Prisma.InputJsonValue,
+          lastSeenAt: detail.seenAt ? new Date(detail.seenAt) : null,
+        },
+      });
 
-          await recordAudit({
-            actorUserId: actor.userId,
-            actorType: "USER",
-            action: "smart_device.telemetry_spot_refreshed",
-            entityType: "SmartDevice",
-            entityId: row.id,
-            beforeState: {
-              status: row.status,
-              lastSeenAt: row.lastSeenAt?.toISOString() ?? null,
-            } satisfies Prisma.InputJsonValue,
-            afterState: {
-              status: updated.status,
-              lastSeenAt: updated.lastSeenAt?.toISOString() ?? null,
-            } satisfies Prisma.InputJsonValue,
-          });
+      await recordAudit({
+        actorUserId: actor.userId,
+        actorType: "USER",
+        action: "smart_device.telemetry_spot_refreshed",
+        entityType: "SmartDevice",
+        entityId: row.id,
+        beforeState: {
+          status: row.status,
+          lastSeenAt: row.lastSeenAt?.toISOString() ?? null,
+        } satisfies Prisma.InputJsonValue,
+        afterState: {
+          status: updated.status,
+          lastSeenAt: updated.lastSeenAt?.toISOString() ?? null,
+        } satisfies Prisma.InputJsonValue,
+      });
 
-          logLockSpotRefresh("success", {
-            actorUserId: actor.userId,
-            smartDeviceId,
-          });
-          return { smartDeviceId, result: "success" };
-        } catch (err) {
-          // A rejected/thrown getLockDetail() call for this device leaves
-          // its row completely untouched — no write of any kind is
-          // attempted below this catch, and this catch never affects any
-          // other device's own independent outcome.
-          const error = err instanceof Error ? err.message : String(err);
-          logLockSpotRefresh("provider_failure", {
-            actorUserId: actor.userId,
-            smartDeviceId,
-            error,
-          });
-          return { smartDeviceId, result: "provider_failure", error };
-        }
-      },
-    ),
-  );
+      logLockSpotRefresh("success", {
+        actorUserId: actor.userId,
+        smartDeviceId,
+      });
+      return { smartDeviceId, result: "success" };
+    } catch (err) {
+      // A rejected/thrown getLockDetail() call for this device leaves
+      // its row completely untouched — no write of any kind is
+      // attempted below this catch, and this catch never affects any
+      // other device's own independent outcome.
+      const error = err instanceof Error ? err.message : String(err);
+      logLockSpotRefresh("provider_failure", {
+        actorUserId: actor.userId,
+        smartDeviceId,
+        error,
+      });
+      return { smartDeviceId, result: "provider_failure", error };
+    }
+  }
+
+  // Bounded-concurrency batches, processed strictly one after another —
+  // never more than AUGUST_DETAIL_CONCURRENCY ids' worth of
+  // getLockDetail()+DB round trips in flight at once, matching exactly the
+  // pattern discoverAugustDevices()/refreshAugustTelemetry() already use
+  // for the same reason (see AUGUST_DETAIL_CONCURRENCY's own doc comment).
+  const outcomes: SpotRefreshOutcome[] = [];
+  for (const batch of chunk(input.smartDeviceIds, AUGUST_DETAIL_CONCURRENCY)) {
+    const batchOutcomes = await Promise.all(batch.map(refreshOne));
+    outcomes.push(...batchOutcomes);
+  }
 
   logLockSpotRefresh("spot_refresh_completed", {
     actorUserId: actor.userId,

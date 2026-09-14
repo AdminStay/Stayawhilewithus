@@ -43,6 +43,19 @@ vi.mock("@/platform/audit/record-audit", () => ({
   recordAudit: mockRecordAudit,
 }));
 
+// chunk()/AUGUST_DETAIL_CONCURRENCY and isDemoSmartDevice are loaded FOR
+// REAL from provider-devices.service.ts/smart-devices.service.ts (not
+// mocked) — they're pure, side-effect-free helpers, and using the real
+// ones is the whole point of the "never a second, potentially-drifting
+// copy" reuse this feature is built on. provider-devices.service.ts's own
+// top-level import of ensureConnectionRows (integrations.service.ts) still
+// needs mocking so merely importing it doesn't reach for a real DB — same
+// transitive-import reason lock-refresh.service.test.ts already documents
+// for this exact pairing.
+vi.mock("@/domains/integrations/services/integrations.service", () => ({
+  ensureConnectionRows: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
 
@@ -130,14 +143,40 @@ describe("source-level guarantees", () => {
     }
   });
 
-  it("never imports discovery, the legacy full-fleet sync, or mapping/enabling functions", () => {
-    // Only real import lines are checked here — not prose, since this
-    // file's own doc comment legitimately *names* these functions to
-    // explain what it deliberately does not call.
-    expect(source).not.toContain('from "./smart-devices.service"');
-    expect(source).not.toContain('from "./provider-devices.service"');
-    expect(source).not.toContain('from "../services/smart-devices.service"');
-    expect(source).not.toContain('from "../services/provider-devices.service"');
+  it("imports only chunk/AUGUST_DETAIL_CONCURRENCY from provider-devices.service and only isDemoSmartDevice from smart-devices.service — never discovery, the legacy full-fleet sync, or mapping/enabling functions", () => {
+    // Checks the actual imported SYMBOLS (the `{ ... }` of each real
+    // `import { X, Y } from "..."` statement), not prose — this file's own
+    // doc comment legitimately *names* functions like syncAugustDevices()
+    // to explain what it deliberately does not call, which would false-fail
+    // a plain whole-file substring check.
+    const importedSymbols = [...source.matchAll(/import\s*\{([^}]+)\}\s*from/g)]
+      .flatMap((m) => (m[1] as string).split(","))
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const forbidden = [
+      "discoverAugustDevices",
+      "discoverNestDevices",
+      "syncAugustDevices",
+      "syncCieloDevices",
+      "mapProviderDeviceToProperty",
+      "setProviderDeviceEnabled",
+      "unmapProviderDevice",
+      "listSmartDevices",
+    ];
+    for (const name of forbidden) {
+      expect(importedSymbols.some((s) => s.includes(name))).toBe(false);
+    }
+
+    // Positive check: the two specific, intended reused helpers are
+    // actually there — proves this test isn't vacuously passing.
+    expect(importedSymbols.some((s) => s.includes("chunk"))).toBe(true);
+    expect(
+      importedSymbols.some((s) => s.includes("AUGUST_DETAIL_CONCURRENCY")),
+    ).toBe(true);
+    expect(importedSymbols.some((s) => s.includes("isDemoSmartDevice"))).toBe(
+      true,
+    );
   });
 
   it("never imports anything beyond the exact expected module set", () => {
@@ -147,6 +186,8 @@ describe("source-level guarantees", () => {
       "@stayw/database",
       "@stayw/integrations/august",
       "../schemas/lock-spot-refresh.schema",
+      "./provider-devices.service",
+      "./smart-devices.service",
       "@/platform/audit/record-audit",
     ]);
     const specifiers = [...source.matchAll(/from\s+"([^"]+)"/g)].map(
@@ -441,5 +482,58 @@ describe("refreshAugustTelemetryForSelectedLocks", () => {
     ).rejects.toThrow("August isn't configured");
 
     expect(prisma.smartDevice.findMany).not.toHaveBeenCalled();
+  });
+
+  it("skips a demo row safely — no August call, no write, reported as invalid_selection", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
+      augustLockRow({ externalDeviceId: "demo-lock-1" }),
+    ] as never);
+
+    const result = await refreshAugustTelemetryForSelectedLocks(actor, {
+      smartDeviceIds: [LOCK_ID],
+    });
+
+    expect(result).toEqual([
+      { smartDeviceId: LOCK_ID, result: "invalid_selection" },
+    ]);
+    expect(mockGetLockDetail).not.toHaveBeenCalled();
+    expect(prisma.smartDevice.update).not.toHaveBeenCalled();
+  });
+
+  it("bounds concurrency to at most 5 in-flight getLockDetail() calls, and correctly processes more than 5 requested locks in sequential batches", async () => {
+    const ids = Array.from(
+      { length: 12 },
+      (_, i) => `${String(i + 1).padStart(8, "0")}-0000-0000-0000-000000000000`,
+    );
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce(
+      ids.map((id, i) =>
+        augustLockRow({ id, externalDeviceId: `ext-${i + 1}` }),
+      ) as never,
+    );
+    vi.mocked(prisma.smartDevice.update).mockResolvedValue({} as never);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    mockGetLockDetail.mockImplementation(async (externalId: string) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await Promise.resolve(); // yield one microtask tick, same as every other in-flight call in this batch
+      inFlight--;
+      return augustDetail({ id: externalId });
+    });
+
+    const result = await refreshAugustTelemetryForSelectedLocks(actor, {
+      smartDeviceIds: ids,
+    });
+
+    expect(result).toHaveLength(12);
+    expect(result.every((o) => o.result === "success")).toBe(true);
+    expect(mockGetLockDetail).toHaveBeenCalledTimes(12);
+    // Never exceeded the concurrency cap...
+    expect(maxInFlight).toBeLessThanOrEqual(5);
+    // ...and genuine batching actually happened (not accidentally
+    // serialized to 1-at-a-time, which would also satisfy "<=5" but not
+    // prove real bounded-concurrency batching).
+    expect(maxInFlight).toBe(5);
   });
 });
