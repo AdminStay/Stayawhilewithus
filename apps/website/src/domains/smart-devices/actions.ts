@@ -4,7 +4,10 @@ import type { AuthContext } from "@stayw/auth";
 import { revalidatePath } from "next/cache";
 
 import { fahrenheitToCelsius } from "./lib/temperature";
-import { refreshAugustSpotSchema } from "./schemas/lock-spot-refresh.schema";
+import {
+  refreshAugustBatchSchema,
+  refreshAugustSpotSchema,
+} from "./schemas/lock-spot-refresh.schema";
 import {
   setNestCoolSetpointSchema,
   setNestFanSchema,
@@ -384,6 +387,84 @@ export async function refreshAugustTelemetrySpotAction(
     // getCurrentUser() itself failing. Same message this action already
     // returns to the browser — already safe to log.
     logLockSpotRefresh("action_failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return {
+      status: "failure",
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * The entry point behind /locks' bulk-refresh panel — one invocation per
+ * operator-submitted group of up to 5 SmartDevice ids. Deliberately calls
+ * the exact same refreshAugustTelemetryForSelectedLocks()
+ * (lock-spot-refresh.service.ts) as refreshAugustTelemetrySpotAction above —
+ * this is not a second refresh implementation, only a second, narrower
+ * caller of it. Same "never syncAugustDevices()/discoverAugustDevices()/
+ * discoverNestDevices()/mapProviderDeviceToProperty()/
+ * setProviderDeviceEnabled()/unmapProviderDevice()/
+ * sendNestThermostatCommand()" boundary as refreshAugustTelemetrySpotAction.
+ * refreshAugustBatchSchema's own max(5) — not a check duplicated here —
+ * is what rejects an oversized submission; this action does not re-validate
+ * the count itself, matching the "the schema is the one and only size
+ * check" boundary the tests below prove directly.
+ *
+ * Reads every id from repeated `smartDeviceId` FormData entries
+ * (formData.getAll), the same field name refreshAugustTelemetrySpotAction
+ * already uses for its own single value, kept as one real HTML form field
+ * rather than inventing a second submission shape (e.g. a JSON string) for
+ * what is still, structurally, the same kind of request.
+ *
+ * Returns every requested id's own outcome (never just one, unlike the
+ * spot-refresh action above) so the calling UI can render each device's
+ * individual result rather than a single pass/fail for the whole group —
+ * one device's provider_failure must stay visible next to another device's
+ * success, never collapsed into a single group-level verdict.
+ *
+ * Placed deliberately before refreshAugustAction below, not after — same
+ * reason as refreshAugustTelemetrySpotAction's own placement above: an
+ * existing source-level test isolates refreshAugustAction's body by slicing
+ * from its declaration to the next top-level `export`, so anything appended
+ * after it would otherwise be misread as part of that function's own body.
+ */
+export type RefreshAugustBatchActionState =
+  | { status: "idle" }
+  | { status: "success"; outcomes: SpotRefreshOutcome[] }
+  | { status: "failure"; error: string };
+
+export async function refreshAugustTelemetryBatchAction(
+  _prevState: RefreshAugustBatchActionState,
+  formData: FormData,
+): Promise<RefreshAugustBatchActionState> {
+  try {
+    const actor = await getCurrentUser();
+    const input = refreshAugustBatchSchema.parse({
+      smartDeviceIds: formData.getAll("smartDeviceId"),
+    });
+    const outcomes = await refreshAugustTelemetryForSelectedLocks(actor, input);
+    if (outcomes.some((outcome) => outcome.result === "success")) {
+      // Same revalidate-only-on-a-real-write convention as
+      // refreshAugustTelemetrySpotAction above — a group where every device
+      // came back not_found/invalid_selection/provider_failure made no
+      // database write, so there's nothing on /locks to refresh.
+      revalidatePath(LOCKS_PAGE_PATH);
+    }
+    logLockSpotRefresh("batch_action_completed", {
+      actorUserId: actor.userId,
+      requestedCount: input.smartDeviceIds.length,
+      successCount: outcomes.filter((outcome) => outcome.result === "success")
+        .length,
+    });
+    return { status: "success", outcomes };
+  } catch (err) {
+    // Covers both a genuine top-level failure (RBAC denial, missing August
+    // credentials, an oversized/malformed submission caught by the schema)
+    // and anything unexpected before it, e.g. getCurrentUser() itself
+    // failing. Same message this action already returns to the browser —
+    // already safe to log.
+    logLockSpotRefresh("batch_action_failed", {
       error: err instanceof Error ? err.message : String(err),
     });
     return {

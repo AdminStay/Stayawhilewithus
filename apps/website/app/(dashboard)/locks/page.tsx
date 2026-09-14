@@ -3,17 +3,38 @@ import { PageHeader } from "@stayw/ui";
 
 import {
   refreshAugustAction,
+  refreshAugustTelemetryBatchAction,
   refreshAugustTelemetrySpotAction,
 } from "@/domains/smart-devices/actions";
+import { LockBulkRefreshPanel } from "@/domains/smart-devices/components/LockBulkRefreshPanel";
 import { LocksList } from "@/domains/smart-devices/components/LocksList";
 import { RefreshLocksButton } from "@/domains/smart-devices/components/RefreshLocksButton";
-import { listSmartDevices } from "@/domains/smart-devices/services/smart-devices.service";
+import {
+  isDemoSmartDevice,
+  listSmartDevices,
+} from "@/domains/smart-devices/services/smart-devices.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
 export default async function LocksPage() {
   const actor = await getCurrentUser();
   const devices = await listSmartDevices(actor);
   const locks = devices.filter((d) => d.deviceType === "LOCK");
+
+  // UX-side eligibility filter for the bulk panel's checklist only —
+  // refreshAugustTelemetryForSelectedLocks() re-checks provider/deviceType/
+  // demo itself for every id regardless of what this list contains, so this
+  // narrows what an operator sees to what could ever succeed, it doesn't
+  // relax or replace the real enforcement.
+  const eligibleAugustLocks = locks
+    .filter((lock) => lock.provider === "AUGUST" && !isDemoSmartDevice(lock))
+    .map((lock) => ({
+      id: lock.id,
+      propertyName: lock.property.name,
+      name: lock.name,
+      // Same field LocksList's own "Last synced" column already renders
+      // (lock.updatedAt) — reused as-is, no second query.
+      lastSyncedAt: lock.updatedAt,
+    }));
 
   // Global (not property-scoped) — refreshAugustTelemetry()/refreshAugustAction
   // both still call assertPermission(actor, "smart_devices:update") themselves,
@@ -36,6 +57,14 @@ export default async function LocksPage() {
       {canRefresh && (
         <div className="mb-6 flex justify-end">
           <RefreshLocksButton action={refreshAugustAction} />
+        </div>
+      )}
+      {canRefresh && eligibleAugustLocks.length > 0 && (
+        <div className="mb-6">
+          <LockBulkRefreshPanel
+            rows={eligibleAugustLocks}
+            action={refreshAugustTelemetryBatchAction}
+          />
         </div>
       )}
       <LocksList
