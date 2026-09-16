@@ -63,7 +63,11 @@
 - [x] **No unapproved/sensitive operational fields visible — USER-CONFIRMED PRODUCTION VERIFIED.** (Consistent with there being none modeled in code at all yet.)
 - [x] **Recent Notion Activity component renders in Production — USER-CONFIRMED PRODUCTION VERIFIED.** Precisely: the _component_ renders correctly. **Not claimed**: real Notion event ingestion — webhook registration remains disabled and there is no live event traffic, so the section is correctly showing its empty state, not "working" in the monitoring sense.
 
-**UI/UX polish pass (Increment 91, 2026-09-16) — local only, not yet deployed**: during the manual verification above, real usability problems were found in the shipped detail modal/table (horizontal scroll from raw URLs, no visual hierarchy, 11-column table). Fixed locally — see "Increment 91" at the bottom of this file. **Not yet committed/pushed/deployed** — this session's redesign is a separate, later local change on top of the already-deployed Increment 90 code; the Production UI still reflects Increment 90's original (functional but unpolished) layout until Increment 91 is approved and shipped.
+- [x] **UI/UX polish (Increment 91/92/93) — desktop — USER-CONFIRMED PRODUCTION VERIFIED (2026-09-16).** The user personally inspected the real authenticated Production `/notion` UI at desktop viewport after deployment of commit `4ff39d0` and confirmed, in the real rendered page: `/notion` loads; 35/35 listings render; the redesigned 5-column table (Property/Region/Address/Capacity/Resources) renders with no horizontal scroll at desktop width; Moonlit Cove renders correctly; region badges render; Capacity is cleanly consolidated (bedrooms/bathrooms/guests); Resource links are consolidated into compact actions (Direct/Airbnb/VRBO/Photos/Guidebook), no raw URLs in the table; the Property name/Keyword/Region/Reset filter controls render in an organized area. Opening the Moonlit Cove detail modal: opens with no horizontal scrollbar; no raw URLs displayed; Property Overview renders cleanly (Bedrooms 5, Bathrooms 3, Max guests 12); Booking & Resources is clearly grouped with a clean "Open" action for each of Direct booking/Airbnb/VRBO/Photos/Guidebook; "Open in Notion" remains secondary/fallback; Last-updated info renders cleanly; no Edit/Save/Delete/Archive controls visible; no unapproved sensitive fields visible; no raw Notion JSON/internal IDs visible.
+- **Scope of this confirmation, stated precisely**: **desktop viewport only** — the user tested and confirmed the desktop view shown in their own screenshots. **Tablet/mobile/responsive behavior remains automated/local-verified only** (Increment 91's own test coverage + code review), **not manually Production-tested** — do not upgrade responsive/mobile to USER-CONFIRMED based on this entry.
+- **One real presentation issue found during this verification, investigated and locally fixed — see "Increment 94" at the bottom of this file for the full writeup.** The Moonlit Cove detail modal's header was missing the SRQ region badge and the property address, even though the same data renders correctly in the listings table. Investigation found the data-wiring and rendering logic were **already correct** (confirmed by direct source inspection of the exact deployed commit, and by already-passing tests) — the real, fixable issue was a **visual-consistency gap**: the modal's region badge always used the muted "neutral" tone regardless of region, while the table already used a more prominent "success" (green) tone for any known region — making the modal's badge easy to overlook by comparison. Fixed locally (badge tone now matches the table's own convention; address subtitle given slightly more visual weight) — **this fix is local only, NOT committed, NOT pushed, NOT deployed**, held for the user's review per explicit instruction.
+
+Earlier UI/UX polish trail (built Increment 91, re-reviewed Increment 92, committed/pushed/deployed Increment 93 as commit `4ff39d0`) — see those entries at the bottom of this file for the full history.
 
 **BUILT (Increment 87), AUDITED/EXTENDED (Increment 88), SECURITY-HARDENED (Increment 89), then COMMITTED/PUSHED/DEPLOYED + DB-migrated + RBAC-bootstrapped IN PRODUCTION (Increment 90), and manually USER-CONFIRMED PRODUCTION VERIFIED (2026-09-16) — read-only foundation only, editing/webhook-registration/n8n/Slack still explicitly withheld:**
 Implemented continuously per explicit client direction to keep building all Notion work that doesn't require a Kenny/Michelle business decision or a Production/external-system mutation. **Historical note, describes Increments 87–89 only, no longer the current state**: at that point everything was local-only (no commit, no push, no Production Notion write, no Production DB mutation, no n8n workflow activation, no external webhook/subscription created) — see Increment 90 below for the actual commit/push/deploy/migration/RBAC-bootstrap, and the "USER-CONFIRMED PRODUCTION VERIFIED" items above for the client's own manual click-through. Verified via `npx tsc --noEmit` (clean across `apps/website`, `packages/integrations`, `packages/auth`, `packages/database`), `eslint` (0 errors on every touched file — a handful of pre-existing, unrelated `import/order` warnings remain in files this work didn't restructure, same pattern as every prior increment), the full `apps/website/src/domains/integrations` suite (**196/196 passing**, up from 166 at Increment 87 — Increment 88 added `fieldValueSchemaFor`/edit-conflict/webhook-dedupe-race coverage, Increment 89 added the client-DTO fail-closed-by-construction regression suite), `packages/integrations/src/notion` (46/46 passing), `packages/auth` (21/21 passing), the full `apps/website` suite (**900/903 passing** — the same 3 pre-existing, unrelated failures as every prior pass, in an untouched `OwnerRezConfirmLinkPanel` component test), and a full `next build` (all routes, including `/notion` and the new `/api/webhooks/notion`, compile — the one build failure hit is the same pre-existing, unrelated local `.env.local` n8n webhook misconfiguration documented since Increment 87, confirmed unrelated by rebuilding with placeholder n8n env values only). See "Increment 89" at the bottom of this file for the client-payload security fix; "Increment 88" for the completion audit.
@@ -142,7 +146,9 @@ Safety requirements for any eventual implementation: explicit allowlist of edita
 [ ] Optional Slack/n8n fan-out           — NOT BUILT; architecture decision only (Increment 88) — n8n has no role in inbound webhook processing, ever; its only possible role is pure Slack fan-out on already-validated data, if/when Slack alerting is approved
 [?] Delete/archive policy                — remains DISABLED, per this file's existing standing default recommendation; no separate approval sought or given
 [?] VA/ops-team role/access model        — OPEN, unconfirmed which real seeded role StayWhile's VAs use; cleaner/maintenance_tech/front_desk/read_only confirmed to hold zero Notion permissions in Production (Increment 90) — deliberate, not an oversight
-[~] UI/UX polish                         — real usability problems found during the manual verification above (horizontal scroll, raw URLs, wide table) — fixed LOCALLY (Increment 91), NOT yet committed/pushed/deployed; Production still shows Increment 90's original unpolished layout until approved
+[x] UI/UX polish — desktop           — USER-CONFIRMED PRODUCTION VERIFIED (commit 4ff39d0, Increment 93/94) — table, filter bar, and detail modal all confirmed in the real authenticated Production UI at desktop viewport
+[~] UI/UX polish — tablet/mobile     — automated/local-verified only (Increment 91's own test coverage + code review); NOT manually Production-tested
+[~] Modal header region/address      — one real visual-consistency gap found + fixed LOCALLY (Increment 94, badge tone now matches the table's convention); fix is NOT yet committed/pushed/deployed
 ```
 
 **Do not call the Notion requirement complete merely because this read-only foundation is deployed.** Editing, live webhook monitoring, Slack/n8n alerting, sensitive-field exposure, and VA/ops-team access are all still either explicitly withheld or waiting on a Kenny/Michelle decision — see Increment 90's sections G/H below for the full, current punch list.
@@ -5294,3 +5300,112 @@ No application code was changed (the review found nothing needing a fix). No com
 ### Files changed this increment
 
 `HANDOFF.md` only (one contradiction fix, this log entry).
+
+## Increment 93 — 2026-09-16 (same day): Notion UI/UX polish (Increment 91/92) deployed to StayWhile Production — scoped commit `4ff39d0` pushed to `main`, deployment functionally confirmed healthy via unauthenticated checks only. DEPLOYED, explicitly NOT USER-CONFIRMED — that verification is the client's own to do.
+
+### Purpose
+
+Execute the approved Production deployment of the Increment 91/92 Notion UI/UX polish only — presentation-layer work on top of the already-deployed, already-user-confirmed Increment 90 read-only foundation. Nothing else.
+
+### Pre-flight — PASSED
+
+Repo identity re-confirmed: path under `Client C - Stay While With Us`, remote `git@github-staywhile:AdminStay/Stayawhilewithus.git`, branch `main`, HEAD at the Increment 90 commit `1c436f9` before this increment's work began. **No `gh` command was run at any point this increment** — the Increment 90 cross-client identity incident is not repeated; deployment verification used only unauthenticated HTTP, matching the lesson recorded in that incident and in the `feedback_infrastructure_isolation_policy` memory. `git status --porcelain -uall` inspected in full before staging. `git diff --stat` against the intended 9 modified files confirmed exactly that set, no more. Grepped the full diff for RBAC/write-path/migration/secret signals (`NOTION_EDIT_ALLOWLIST`, `NOTION_WEBHOOK_VERIFICATION_TOKEN`, `updatePageProperty`, `prisma.`, `migrate`, `assertPermission`, `notion:update`, `notion:manage`, `DATABASE_URL`, credential-shaped strings) — the only hit was a pre-existing doc-comment mention of `NOTION_EDIT_ALLOWLIST` (prose, not code). Confirmed `integrations.service.ts`, `notion-field-visibility.ts`, `permissions.ts`, `seed.ts`, and `schema.prisma` do not appear in `git status` at all — i.e. zero changes to any of them since the already-approved Increment 90 commit; the safe client-DTO/RBAC boundary was not touched, let alone weakened.
+
+### Final local verification — re-run clean, working tree unchanged since Increment 92
+
+`tsc --noEmit` (both `apps/website` and `packages/ui`): clean. `eslint` on all 9 touched files: 0 errors/warnings. `apps/website/src/domains/integrations` suite: **211/211**. `OwnerRezMatchReportPreview.test.tsx` (Dialog's other consumer): **5/5**. Full `apps/website` suite: **915/918** — the same 3 pre-existing `OwnerRezConfirmLinkPanel` failures, demonstrably identical assertion/line numbers to every prior run, confirmed still unrelated. `next build`: succeeds, all 27 routes.
+
+### Exact files staged and committed
+
+Derived from `git diff`/`git status`, never staged by directory: `HANDOFF.md`, `apps/website/src/domains/integrations/components/{NotionDetailView.tsx,NotionDetailView.test.tsx,NotionListingsSearch.tsx,NotionListingsSearch.test.tsx,NotionRecentActivity.tsx,NotionSearch.tsx}`, `apps/website/src/domains/integrations/services/{notion-detail-sections.ts,notion-detail-sections.test.ts}`, `apps/website/vitest.setup.mts`, `packages/ui/src/components/Dialog.tsx`, `packages/ui/src/index.ts` — **12 files**, confirmed via `git diff --cached --name-only` before commit. Explicitly excluded (confirmed still present, untouched, in `git status` after staging): `.env.example`, `.gitignore`, the sign-out button (`layout.tsx`), all Cielo/thermostat/provider-devices files, both `.claude/worktrees/` directories, every `packages/database/*.mjs` diagnostic script, every `_tmp-*` file.
+
+### Commit
+
+`4ff39d00406105698256c5100739dfcc186586b5` on `main` — "feat(notion): polish responsive operations UI" (12 files, 1051 insertions/217 deletions; the repo's pre-commit hook ran `prettier --write` on the staged files, formatting-only, re-verified with a full test re-run afterward, still 211/211 and 5/5).
+
+### Push
+
+`git push origin main` → `1c436f9..4ff39d0 main -> main`, to `github-staywhile:AdminStay/Stayawhilewithus.git`. No `gh`/`vercel` command was used for the push itself — plain `git push` over the dedicated SSH remote, same as Increment 90.
+
+### Deployment verification — functionally healthy; exact SHA correlation NOT claimed
+
+Per the standing rule from Increment 90's cross-client `gh` incident, no authenticated `gh api`/`vercel` call was made. Unauthenticated checks only: `GET /api/health` → `200`. `GET /notion` (no auth) → `404` via Clerk's `protect-rewrite` — same pre-existing, expected behavior, not a regression. `POST /api/webhooks/notion` → `503 {"error":"Not configured"}`, `GET` → `405` — unchanged from before this deploy, confirming no regression in that route either. **Honest limitation, stated explicitly**: unlike Increment 90 (which added a brand-new backend route whose distinct behavior could prove the new code was live), this increment is presentation-only — there is no unauthenticated way to observe whether the new table/modal markup is actually what's rendering behind Clerk's auth wall. **What this proves**: the app is up, healthy, and shows no regression in every publicly-observable surface. **What this does NOT prove**: that the exact new UI is what a signed-in user sees, or exact git-SHA-to-deployment correlation — both require either an authenticated check (deliberately not attempted, per the standing `gh`/`vercel` restriction) or the user's own login.
+
+### HANDOFF — DEPLOYED, explicitly not USER-CONFIRMED
+
+Per explicit instruction, the master checklist's Notion section now marks the UI/UX polish as **DEPLOYED TO PRODUCTION (commit `4ff39d0`)** — not as USER-CONFIRMED PRODUCTION VERIFIED. The Increment 90 USER-CONFIRMED items (authenticated page load, 35-listing baseline, both detail-view flows, no edit controls, no sensitive fields, Recent Activity rendering) were **not modified or re-stated as re-verified** — they stand exactly as the user confirmed them, describing the pre-polish UI they actually saw. The new UI has not yet been seen by anyone with real authenticated access, Claude included.
+
+### What did NOT happen this increment
+
+No `gh api` or other authenticated GitHub CLI call. No `vercel login`/`link`/`pull`. No Vercel/GitHub account relinking of any kind. No Production database mutation. No re-run of the Notion migration (already applied, Increment 90). No re-run of the RBAC bootstrap (already applied, Increment 90). No Notion webhook registration or verification-token configuration. No n8n activation. No Notion write enabled. No edit allowlist populated. No additional/sensitive Notion field exposed. No Cielo/August/Nest/OwnerRez/other-integration work started.
+
+### K. What the user needs to manually verify
+
+The actual authenticated `/notion` page, signed in for real: confirm the redesigned table (5 columns, no horizontal scroll), the detail modal (grouped sections, "Open" actions instead of raw URLs, no horizontal scroll on desktop/laptop/tablet/mobile), the labeled filter bar, and the carded Recent Notion Activity section all render and behave as the local review/artifact preview showed — and that nothing regressed from the Increment 90 baseline already confirmed working (35 listings, search, positive control, no edit controls, no sensitive fields).
+
+**Addendum (same day, after this increment): the desktop portion of this verification is now done.** The user performed the manual click-through and confirmed the desktop UI works as designed — see "Increment 94" below for the exact confirmed items and one follow-up finding (a badge-tone visual-consistency gap, investigated and fixed locally, not yet deployed). Tablet/mobile remains not manually Production-tested.
+
+### Files changed this increment
+
+Application code per "Exact files staged and committed" above, plus this `HANDOFF.md` entry.
+
+## Increment 94 — 2026-09-16 (same day): Increment 93 Notion UI/UX polish USER-CONFIRMED PRODUCTION VERIFIED at desktop viewport; one real visual-consistency gap (modal header region badge/address) investigated, found NOT a data-wiring bug, and fixed locally — fix held local, not committed/pushed/deployed per explicit instruction
+
+### Purpose
+
+Record the user's own manual desktop Production verification of the Increment 93 deploy (commit `4ff39d0`), investigate one presentation issue they flagged (missing region badge/address in the Moonlit Cove detail modal), and — if it turns out to be a safe, straightforward fix — apply it locally without redeploying, per explicit instruction to keep any code change local for review first.
+
+### A. Increment 93 Production status — USER-CONFIRMED PRODUCTION VERIFIED (desktop)
+
+Recorded verbatim from the user's own inspection of the real authenticated Production `/notion` page after commit `4ff39d0`:
+
+**Main Property Listings**: `/notion` loads; 35/35 listings render; redesigned 5-column table (Property/Region/Address/Capacity/Resources) renders; no horizontal scroll required at desktop viewport; Moonlit Cove renders correctly; region badges render; Capacity cleanly consolidated (bedrooms/bathrooms/guests); Resource links consolidated into compact actions (Direct/Airbnb/VRBO/Photos/Guidebook); no raw URLs clutter the table; Property Name/Keyword/Region/Reset controls render in an organized filter area; overall listings UI confirmed significantly cleaner and usable for daily operations.
+
+**Moonlit Cove detail modal**: opens; no horizontal scrollbar; no raw URLs displayed; Property Overview renders cleanly (Bedrooms 5, Bathrooms 3, Max guests 12); Booking & Resources clearly grouped, each of Direct booking/Airbnb/VRBO/Photos/Guidebook has a clean "Open" action; "Open in Notion" remains secondary/fallback; Last-updated info renders cleanly; no Edit/Save/Delete/Archive controls visible; no unapproved sensitive operational fields visible; no raw Notion JSON/internal IDs visible; overall modal confirmed clean, organized, aesthetic, and easier for the operations team to use.
+
+**Scope, stated precisely, per explicit instruction**: this is **desktop-viewport verification only**. Tablet/mobile responsive behavior is **not** claimed Production-verified by this entry — it remains covered only by Increment 91's own automated tests and code review, not a real manual check on those form factors.
+
+### C/D/E. Investigation: missing region badge + address in the Moonlit Cove modal header
+
+**Finding: not a data-wiring bug.** Direct inspection of the exact deployed source (`git show 4ff39d0:...`, not memory) confirmed both the caller and the renderer were already correct:
+
+- `NotionListingsSearch.tsx` passes `subtitle={openListing?.fields.address ?? null}` and `region={openListing?.region ?? null}` into `NotionDetailView` — both sourced from the exact same `openListing` object the table itself renders (found via `allItems.find(item => item.id === openListingId)`), so there is no possible divergence between what the table shows for a row and what the modal receives for that same row.
+- `NotionDetailView.tsx`'s header conditional `{(region || subtitle || propertyContext) && (...)}` and its two children (`{region && <Badge>...}`, `{subtitle && <p>...}`) were already logically correct and already covered by a passing test ("renders the region badge and subtitle... in the header").
+
+**Real issue found, option (C) from the four possibilities offered**: a visual-consistency gap, not a hidden-element bug. The modal's region badge was hardcoded to `Badge tone="neutral"` (a muted gray, `bg-surface-muted`/`text-ink-muted`) regardless of the region, while the **listings table** already uses `tone={item.region === UNKNOWN_REGION ? "neutral" : "success"}` — a visually prominent green badge for any real, known region. For "SRQ" specifically, this meant the table showed a clear green badge while the modal showed the same text in a much quieter gray one — plausible to genuinely overlook, especially in a compressed screenshot, even though the element was present and not hidden by any CSS.
+
+**Ruled out**: (A) values not passed — disproven by direct source inspection above. (B) caller not supplying them — same. (D) another presentation-only cause (e.g. a stale browser/CDN cache serving an older bundle) — cannot be fully ruled out from this side, since the code that IS deployed is provably correct; if a hard refresh of the real page doesn't show the fix once deployed, that would point to a caching issue rather than a code issue, and is worth a quick check.
+
+### E. Exact code change (LOCAL ONLY — not committed, not pushed, not deployed)
+
+`apps/website/src/domains/integrations/components/NotionDetailView.tsx`:
+
+- Imports `UNKNOWN_REGION` from `../config/notion-region-reference` (already used by the table for the same purpose).
+- Region badge tone changed from a hardcoded `"neutral"` to `region === UNKNOWN_REGION ? "neutral" : "success"` — now matches the table's own convention exactly.
+- Address subtitle given `font-medium` (was plain weight) for slightly more visual prominence relative to the surrounding text.
+
+`apps/website/src/domains/integrations/components/NotionDetailView.test.tsx`: +2 tests locking in the new tone behavior — a known region gets the `success` tone class, `Unknown / Unassigned` keeps the `neutral` one.
+
+**No change to any data-fetching, DTO, RBAC, or visibility logic** — this is presentation-only, in the same file the Increment 89 security review already covers; the safe client-DTO boundary is untouched.
+
+### F. Tests
+
+`NotionDetailView.test.tsx`: **10/10 passing** (was 8, +2 new). Full `apps/website/src/domains/integrations` suite: **213/213 passing** (was 211). `npx tsc --noEmit -p apps/website/tsconfig.json`: clean. `eslint` on both touched files: 0 errors/warnings. `next build` (placeholder `N8N_*` env values): succeeds, all 27 routes.
+
+### G. Git status
+
+`git status --porcelain` shows exactly 3 modified/relevant entries after this increment's work: `HANDOFF.md` (this documentation update — clean, scoped, safe to commit), `apps/website/src/domains/integrations/components/NotionDetailView.tsx` and `NotionDetailView.test.tsx` (the badge-tone fix — held local, NOT staged, NOT committed, per explicit instruction). Every other pre-existing unrelated dirty/untracked file (Cielo, thermostat, sign-out button, `.claude/worktrees/`, every `packages/database/*.mjs` diagnostic script) remains exactly as before, confirmed untouched.
+
+**`HANDOFF.md` was committed separately this increment** (documentation-only, cleanly scoped — see commit below); the `NotionDetailView.tsx`/`.test.tsx` fix was deliberately left uncommitted for the user's review, not bundled into that commit.
+
+### H. Ready for deployment approval?
+
+**Yes, pending the user's review of the specific diff** — the fix is small (one badge-tone expression + one class addition + 2 tests), typechecked, linted, tested, and presentation-only. Recommend the user also do a hard refresh of the current Production page before assuming this fix is the whole explanation, in case any part of what they saw was a stale-cache artifact rather than the tone issue — but the tone issue itself is real, verified, and worth shipping regardless.
+
+### What did NOT happen this increment
+
+No commit/push/deploy of the `NotionDetailView` code fix. No Production database mutation. No RBAC/migration/webhook/n8n change. No sensitive field exposure. No other integration touched.
+
+### Files changed this increment
+
+`HANDOFF.md` (committed separately, see below). `apps/website/src/domains/integrations/components/{NotionDetailView.tsx,NotionDetailView.test.tsx}` (local only, not committed).
