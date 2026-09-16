@@ -10,7 +10,7 @@ export {
   ConfirmButton,
   type ConfirmButtonProps,
 } from "./components/ConfirmButton";
-export { Dialog, type DialogProps } from "./components/Dialog";
+export { Dialog, type DialogProps, type DialogSize } from "./components/Dialog";
 export {
   DialogTrigger,
   type DialogTriggerProps,

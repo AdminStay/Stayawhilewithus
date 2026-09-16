@@ -146,7 +146,7 @@ export function NotionSearch({
                 {state.results.map((result) => (
                   <li
                     key={result.id}
-                    className="rounded-lg border border-line-subtle p-3"
+                    className="rounded-lg border border-border p-3"
                   >
                     <div className="flex flex-wrap items-center gap-2">
                       <button
@@ -193,9 +193,21 @@ export function NotionSearch({
               open={openResult != null}
               onClose={() => setOpenResult(null)}
               title={openResult?.title ?? ""}
-              fields={
+              region={openResult?.region ?? null}
+              sections={
                 openResult?.snippet
-                  ? [{ label: "Preview", value: openResult.snippet }]
+                  ? [
+                      {
+                        layout: "list",
+                        fields: [
+                          {
+                            key: "snippet",
+                            label: "Preview",
+                            value: openResult.snippet,
+                          },
+                        ],
+                      },
+                    ]
                   : []
               }
               lastEditedTime={openResult?.lastEditedTime ?? null}

@@ -1,4 +1,4 @@
-import { Badge, EmptyState, SectionHeader } from "@stayw/ui";
+import { Badge, Card, EmptyState, SectionHeader } from "@stayw/ui";
 import { Activity } from "lucide-react";
 
 import type { NotionActivityItem } from "../services/notion-activity.service";
@@ -50,6 +50,13 @@ function labelForEventType(eventType: string): string {
  * values), and a Chicago-timezone timestamp via the same formatTimestamp()
  * already used on /thermostats and /locks, to avoid the same
  * server/client hydration mismatch that fix addressed there.
+ *
+ * Wrapped in its own Card so it reads as a distinct operational section
+ * rather than loose text under the listings table — matching every other
+ * bordered/carded section on this page. The empty-state copy is
+ * deliberately explicit that monitoring isn't active yet (webhook
+ * registration is intentionally withheld) — this must never read as "no
+ * activity happened," which would imply monitoring IS running.
  */
 export function NotionRecentActivity({
   items,
@@ -57,45 +64,44 @@ export function NotionRecentActivity({
   items: NotionActivityItem[];
 }) {
   return (
-    <div className="space-y-3">
+    <div>
       <SectionHeader
         title="Recent Notion Activity"
         description="Changes detected on shared Notion content. Values are never shown here — open the item in Notion for details."
         size="lg"
       />
 
-      {items.length === 0 ? (
-        <EmptyState
-          icon={Activity}
-          title="No recent activity"
-          description="Notion change monitoring isn't active in Production yet — this section will populate once it is."
-        />
-      ) : (
-        <ul className="space-y-2">
-          {items.map((item) => (
-            <li
-              key={item.id}
-              className="rounded-lg border border-line-subtle p-3"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium text-ink">
-                  {labelForEventType(item.eventType)}
-                </span>
-                <Badge tone="neutral">{item.entityType}</Badge>
-                {item.changedFieldCount > 0 && (
-                  <Badge tone="neutral">
-                    {item.changedFieldCount} field
-                    {item.changedFieldCount === 1 ? "" : "s"} changed
-                  </Badge>
-                )}
-              </div>
-              <p className="mt-1 text-xs text-ink-faint">
-                {formatTimestamp(item.occurredAt)}
-              </p>
-            </li>
-          ))}
-        </ul>
-      )}
+      <Card noPadding>
+        {items.length === 0 ? (
+          <EmptyState
+            icon={Activity}
+            title="No recent activity"
+            description="Notion change monitoring isn't active in Production yet — this section will populate once it is."
+          />
+        ) : (
+          <ul className="divide-y divide-border">
+            {items.map((item) => (
+              <li key={item.id} className="px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium text-ink">
+                    {labelForEventType(item.eventType)}
+                  </span>
+                  <Badge tone="neutral">{item.entityType}</Badge>
+                  {item.changedFieldCount > 0 && (
+                    <Badge tone="neutral">
+                      {item.changedFieldCount} field
+                      {item.changedFieldCount === 1 ? "" : "s"} changed
+                    </Badge>
+                  )}
+                </div>
+                <p className="mt-1 text-xs text-ink-faint">
+                  {formatTimestamp(item.occurredAt)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
     </div>
   );
 }

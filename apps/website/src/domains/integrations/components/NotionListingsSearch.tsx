@@ -4,7 +4,6 @@ import {
   Badge,
   Button,
   EmptyState,
-  FilterBar,
   Input,
   Select,
   StatusIndicator,
@@ -15,7 +14,7 @@ import {
   TableHeaderCell,
   TableRow,
 } from "@stayw/ui";
-import { Search } from "lucide-react";
+import { ExternalLink, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import {
@@ -26,6 +25,7 @@ import type {
   IntegrationHighlights,
   NotionListingWithVisibility,
 } from "../services/integrations.service";
+import { buildNotionDetailSections } from "../services/notion-detail-sections";
 import { matchesListingQuery } from "../services/notion-listing-match";
 
 import { NotionDetailView } from "./NotionDetailView";
@@ -33,36 +33,95 @@ import { isSafeHttpUrl } from "./notion-link.utils";
 
 const ALL_REGIONS_VALUE = "";
 
+/** The subset of listing fields that are ever a link/contact value (never a number) — narrowed explicitly so ResourceChips never has to guard against a non-string field value. */
+type ResourceFieldKey =
+  | "directBooking"
+  | "airbnbLink"
+  | "vrboLink"
+  | "googleDrivePhotosUrl"
+  | "guidebookUrl";
+
+/** Short label for each "Booking & resources" field, in the fixed display order used both by the table's compact chips and the detail view. */
+const RESOURCE_LINKS: { key: ResourceFieldKey; label: string }[] = [
+  { key: "directBooking", label: "Direct" },
+  { key: "airbnbLink", label: "Airbnb" },
+  { key: "vrboLink", label: "VRBO" },
+  { key: "googleDrivePhotosUrl", label: "Photos" },
+  { key: "guidebookUrl", label: "Guidebook" },
+];
+
 /**
- * Renders `href` as a link only when it's a validated http(s) URL — several
- * source fields (Airbnb Link, VRBO Link, Direct booking) are Notion
- * rich_text, not Notion's validated url type, so their content is never
- * assumed to be a safe link. A non-URL value still renders as plain text
- * (e.g. "Book direct via text message") rather than being hidden.
+ * Compact stand-in for what used to be 5 full URL columns: one small pill
+ * per resource that actually has a value, each showing a short label —
+ * never the raw URL — with the exact original href preserved. A non-URL
+ * value (e.g. free-text Direct Booking instructions) renders as a small
+ * muted label instead of a link, with the full text still available via the
+ * native `title` tooltip and, unabridged, in the detail view. Real anchors,
+ * never nested inside another clickable control.
  */
-function SafeLink({ href, label }: { href: string | null; label: string }) {
-  if (!href) return <span className="text-ink-faint">—</span>;
-  if (!isSafeHttpUrl(href))
-    return <span className="text-ink-muted">{href}</span>;
+function ResourceChips({
+  fields,
+}: {
+  fields: NotionListingWithVisibility["fields"];
+}) {
+  const entries = RESOURCE_LINKS.map(({ key, label }) => ({
+    key,
+    label,
+    value: fields[key] ?? null,
+  })).filter((entry) => entry.value);
+
+  if (entries.length === 0) {
+    return <span className="text-xs text-ink-faint">—</span>;
+  }
+
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-forest-600 underline underline-offset-2 hover:text-forest-700"
-    >
-      {label}
-    </a>
+    <div className="flex flex-wrap items-center gap-1.5">
+      {entries.map(({ key, label, value }) =>
+        isSafeHttpUrl(value) ? (
+          <a
+            key={key}
+            href={value ?? undefined}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`${label} — opens in a new tab`}
+            className="inline-flex items-center gap-0.5 rounded-pill border border-border bg-surface px-2 py-0.5 text-xs font-medium text-forest-600 transition-colors hover:border-forest-300 hover:bg-forest-50 focus:outline-none focus:ring-2 focus:ring-forest-500/30"
+          >
+            {label}
+            <ExternalLink className="h-2.5 w-2.5" />
+          </a>
+        ) : (
+          <span
+            key={key}
+            title={value ?? undefined}
+            className="max-w-[6rem] truncate rounded-pill bg-surface-muted px-2 py-0.5 text-xs text-ink-muted"
+          >
+            {label}
+          </span>
+        ),
+      )}
+    </div>
   );
 }
 
 /**
  * Purely presentational, strictly read-only — no forms or actions that
  * write anything to Notion or to StayWhile's database. Receives the
- * already-fetched, already-mapped listing set (never a raw Notion property
- * object) and does all name/keyword/region filtering client-side, since the
- * full set is small and region has no server-side equivalent to filter by
- * (there is no Region property in Notion — see notion-region-matching.ts).
+ * already-fetched, already-visibility-filtered listing set (see
+ * buildNotionListingClientDto() — never a raw Notion property object) and
+ * does all name/keyword/region filtering client-side, since the full set is
+ * small and region has no server-side equivalent to filter by (there is no
+ * Region property in Notion — see notion-region-matching.ts).
+ *
+ * Table columns are deliberately consolidated (Property/Region/Address/
+ * Capacity/Resources — 5, not the original 11: bedrooms/bathrooms/guests
+ * are combined into one compact "Capacity" column, and the 5 link fields
+ * become a single row of small chips) so operating this page never
+ * requires horizontally scrolling the dashboard on ordinary widths; the
+ * full field set remains one click away in the detail view, which itself
+ * never scrolls horizontally either (see NotionDetailView / @stayw/ui's
+ * Dialog). @stayw/ui's Table still wraps in its own `overflow-x-auto` as a
+ * safety net for genuinely narrow viewports — that's a contained,
+ * last-resort scroll on the table itself, never the page.
  */
 export function NotionListingsSearch({
   listings,
@@ -130,6 +189,10 @@ export function NotionListingsSearch({
     );
   }
 
+  const openListing = openListingId
+    ? allItems.find((item) => item.id === openListingId)
+    : null;
+
   return (
     <div className="space-y-4">
       <div className="space-y-2">
@@ -140,39 +203,52 @@ export function NotionListingsSearch({
         />
       </div>
 
-      <FilterBar>
-        <Input
-          placeholder="Search by name…"
-          value={nameQuery}
-          onChange={(e) => setNameQuery(e.target.value)}
-          aria-label="Search by property name"
-          className="max-w-xs"
-        />
-        <Input
-          placeholder="Keyword search…"
-          value={keywordQuery}
-          onChange={(e) => setKeywordQuery(e.target.value)}
-          aria-label="Keyword search"
-          className="max-w-xs"
-        />
-        <Select
-          value={region}
-          onChange={(e) => setRegion(e.target.value)}
-          aria-label="Filter by region"
-          className="max-w-xs"
-        >
-          <option value={ALL_REGIONS_VALUE}>All regions</option>
-          {NOTION_REGIONS.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-          <option value={UNKNOWN_REGION}>{UNKNOWN_REGION}</option>
-        </Select>
+      <div className="grid grid-cols-1 gap-3 rounded-card border border-border bg-surface p-4 sm:grid-cols-[1fr_1fr_auto_auto] sm:items-end">
+        <label className="block">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-ink-muted">
+            Property name
+          </span>
+          <Input
+            placeholder="Search by name…"
+            value={nameQuery}
+            onChange={(e) => setNameQuery(e.target.value)}
+            aria-label="Search by property name"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-ink-muted">
+            Keyword
+          </span>
+          <Input
+            placeholder="Address, booking note…"
+            value={keywordQuery}
+            onChange={(e) => setKeywordQuery(e.target.value)}
+            aria-label="Keyword search"
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-ink-muted">
+            Region
+          </span>
+          <Select
+            value={region}
+            onChange={(e) => setRegion(e.target.value)}
+            aria-label="Filter by region"
+            className="sm:w-40"
+          >
+            <option value={ALL_REGIONS_VALUE}>All regions</option>
+            {NOTION_REGIONS.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+            <option value={UNKNOWN_REGION}>{UNKNOWN_REGION}</option>
+          </Select>
+        </label>
         <Button type="button" variant="secondary" onClick={handleReset}>
           Reset
         </Button>
-      </FilterBar>
+      </div>
 
       <p className="text-sm text-ink-muted">
         {filtered.length} of {allItems.length} listings
@@ -187,26 +263,20 @@ export function NotionListingsSearch({
       ) : (
         <Table>
           <TableHead>
-            <TableHeaderCell>Name</TableHeaderCell>
+            <TableHeaderCell>Property</TableHeaderCell>
             <TableHeaderCell>Region</TableHeaderCell>
             <TableHeaderCell>Address</TableHeaderCell>
-            <TableHeaderCell>Bedrooms</TableHeaderCell>
-            <TableHeaderCell>Bathrooms</TableHeaderCell>
-            <TableHeaderCell>Guests</TableHeaderCell>
-            <TableHeaderCell>Direct booking</TableHeaderCell>
-            <TableHeaderCell>Airbnb</TableHeaderCell>
-            <TableHeaderCell>VRBO</TableHeaderCell>
-            <TableHeaderCell>Photos</TableHeaderCell>
-            <TableHeaderCell>Guidebook</TableHeaderCell>
+            <TableHeaderCell>Capacity</TableHeaderCell>
+            <TableHeaderCell>Resources</TableHeaderCell>
           </TableHead>
           <TableBody>
             {filtered.map((item) => (
               <TableRow key={item.id}>
-                <TableCell className="font-medium text-ink">
+                <TableCell className="max-w-[14rem] font-medium text-ink">
                   <button
                     type="button"
                     onClick={() => setOpenListingId(item.id)}
-                    className="text-left underline-offset-2 hover:underline"
+                    className="truncate text-left underline-offset-2 hover:underline focus:outline-none focus:ring-2 focus:ring-forest-500/30 focus:ring-offset-1"
                   >
                     {item.fields.name ?? "—"}
                   </button>
@@ -220,44 +290,16 @@ export function NotionListingsSearch({
                     {item.region}
                   </Badge>
                 </TableCell>
-                <TableCell className="text-ink-muted">
+                <TableCell className="max-w-[16rem] truncate text-ink-muted">
                   {item.fields.address ?? "—"}
                 </TableCell>
-                <TableCell className="text-ink-muted">
-                  {item.fields.bedrooms ?? "—"}
-                </TableCell>
-                <TableCell className="text-ink-muted">
-                  {item.fields.bathrooms ?? "—"}
-                </TableCell>
-                <TableCell className="text-ink-muted">
-                  {item.fields.guests ?? "—"}
+                <TableCell className="whitespace-nowrap text-ink-muted">
+                  {item.fields.bedrooms ?? "—"} bd ·{" "}
+                  {item.fields.bathrooms ?? "—"} ba ·{" "}
+                  {item.fields.guests ?? "—"} guests
                 </TableCell>
                 <TableCell>
-                  <SafeLink
-                    href={item.fields.directBooking ?? null}
-                    label="Book"
-                  />
-                </TableCell>
-                <TableCell>
-                  <SafeLink
-                    href={item.fields.airbnbLink ?? null}
-                    label="Airbnb"
-                  />
-                </TableCell>
-                <TableCell>
-                  <SafeLink href={item.fields.vrboLink ?? null} label="VRBO" />
-                </TableCell>
-                <TableCell>
-                  <SafeLink
-                    href={item.fields.googleDrivePhotosUrl ?? null}
-                    label="Photos"
-                  />
-                </TableCell>
-                <TableCell>
-                  <SafeLink
-                    href={item.fields.guidebookUrl ?? null}
-                    label="Guidebook"
-                  />
+                  <ResourceChips fields={item.fields} />
                 </TableCell>
               </TableRow>
             ))}
@@ -265,27 +307,21 @@ export function NotionListingsSearch({
         </Table>
       )}
 
-      {(() => {
-        const openListing = openListingId
-          ? allItems.find((item) => item.id === openListingId)
-          : null;
-        return (
-          <NotionDetailView
-            open={openListing != null}
-            onClose={() => setOpenListingId(null)}
-            title={openListing?.fields.name ?? ""}
-            fields={
-              openListing?.visibleFields.map((f) => ({
-                label: f.label,
-                value: f.value,
-              })) ?? []
-            }
-            lastEditedTime={openListing?.lastEditedTime ?? null}
-            notionUrl={openListing?.url ?? null}
-            propertyContext={openListing?.propertyContext ?? null}
-          />
-        );
-      })()}
+      <NotionDetailView
+        open={openListing != null}
+        onClose={() => setOpenListingId(null)}
+        title={openListing?.fields.name ?? ""}
+        subtitle={openListing?.fields.address ?? null}
+        region={openListing?.region ?? null}
+        sections={
+          openListing
+            ? buildNotionDetailSections(openListing.visibleFields)
+            : []
+        }
+        lastEditedTime={openListing?.lastEditedTime ?? null}
+        notionUrl={openListing?.url ?? null}
+        propertyContext={openListing?.propertyContext ?? null}
+      />
     </div>
   );
 }

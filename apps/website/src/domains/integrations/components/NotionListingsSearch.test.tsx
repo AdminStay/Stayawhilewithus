@@ -252,7 +252,7 @@ describe("NotionListingsSearch", () => {
     expect(screen.getByText("No listings match your filters")).toBeTruthy();
   });
 
-  it("renders a valid URL as a link with target=_blank and rel=noopener noreferrer", () => {
+  it("renders a valid URL as a short 'Airbnb' resource chip link (never the raw URL text) with target=_blank and rel=noopener noreferrer", () => {
     render(
       <NotionListingsSearch
         listings={highlights([
@@ -266,9 +266,11 @@ describe("NotionListingsSearch", () => {
     expect(link.getAttribute("href")).toBe("https://airbnb.com/rooms/123");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+    // The raw URL itself is never rendered as visible text anywhere in the row.
+    expect(screen.queryByText("https://airbnb.com/rooms/123")).toBeNull();
   });
 
-  it("renders a non-URL value as plain text, never as a link", () => {
+  it("renders a non-URL value as a short, non-link label — never a link, and never the raw URL of an unrelated field", () => {
     render(
       <NotionListingsSearch
         listings={highlights([
@@ -277,8 +279,13 @@ describe("NotionListingsSearch", () => {
       />,
     );
 
-    expect(screen.getByText("Call the owner at 555-0100")).toBeTruthy();
-    expect(screen.queryByText("Book")).toBeNull();
+    // Compact by design: the resources column shows a short "Direct" label
+    // (full text still reachable via its title tooltip and the detail
+    // view), not the raw instruction text inline in the table.
+    const chip = screen.getByText("Direct");
+    expect(chip.tagName).not.toBe("A");
+    expect(chip.getAttribute("title")).toBe("Call the owner at 555-0100");
+    expect(screen.queryByRole("link", { name: "Direct" })).toBeNull();
   });
 
   it("shows the not-connected message when Notion isn't configured", () => {

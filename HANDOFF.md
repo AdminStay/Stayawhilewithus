@@ -47,20 +47,33 @@
 
 - [x] Production authentication/connection — PRODUCTION VERIFIED (Increment 84)
 - [x] Property Listings read access — PRODUCTION VERIFIED (Increment 84)
-- [x] 35/35 listing visibility — confirmed live (Increment 84)
+- [x] 35/35 listing visibility — PRODUCTION VERIFIED (Increment 84); re-confirmed live post-deploy by the user's own manual click-through (Increment 90, see below) — the DTO refactor between those two checks changed no user-visible behavior
 - [x] Dashboard/general keyword search — PRODUCTION VERIFIED (Increment 84)
 - [x] Positive-control search verification — "Moonlit Cove" search returned exactly 1 correct result (Increment 84)
 - [x] Existing intentional database exclusions (e.g. staff/contact-directory content, Increment 75) — preserved, not affected by anything below
+- [x] **Notion database migration (`notion_page_events`) — APPLIED TO PRODUCTION, DB-VERIFIED (Increment 90).** Table + all 4 indexes confirmed present via direct read-only query; 0 rows (expected, no traffic yet); baseline facts (38 properties/0 demo/43 August locks) confirmed unchanged before and after.
+- [x] **Notion RBAC bootstrap — APPLIED TO PRODUCTION, DB-VERIFIED (Increment 90).** `admin` holds all 5 `notion:*` permissions, `ops_manager` holds `notion:read` only, `cleaner`/`front_desk`/`maintenance_tech`/`read_only` confirmed to hold **none** — verified by direct query after running.
+- [x] **Notion read-only foundation code — COMMITTED, PUSHED, DEPLOYED (Increment 90).** Commit `1c436f9e36232e689cbbb57491e8ce50b8c1cf57` on `main`. Deployment **functionally confirmed** (the new `/api/webhooks/notion` route responds exactly as coded — `503 not_configured` — proving the new build is live); **exact git-SHA-to-deployment correlation is explicitly unverified**, not assumed, since verifying it would have required an authenticated `gh`/`vercel` call this session deliberately avoided (see Increment 90's cross-client `gh` identity incident).
+- [x] **Authenticated `/notion` page loads with Connected status — USER-CONFIRMED PRODUCTION VERIFIED (2026-09-16, post-Increment-90).**
+- [x] **35-listing baseline (live re-check, post-deploy) — USER-CONFIRMED PRODUCTION VERIFIED.**
+- [x] **Property Listings → in-dashboard detail view — USER-CONFIRMED PRODUCTION VERIFIED.**
+- [x] **Keyword Search → "Moonlit Cove" positive control — USER-CONFIRMED PRODUCTION VERIFIED.**
+- [x] **Keyword Search → in-dashboard detail view — USER-CONFIRMED PRODUCTION VERIFIED.**
+- [x] **No Edit/Save/Delete/Archive controls visible anywhere in the rendered page — USER-CONFIRMED PRODUCTION VERIFIED.**
+- [x] **No unapproved/sensitive operational fields visible — USER-CONFIRMED PRODUCTION VERIFIED.** (Consistent with there being none modeled in code at all yet.)
+- [x] **Recent Notion Activity component renders in Production — USER-CONFIRMED PRODUCTION VERIFIED.** Precisely: the _component_ renders correctly. **Not claimed**: real Notion event ingestion — webhook registration remains disabled and there is no live event traffic, so the section is correctly showing its empty state, not "working" in the monitoring sense.
 
-**BUILT & TESTED LOCALLY — NOT YET COMMITTED / PUSHED / DEPLOYED (Increment 87, 2026-09-16; audited/extended Increment 88; client-payload security boundary hardened Increment 89 — all still local-only, 2026-09-16):**
-Implemented continuously per explicit client direction to keep building all Notion work that doesn't require a Kenny/Michelle business decision or a Production/external-system mutation. All of it is local-only: no commit, no push, no Production Notion write, no Production DB mutation, no n8n workflow activation, no external webhook/subscription created. Verified via `npx tsc --noEmit` (clean across `apps/website`, `packages/integrations`, `packages/auth`, `packages/database`), `eslint` (0 errors on every touched file — a handful of pre-existing, unrelated `import/order` warnings remain in files this work didn't restructure, same pattern as every prior increment), the full `apps/website/src/domains/integrations` suite (**196/196 passing**, up from 166 at Increment 87 — Increment 88 added `fieldValueSchemaFor`/edit-conflict/webhook-dedupe-race coverage, Increment 89 added the client-DTO fail-closed-by-construction regression suite), `packages/integrations/src/notion` (46/46 passing), `packages/auth` (21/21 passing), the full `apps/website` suite (**900/903 passing** — the same 3 pre-existing, unrelated failures as every prior pass, in an untouched `OwnerRezConfirmLinkPanel` component test), and a full `next build` (all routes, including `/notion` and the new `/api/webhooks/notion`, compile — the one build failure hit is the same pre-existing, unrelated local `.env.local` n8n webhook misconfiguration documented since Increment 87, confirmed unrelated by rebuilding with placeholder n8n env values only). See "Increment 89" at the bottom of this file for the client-payload security fix; "Increment 88" for the completion audit.
+**UI/UX polish pass (Increment 91, 2026-09-16) — local only, not yet deployed**: during the manual verification above, real usability problems were found in the shipped detail modal/table (horizontal scroll from raw URLs, no visual hierarchy, 11-column table). Fixed locally — see "Increment 91" at the bottom of this file. **Not yet committed/pushed/deployed** — this session's redesign is a separate, later local change on top of the already-deployed Increment 90 code; the Production UI still reflects Increment 90's original (functional but unpolished) layout until Increment 91 is approved and shipped.
+
+**BUILT (Increment 87), AUDITED/EXTENDED (Increment 88), SECURITY-HARDENED (Increment 89), then COMMITTED/PUSHED/DEPLOYED + DB-migrated + RBAC-bootstrapped IN PRODUCTION (Increment 90), and manually USER-CONFIRMED PRODUCTION VERIFIED (2026-09-16) — read-only foundation only, editing/webhook-registration/n8n/Slack still explicitly withheld:**
+Implemented continuously per explicit client direction to keep building all Notion work that doesn't require a Kenny/Michelle business decision or a Production/external-system mutation. **Historical note, describes Increments 87–89 only, no longer the current state**: at that point everything was local-only (no commit, no push, no Production Notion write, no Production DB mutation, no n8n workflow activation, no external webhook/subscription created) — see Increment 90 below for the actual commit/push/deploy/migration/RBAC-bootstrap, and the "USER-CONFIRMED PRODUCTION VERIFIED" items above for the client's own manual click-through. Verified via `npx tsc --noEmit` (clean across `apps/website`, `packages/integrations`, `packages/auth`, `packages/database`), `eslint` (0 errors on every touched file — a handful of pre-existing, unrelated `import/order` warnings remain in files this work didn't restructure, same pattern as every prior increment), the full `apps/website/src/domains/integrations` suite (**196/196 passing**, up from 166 at Increment 87 — Increment 88 added `fieldValueSchemaFor`/edit-conflict/webhook-dedupe-race coverage, Increment 89 added the client-DTO fail-closed-by-construction regression suite), `packages/integrations/src/notion` (46/46 passing), `packages/auth` (21/21 passing), the full `apps/website` suite (**900/903 passing** — the same 3 pre-existing, unrelated failures as every prior pass, in an untouched `OwnerRezConfirmLinkPanel` component test), and a full `next build` (all routes, including `/notion` and the new `/api/webhooks/notion`, compile — the one build failure hit is the same pre-existing, unrelated local `.env.local` n8n webhook misconfiguration documented since Increment 87, confirmed unrelated by rebuilding with placeholder n8n env values only). See "Increment 89" at the bottom of this file for the client-payload security fix; "Increment 88" for the completion audit.
 
 - In-dashboard read-only detail view for both Property Listings and general Search results (`NotionDetailView.tsx`, reused across `NotionListingsSearch.tsx`/`NotionSearch.tsx`) — click a result to view its fields inside StayWhile; "Open in Notion" kept only as a secondary link; no raw Notion IDs/JSON ever reach the UI.
 - Two-tier security model, exactly as required: a **visibility allowlist** (`notion-field-visibility.ts`) gating which fields are shown at all (today: the 10 existing, already-verified listing fields, all tagged `standard`; the mechanism supports adding `sensitive` fields — e.g. Michelle's lockbox/router/service-provider info — later without a redesign) and a separate, independent **edit allowlist** (`notion-edit-allowlist.ts`) gating which fields can be changed (today: intentionally **empty**).
 - New dedicated `notion` RBAC resource (`read` / `update` / `manage`), following this codebase's own existing precedent of splitting a narrow write capability from a broader read one. Only `notion:read` granted to `ops_manager` today (matches current reach); `notion:update` and `notion:manage` are deliberately granted to no role.
 - Dashboard-edit foundation, fail-closed by two independent layers: (1) the edit allowlist is empty, so every edit request resolves `not_editable` before any Notion call; (2) `NotionClient.updatePageProperty()` itself is a deliberate `NotImplementedError` stub, not a real write. Field-type Zod validation (`notion-edit.schema.ts`) and stale-data/conflict-check logic (compare loaded `last_edited_time` vs. Notion's live value) are both implemented and tested, but unreachable in practice today since the allowlist is empty.
 - Property-association read path (`getConfirmedNotionPropertyAssociations()`), using the existing, previously-unpopulated `Property.notionPageId` field — correctly returns an empty map today (no property has been linked yet); population is a separate, not-yet-built admin action, out of scope for this pass.
-- **Change/delete monitoring — full local pipeline, not just architecture.** New `NotionPageEvent` table (local dev DB only, migration `20260915211143_add_notion_page_event`) storing only entity id/type, Notion's own event type, a changed-FIELD-COUNT-safe list of property/block ids (never values), and timestamps. `notion-webhook-signature.ts` (HMAC-SHA256, constant-time compare, confirmed live against Notion's real docs), `notion-webhook-event.schema.ts` (full event-type enum + payload shape, confirmed live against `developers.notion.com/reference/webhooks-events-delivery`), `notion-webhook-classify.ts` (pure classification + reuses the existing staff/contact-directory exclusion so those changes never surface here either), `notion-webhook-event.service.ts` (orchestration: verify → parse → classify → exclude → dedupe by Notion's event id → store; fails closed with `not_configured` whenever `NOTION_WEBHOOK_VERIFICATION_TOKEN` isn't set, which it never is today), and a new route `app/api/webhooks/notion/route.ts` handling both the one-time verification handshake and real signed events. **⚠️ NOT registered with Notion** — creating a real subscription requires a public HTTPS URL and completing Notion's handshake, a genuine external-system action explicitly held for separate approval; the route is unreachable from the internet today.
+- **Change/delete monitoring — full pipeline, not just architecture.** `NotionPageEvent` table (migration `20260915211143_add_notion_page_event`, **now applied to both local dev and Production**, Increment 90) storing only entity id/type, Notion's own event type, a changed-FIELD-COUNT-safe list of property/block ids (never values), and timestamps. `notion-webhook-signature.ts` (HMAC-SHA256, constant-time compare, confirmed live against Notion's real docs), `notion-webhook-event.schema.ts` (full event-type enum + payload shape, confirmed live against `developers.notion.com/reference/webhooks-events-delivery`), `notion-webhook-classify.ts` (pure classification + reuses the existing staff/contact-directory exclusion so those changes never surface here either), `notion-webhook-event.service.ts` (orchestration: verify → parse → classify → exclude → dedupe by Notion's event id → store; fails closed with `not_configured` whenever `NOTION_WEBHOOK_VERIFICATION_TOKEN` isn't set, which it never is today), and a new route `app/api/webhooks/notion/route.ts` handling both the one-time verification handshake and real signed events. **Current state (Increment 90): the route IS deployed and publicly reachable** (`https://stayawhilewithus-website.vercel.app/api/webhooks/notion`, confirmed live — `POST` returns `503 {"error":"Not configured"}`, `GET` returns `405`) — it fails closed as `not_configured` because `NOTION_WEBHOOK_VERIFICATION_TOKEN` is not set. **⚠️ NOT registered with Notion** — no real subscription exists; creating one requires completing Notion's one-time verification handshake against this now-reachable URL, a genuine external-system action explicitly held for separate approval. Until that handshake happens and the token is set, legitimate Notion webhook processing / live change monitoring is NOT active, regardless of the route itself being live.
 - **Recent Notion Activity — built.** `notion-activity.service.ts#listRecentNotionActivity()` (gated by `notion:read`) + `NotionRecentActivity.tsx`, wired into `/notion` below the existing sections. Reads only from `NotionPageEvent`, so it correctly shows an empty state until the webhook pipeline above is ever actually connected to Notion.
 - **Pre-existing, unrelated infra note found and worked around, not fixed**: the local dev Postgres has schema drift from an unmerged branch in a separate git worktree (`worktree-ownerrez-property-sync`, two extra columns on `properties` from a migration that was never merged to `main`). `prisma migrate dev` refused to proceed without a destructive reset; used `prisma db push` + a hand-written, correctly-recorded migration file for `notion_page_events` instead, which touches nothing from that other branch. Flagging so a future increment doesn't mistake this for something today's Notion work caused.
 
@@ -68,7 +81,7 @@ Implemented continuously per explicit client direction to keep building all Noti
 
 - **Test-coverage gap closed**: `updateNotionField()`'s conflict/validation/provider-error/success branches were unreachable by any existing test (the allowlist is empty, so every test short-circuited at `not_editable`). Added `notion-edit.schema.test.ts` (9 tests, direct `fieldValueSchemaFor` coverage) and extended `notion-edit.service.test.ts` (+6 tests) using a mocked, per-test-overridden `findEditAllowlistEntry` to simulate an approved field — the real, still-empty `notion-edit-allowlist.ts` is untouched. Proves, before any field is ever approved: the stale-data conflict check works, a Notion read failure returns `provider_error` not a crash, an invalid value is rejected before any Notion call, and — most importantly — a real call into `NotionClient.updatePageProperty()`'s `NotImplementedError` stub is safely caught and returned as `provider_error`, never an unhandled exception, even if the allowlist were ever mistakenly populated.
 - **Real (minor) race condition found and fixed**: `processNotionWebhookEvent()`'s dedupe was `findUnique` then `create` — not atomic. Two concurrent deliveries of the same Notion event (a real possibility; Notion retries on anything but a fast 2xx) could both pass the existence check before either commits, so the loser would throw an uncaught Prisma `P2002` unique-constraint error (500) instead of a clean `duplicate` response. Fixed by catching `P2002` (via this codebase's existing, already-tested `isUniqueConstraintViolation()` helper, reused from `ownerrez-link.service.ts` rather than duplicated) and returning `{ status: "duplicate" }`; a genuine non-constraint DB error still re-throws. 2 new tests added.
-- **New, not-yet-run script**: `packages/database/scripts/grant-notion-permissions.ts` — a narrow, idempotent Production-permission-catalog bootstrap, upserting only the 5 `notion:*` Permission rows and granting `notion:read` to `ops_manager` (+ all 5 to `admin`), mirroring `seed.ts`'s own upsert logic exactly. Written because re-running the **full** `seed.ts` against Production would silently reintroduce `DEMO-001`/`DEMO-002` and other demo rows that were deliberately excluded at cutover (Increment 23) — `seed.ts`'s `main()` unconditionally seeds those. Typechecked and **executed successfully against the local dev DB only** (twice, confirming idempotency) — never run against Production. See "Production approval package" in Increment 88 below for exactly when/how to run it for real.
+- **Script**: `packages/database/scripts/grant-notion-permissions.ts` — a narrow, idempotent Production-permission-catalog bootstrap, upserting only the 5 `notion:*` Permission rows and granting `notion:read` to `ops_manager` (+ all 5 to `admin`), mirroring `seed.ts`'s own upsert logic exactly. Written because re-running the **full** `seed.ts` against Production would silently reintroduce `DEMO-001`/`DEMO-002` and other demo rows that were deliberately excluded at cutover (Increment 23) — `seed.ts`'s `main()` unconditionally seeds those. Tested against local dev DB twice (Increment 88, confirming idempotency), then **run for real against Production (Increment 90)** — see Increment 90 for the exact resulting grants, independently re-verified by query.
 - **Forward-looking design note, flagged Increment 88, FIXED Increment 89**: `NotionListingWithVisibility` used to be `NotionListingWithRegion & { visibleFields, propertyContext }` — an intersection, not a replacement, so the full underlying record reached the client component tree alongside the filtered `visibleFields` array. Client-payload boundary hardened to be fail-closed **by construction**, not by coincidence of today's all-standard field set — see "Increment 89" below for the full fix.
 - **Verified, not just re-asserted, via direct code/schema inspection**: the webhook exclusion filter (`isNotionWebhookEventExcluded`) reuses the exact same `NOTION_SEARCH_EXCLUDED_DATABASE_IDS` the search feature uses — a staff/contact-directory change can't surface in Recent Notion Activity either. `getConfirmedNotionPropertyAssociations()` reads only `Property.notionPageId` directly from the database — no fuzzy/inferred matching exists anywhere in this path. `NotionRecentActivity.tsx` never renders `entityId` (only event-type label, entity type, changed-field count, timestamp) — and since it's a Server Component (no `"use client"`), that field never reaches the client bundle at all, not just "isn't shown." Search result snippets are either `listing.address` (an already-approved standard field) or `null` for general search results — `/search` never returns page/block body content, confirmed both in Notion's own docs and in this codebase's own code path.
 - **Real, still-open gap re-confirmed, unchanged since Increment 75**: `cleaner`/`maintenance_tech`/`front_desk` still hold no `integrations:read` or `notion:read` — none of today's seeded non-admin, non-ops_manager roles can reach `/notion` at all. Which real role StayWhile's VAs actually sign in as has still never been confirmed. This blocks the client's own stated end goal (ops team using Notion from inside StayWhile) regardless of anything else in this section being finished — flagged again as a required Kenny/Michelle question, not something Claude can infer or default.
@@ -85,16 +98,16 @@ Implemented continuously per explicit client direction to keep building all Noti
 - [ ] Create appropriate alerting — not started; depends on the "Slack alert destination" business decision below
 - [ ] Determine the safest supported architecture using StayWhile's own n8n instance — the receiving pipeline is built app-side; whether/how n8n participates (vs. the Next.js route handling it directly, as built) is still open
 - [x] Verified whether this requires polling/diffing or another officially supported mechanism — **webhooks are officially supported** (`page.created` / `content_updated` / `properties_updated` / `moved` / `deleted` / `undeleted` / `locked` / `unlocked`, plus `database.*`/`data_source.*`/`comment.*` equivalents; requires a public SSL webhook URL, a one-time `verification_token` handshake, and `X-Notion-Signature` HMAC-SHA256 validation on every payload — full payload shape re-confirmed live 2026-09-16 against `developers.notion.com/reference/webhooks-events-delivery`)
-- **Status: architecture/design = DONE.** **Status: local implementation = BUILT & TESTED, not yet reachable.** No real subscription has been created — that requires a public HTTPS URL and completing Notion's handshake, a genuine external-system action explicitly held for separate approval.
+- **Status: architecture/design = DONE.** **Status: implementation = BUILT, TESTED, and DEPLOYED to Production (Increment 90)** — the migration is applied and the route is live (functionally confirmed via its deterministic `not_configured` response), but still unreachable from Notion itself. No real subscription has been created — that requires a public HTTPS URL and completing Notion's handshake, a genuine external-system action explicitly held for separate approval.
 
 **2. In-dashboard Notion view/edit**
 Third-meeting requirement: approved Notion information should eventually be viewable/editable directly inside the StayWhile dashboard, with approved changes written back to Notion in the background. "Open in Notion" may remain as an optional fallback, but is not the intended primary workflow.
 Safety requirements for any eventual implementation: explicit allowlist of editable fields/actions, dedicated RBAC, server-side validation, audit logging, clear save success/failure feedback, stale-data/conflict protection, no delete/archive capability unless separately approved.
 
-- [x] Read-only in-dashboard detail view — **built & tested locally (Increment 87)**, not yet deployed
-- [x] Two-tier visibility/RBAC security (standard vs. sensitive fields, dedicated `notion` RBAC resource) — **built & tested locally (Increment 87)**, not yet deployed
-- [x] Fail-closed editing foundation (empty allowlist + `NotImplementedError` write stub, validation, conflict-check logic) — **built & tested locally (Increment 87)**, not yet deployed
-- **Status: architecture/design = ACTIONABLE NOW — substantially implemented and tested locally, see the Increment 87 bucket above.**
+- [x] Read-only in-dashboard detail view — **built, tested, DEPLOYED, and USER-CONFIRMED PRODUCTION VERIFIED (Increment 90)** — both the Property Listings → detail and Search → detail flows
+- [x] Two-tier visibility/RBAC security (standard vs. sensitive fields, dedicated `notion` RBAC resource) — RBAC grants DB-verified, and no unapproved/sensitive field visible in the real rendered page — **USER-CONFIRMED PRODUCTION VERIFIED (Increment 90)**
+- [x] Fail-closed editing foundation (empty allowlist + `NotImplementedError` write stub, validation, conflict-check logic) — **built, tested, DEPLOYED (Increment 90)**; correctly still unreachable — allowlist remains empty in Production; no Edit/Save/Delete/Archive control visible — **USER-CONFIRMED PRODUCTION VERIFIED (Increment 90)**
+- **Status: architecture/design = DEPLOYED and PRODUCTION-VERIFIED as a read-only foundation (Increment 90). Full editing capability is NOT complete** — see below.
 - **Status: unrestricted editing = NOT APPROVED.**
 - **Status: final editable-field implementation = WAITING FOR BUSINESS CONFIRMATION** — Kenny/Michelle have not yet confirmed exactly which Notion fields/actions should be editable (Increment 75, 84). The edit allowlist stays empty (fail-closed) until that decision is made.
 
@@ -107,22 +120,32 @@ Safety requirements for any eventual implementation: explicit allowlist of edita
 
 **Notion requirement tracking (exact status, do not mark "complete" merely because search works):**
 
+**Status as of Increment 90 + user manual Production verification (2026-09-16) — read-only foundation deployed, DB-migrated, RBAC-bootstrapped, and click-tested live in Production by the client. The READ-ONLY FOUNDATION is Production-verified. The FULL NOTION REQUIREMENT IS NOT COMPLETE — do not read the items below as "Notion is done":**
+
 ```
-[x] Production connection
-[x] Property Listings
-[x] Search
-[x] In-dashboard detail viewing        — built & tested locally, not yet deployed (Increment 87)
-[~] Operational-information display    — architecture supports it; no sensitive field added yet (Michelle's lockbox/router/service-provider info still needs Kenny/Michelle approval)
-[x] visibility/RBAC security           — built & tested locally, not yet deployed (Increment 87)
-[x] editing foundation                 — built & tested locally, not yet deployed (Increment 87); fail-closed by design
-[?] actual editable-field allowlist    — WAITING FOR BUSINESS CONFIRMATION (unchanged)
-[~] change/delete monitoring           — full local pipeline built & tested (Increment 87); NOT registered with Notion, no real traffic possible yet
-[x] Recent Notion Activity             — built & tested locally, not yet deployed (Increment 87); correctly empty until monitoring is ever connected
-[?] Slack alert destination            — open decision, unchanged
-[x] n8n architecture question          — RESOLVED (Increment 88): no n8n role in inbound webhook processing, ever; n8n's only possible role is pure Slack fan-out on already-validated data, if/when Slack alerting is approved
-[ ] Production end-to-end verification — not started, blocked on commit/deploy approval
-[?] VA/ops-team role access to /notion — still unconfirmed which real seeded role StayWhile's VAs use; none of cleaner/maintenance_tech/front_desk can reach /notion today (unchanged since Increment 75)
+[x] Production connection                — PRODUCTION VERIFIED (Increment 84)
+[x] Property Listings                    — PRODUCTION VERIFIED (Increment 84 + re-confirmed live, Increment 90)
+[x] Search                               — PRODUCTION VERIFIED (Increment 84 + re-confirmed live, Increment 90)
+[x] In-dashboard detail viewing          — USER-CONFIRMED PRODUCTION VERIFIED (Increment 90) — Listing→detail and Search→detail both confirmed
+[?] Additional Notion visible fields     — none beyond the 10 already-live standard fields; OPEN, waiting Kenny/Michelle
+[?] Sensitive-field visibility by role   — mechanism deployed (fail-closed by construction, Increment 89), zero sensitive fields modeled; confirmed none visible in Production; OPEN, waiting Kenny/Michelle (lockbox/router/service-provider)
+[x] Visibility/RBAC security             — RBAC grants DB-verified (Increment 90: admin all 5, ops_manager read-only, no VA role granted anything) AND no unapproved field visible in the real rendered page — USER-CONFIRMED PRODUCTION VERIFIED
+[ ] Real Notion write path               — NOT IMPLEMENTED; NotionClient.updatePageProperty() remains a deliberate NotImplementedError stub
+[ ] Edit allowlist                       — deliberately EMPTY; not populated, not approved to populate; confirmed no Edit/Save/Delete/Archive control visible in Production — USER-CONFIRMED PRODUCTION VERIFIED
+[?] Editable fields                      — OPEN, waiting Kenny/Michelle
+[?] Roles allowed to edit                — OPEN, waiting Kenny/Michelle
+[?] Confirmation-before-save             — OPEN, waiting Kenny/Michelle
+[ ] Webhook registration / live monitoring — pipeline DEPLOYED and publicly reachable (Increment 90) but NOT registered with Notion; no real traffic possible; explicitly withheld pending separate approval
+[x] Recent Notion Activity               — component renders correctly in Production — USER-CONFIRMED. **Precisely**: the component works; real Notion event ingestion is NOT active (no webhook subscription, no live traffic) — correctly showing its truthful empty state, not "monitoring is working"
+[?] Dashboard-only vs. Slack alerts      — OPEN, waiting Kenny/Michelle
+[?] Slack recipients                     — OPEN, waiting Kenny/Michelle
+[ ] Optional Slack/n8n fan-out           — NOT BUILT; architecture decision only (Increment 88) — n8n has no role in inbound webhook processing, ever; its only possible role is pure Slack fan-out on already-validated data, if/when Slack alerting is approved
+[?] Delete/archive policy                — remains DISABLED, per this file's existing standing default recommendation; no separate approval sought or given
+[?] VA/ops-team role/access model        — OPEN, unconfirmed which real seeded role StayWhile's VAs use; cleaner/maintenance_tech/front_desk/read_only confirmed to hold zero Notion permissions in Production (Increment 90) — deliberate, not an oversight
+[~] UI/UX polish                         — real usability problems found during the manual verification above (horizontal scroll, raw URLs, wide table) — fixed LOCALLY (Increment 91), NOT yet committed/pushed/deployed; Production still shows Increment 90's original unpolished layout until approved
 ```
+
+**Do not call the Notion requirement complete merely because this read-only foundation is deployed.** Editing, live webhook monitoring, Slack/n8n alerting, sensitive-field exposure, and VA/ops-team access are all still either explicitly withheld or waiting on a Kenny/Michelle decision — see Increment 90's sections G/H below for the full, current punch list.
 
 ### August / Yale Locks
 
@@ -5062,3 +5085,212 @@ No commit, push, deploy, migration, Notion webhook registration, n8n workflow cr
 ### Files changed this increment
 
 See section D above, plus `HANDOFF.md`.
+
+## Increment 90 — 2026-09-16 (same day): Notion read-only foundation rolled out to StayWhile Production — migration applied, scoped commit `1c436f9` pushed to `main`, deployment functionally confirmed, narrow RBAC bootstrap run; one cross-client `gh` CLI identity incident caught and safely contained mid-rollout; editing/webhook-registration/n8n/Slack remain explicitly NOT enabled
+
+### Purpose
+
+Execute the Increment 88/89 Production approval package, with explicit client approval, for the SAFE READ-ONLY FOUNDATION ONLY — not the full Notion requirement.
+
+### ⚠️ Cross-client `gh` CLI identity incident — caught, disclosed, contained
+
+While verifying deployment (this increment's Step 4), `gh auth status` revealed the machine's **active** `gh` CLI account is `cabincollectivebb-afk` — **Client B (Cabin Collective)**, not StayWhile. **One read-only** `gh api repos/AdminStay/Stayawhilewithus/deployments` call had already been made under that active identity before this was noticed, returning only non-sensitive StayWhile deployment metadata (commit SHAs, environment, timestamps) — no secret was exposed, and no Client B resource was inspected or touched. On discovery: no `gh auth switch`/`login`/`logout` was performed (Client B's session was left exactly as found), no further authenticated `gh`/`vercel` call was made for the rest of this rollout, and deployment verification continued via unauthenticated HTTP checks instead (see Step 4 below). **Root cause**: this repo's `git` remote is correctly scoped to StayWhile via the dedicated `github-staywhile` SSH alias (confirmed, unaffected, used successfully for the push below) — but `gh`'s own OAuth session is a completely separate, ambient credential store not tied to that SSH config at all, and nothing had checked it independently before this increment.
+
+**New permanent operational rule** (also recorded in the cross-session `feedback_infrastructure_isolation_policy` memory, so it applies to every future session, not just this repo): **before using `gh` (or any other ambient/default-session CLI — `vercel`, `supabase`, `aws`, etc.) against a specific client's resource, first check that tool's own active-identity command and confirm it matches that exact client.** A correctly-scoped git SSH remote does not imply the CLI tool's own session is also correctly scoped. A mismatch is a STOP condition — never switch/login/logout another client's active session to "fix" it; fall back to an unauthenticated verification method or ask the user.
+
+### Step 1 — Pre-flight — PASSED
+
+Remote `git@github-staywhile:AdminStay/Stayawhilewithus.git`, branch `main` — confirmed via `git remote -v`/`git branch --show-current` (uses the dedicated SSH alias, unaffected by the `gh` incident above). `git status --porcelain -uall` inspected in full before any change — confirmed the only Notion-scoped files were the intended 39. Migration re-confirmed additive-only (one `CREATE TABLE` + 2 indexes). `grant-notion-permissions.ts` re-confirmed narrow/idempotent. Full `seed.ts` explicitly confirmed would not run at any point. **Target-identity verification, read-only, before any write**: `prisma migrate status` showed exactly the 6 already-documented migrations applied, only the Notion one pending; an independent direct query confirmed 38 properties (0 demo), `admin@stayawhilewithus.com` ACTIVE, 43 August locks — all matching HANDOFF's own documented Production facts exactly. Temp verification script created inside `packages/database/`, run, deleted immediately (same established pattern as every prior increment's diagnostics).
+
+### Step 2 — Production migration — SUCCESS
+
+`prisma migrate deploy` (using `STAYWHILE_SUPABASE_DATABASE_URL`/`DIRECT_URL` from the existing `.env.supabase-migration.local`, the same credential file and method as the original Increment 23 cutover) applied `20260915211143_add_notion_page_event` — one `CREATE TABLE notion_page_events` + 2 indexes + the `notion_event_id` unique index (4 total). Post-migration, read-only: table and all 4 indexes confirmed present, 0 rows (expected — no traffic yet), and the same baseline facts (38 properties/0 demo/43 August locks) confirmed byte-for-byte unchanged. `seed.ts` was not run.
+
+### Step 3 — Exact commit + push — SUCCESS
+
+Staged exactly the 39-file cumulative Notion-scoped list (14 modified + 24 new + `HANDOFF.md`) via explicit `git add <path>` calls — never `git add .`/`-A`. `git diff --cached --name-only` reviewed in full before commit: every path Notion-scoped, zero Cielo/August/Nest/OwnerRez/thermostat/diagnostic-script/secret files. Committed as `1c436f9e36232e689cbbb57491e8ce50b8c1cf57` ("Add Notion read-only detail view, RBAC, and change-monitoring foundation," 39 files, 3428 insertions/46 deletions — the repo's own pre-commit hook ran `prettier --write` on the staged files, a formatting-only pass, re-verified with a full test re-run afterward, all still green). Pushed: `4e5403d..1c436f9 main -> main`, to `github-staywhile:AdminStay/Stayawhilewithus.git`.
+
+### Step 4 — Deployment verification — functionally confirmed; exact SHA correlation explicitly left unverified, not guessed
+
+Per the cross-client incident above, deployment verification deliberately avoided any authenticated `gh`/`vercel` call. Unauthenticated evidence instead: `GET /api/health` → `200`. `GET /notion` (no auth) → `404` via Clerk's `protect-rewrite` — the same documented, pre-existing behavior from earlier increments, not a regression. **Strongest signal**: `POST /api/webhooks/notion` — a route that did not exist before this deploy — returned `503 {"error":"Not configured"}`, and `GET` on it returned `405`, both with `x-matched-path: /api/webhooks/notion` — this is the exact, deterministic behavior `processNotionWebhookEvent()` produces when `NOTION_WEBHOOK_VERIFICATION_TOKEN` is unset (which it is in Production), and is safe by design (no signature can ever be accepted without that token, so nothing was processed or stored). This proves the new code is genuinely live. **No public/unauthenticated endpoint exposes the deployed git SHA** — exact SHA correlation is recorded as unverified rather than assumed; the functional evidence above is the basis for treating this as a successful deploy.
+
+### Step 5 — Production smoke test — partial
+
+Unauthenticated checks (deployment liveness, webhook-route behavior, Clerk auth boundary unchanged) all passed, no regression signal. **The interactive, authenticated portions could not be performed by Claude this session** — the Chrome browser extension was not connected, and no attempt was made to authenticate as a real user without their credentials. Specifically **not independently verified**: `/notion` loading with Connected status, Property Listings baseline/Moonlit Cove positive-control search, listing→detail and search→detail flows, absence of Edit/Save/Delete controls in the actually-rendered UI, and Recent Notion Activity's empty state as rendered (its _data source_ was independently confirmed empty — 0 rows in `notion_page_events` — but that is not the same as confirming the component renders correctly). **Recommend the user do a ~2-minute manual click-through of these items** — matching this project's own long-standing precedent of requiring "manual, user-confirmed" verification for anything needing a real authenticated session (see Increment 23's acceptance gate). Proceeded to Step 6 because none of the explicit stop conditions were met (deployment was verifiable, no regression evidence, identity was not uncertain, no unexpected mutation was required) and the RBAC step itself is independently narrow/idempotent/low-risk.
+
+### Step 6 — Narrow RBAC bootstrap — SUCCESS
+
+Re-confirmed database identity immediately before running (38 properties/0 demo/admin ACTIVE, plus confirmed 0 pre-existing `notion` permission rows — proving this hadn't already been run). Ran exactly `packages/database/scripts/grant-notion-permissions.ts` (not `seed.ts`) against the confirmed Production database. Result, verified by direct query afterward:
+
+| Role                                                        | Notion grants                                                                                                                                  |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `admin`                                                     | `notion:create`, `notion:read`, `notion:update`, `notion:delete`, `notion:manage` (all 5 — preserves admin's existing "full access" invariant) |
+| `ops_manager`                                               | `notion:read` only                                                                                                                             |
+| `cleaner` / `front_desk` / `maintenance_tech` / `read_only` | **none** — confirmed empty, exactly as instructed ("do NOT grant VA/front_desk/cleaner/maintenance roles yet")                                 |
+
+`propertyCount` (38), `demoProperties` (0), `userCount` (3), `reservationCount` (0), `taskCount` (0) all confirmed unchanged before/after — zero property/reservation/task/user/demo-data mutation.
+
+### Step 7 — Final Production verification
+
+Re-ran the same unauthenticated checks post-grant: `/api/health` → `200`, `/notion` (unauth) → `404` (unchanged), webhook route → `503` (unchanged) — no regression signal from the RBAC change. The same interactive-verification gap as Step 5 applies here too — not independently confirmed by Claude.
+
+**Addendum (same day, after this increment): the interactive-verification gap flagged in Steps 5 and 7 above is now closed.** The user performed the manual click-through this increment recommended and confirmed, live in Production: `/notion` loads with Connected status; 35-listing baseline; "Moonlit Cove" positive control; Property Listing → detail view; Keyword Search → detail view; no Edit/Save/Delete/Archive control anywhere; no unapproved/sensitive field visible; Recent Notion Activity renders (correctly empty — no live event traffic, webhook not registered). See the master checklist's Notion section at the top of this file for the resulting USER-CONFIRMED PRODUCTION VERIFIED items, and "Increment 91" below for the UI/UX polish this manual pass also surfaced as needed.
+
+### What did NOT happen this increment
+
+No edit allowlist populated. No real Notion write implemented or attempted. No lockbox/router/service-provider or any other unapproved field exposed (none is modeled in code at all). No VA/front_desk/cleaner/maintenance role granted anything. No Notion webhook subscription registered. No n8n workflow created/activated. No Slack alerting configured. No delete/archive capability enabled. No unrelated integration (Cielo/August/Nest/OwnerRez/Honeywell/Trane) touched. No `vercel login/link/pull`. No Vercel/GitHub account relinking. No full `seed.ts` run. No second commit/push.
+
+### Files changed this increment
+
+`HANDOFF.md` only — application code, migration, and Production database state changed as described above, not via any new source file.
+
+## Increment 91 — 2026-09-16 (same day): Notion team-ready UI/UX polish — horizontal scroll eliminated, raw URLs replaced with short actions, table consolidated 11→5 columns, visual hierarchy/section cards added, one real accessibility fix (`role="link"` name mismatch), one real pre-existing bug fixed (`border-line-subtle` — not a real Tailwind token, silently produced no border color). Local only — NOT committed/pushed/deployed. HANDOFF also cleaned of stale "local-only"/"not yet deployed" contradictions and updated with the user's manual Production verification from Increment 90.
+
+### Purpose
+
+The user manually clicked through the Increment 90 deploy in Production and confirmed the read-only foundation works, but found real usability problems unsuitable for daily ops-team use: the detail modal required horizontal scrolling (long raw URLs overflowing a `max-w-md` dialog), and the listings table's 11 columns made the page wide and hard to scan. Fix locally, do not deploy yet, and separately bring HANDOFF's current-status language in line with the now-Production-verified reality.
+
+### C. Exact UI/UX problems found
+
+1. **Horizontal scroll inside the detail modal.** `@stayw/ui`'s shared `Dialog` was a fixed `max-w-md` (28rem) with no width-aware handling of long field values — a raw URL or long free-text value could force the dialog wider than its own bounds.
+2. **Raw, full URLs shown inline** for Direct Booking/Airbnb/VRBO/Photos/Guidebook, both in the detail view and (implicitly) as the reason for problem 1.
+3. **No visual hierarchy in the detail view** — a flat label/value list with no grouping; numeric stats (bedrooms/bathrooms/guests) read the same as link fields.
+4. **11-column listings table** (Name/Region/Address/Bedrooms/Bathrooms/Guests/Direct booking/Airbnb/VRBO/Photos/Guidebook) — wide, and the 5 link columns were mostly empty/low-density for most rows.
+5. **Filter controls had no visible labels** — only `aria-label`s (accessible, but not visually self-explanatory for someone scanning the page).
+6. **Recent Notion Activity looked like loose text**, not a distinct section — `<ul className="space-y-2">` directly under a `SectionHeader`, no border/card.
+7. **Two real bugs found while inspecting the existing markup for this work, not introduced by it:**
+   - `border-line-subtle` (used in both `NotionSearch.tsx`'s result cards and `NotionRecentActivity.tsx`'s activity rows) is **not a real class in this design system** — the Tailwind preset only defines `border-border`/`border-border-strong`. Tailwind's JIT compiler silently generates no CSS for an unrecognized class, so these elements had a border-**width** (from the plain `border` utility) but no border-**color** utility applied at all, falling back to the browser default (`currentColor`) — a visible but wrong-colored border, not the intended subtle one.
+   - No test in this app had ever actually opened a real `<dialog>` under jsdom (every existing Dialog-adjacent test only mounted it closed) — jsdom implements `HTMLDialogElement`'s `open` attribute reflection but not `showModal()`/`close()`, so any test that did pass `open: true` would have crashed with `node.showModal is not a function`.
+
+### D. Exact UI/UX improvements implemented
+
+- **`@stayw/ui`'s `Dialog`** gained an optional `size` prop (`"md"` default, unchanged; `"lg"` for detail panels) and changed its base width from bare `w-full` to `w-[calc(100%-2rem)]` — a real 1rem gutter on narrow viewports instead of edge-to-edge, with zero effect once the viewport exceeds the size cap. The body now caps at `max-h-[70vh]` and scrolls vertically (`overflow-y-auto`) while explicitly forbidding horizontal scroll (`overflow-x-hidden`). Backward compatible — the app's one other `Dialog` consumer (`OwnerRezMatchReportPreview.tsx`, unrelated OwnerRez feature) is unaffected, confirmed by its own passing test suite.
+- **New pure, tested grouping helper** `notion-detail-sections.ts` (`buildNotionDetailSections()`) — takes the already-visibility-filtered `NotionVisibleField[]` (never the raw record) and groups it into: a compact 3-column **"Property overview"** stat grid (bedrooms/bathrooms/guests), a **"Booking & resources"** action list (the 5 link/contact fields), and a plain-list fallback for anything not yet mapped to either bucket — so a future Kenny/Michelle-approved field still renders somewhere automatically, never silently disappears. `name`/`address` are deliberately excluded from every body section — they render in the new header/subtitle instead.
+- **`NotionDetailView` redesigned**: header now shows the property name (dialog title), a region badge, and the address as a subtitle — all metadata that was previously either absent or mixed into the generic field list. Body renders the three section layouts above. Every URL resource now renders as a small **"Open"** action button (exact original `href` preserved, `target="_blank" rel="noopener noreferrer"`, safe-URL-checked exactly as before) instead of the raw URL text; a non-URL value (e.g. free-text Direct Booking instructions) renders as wrapped (`break-words`) plain text, never a link. Uses the new `size="lg"` Dialog.
+- **`NotionListingsSearch` table consolidated from 11 to 5 columns**: Property / Region / Address / **Capacity** (bedrooms/bathrooms/guests combined into one compact "3 bd · 2 ba · 6 guests" cell) / **Resources** (new `ResourceChips` — one small pill per resource that actually has a value, short label only, e.g. "Airbnb ↗", never the raw URL; a non-URL value renders as a small muted label with the full text in a native `title` tooltip). Still uses `@stayw/ui`'s `Table`/`TableRow`/`TableCell` — no new/foreign component system introduced. An earlier draft of this used a single whole-row `<button>` wrapping the resource `<a>` links, which is invalid HTML (interactive content cannot nest inside a button) — caught during implementation and corrected back to the standard table-cell pattern before this landed.
+- **Filter bar restyled** as a bordered card with a visible micro-label (matching `SectionHeader`'s existing uppercase-label styling) above each of Property name / Keyword / Region, laid out in a responsive grid (`grid-cols-1` on mobile, a 4-column `[1fr_1fr_auto_auto]` row from `sm:` up) — all four existing functions (name search, keyword search, region filter, reset) unchanged in behavior.
+- **`NotionRecentActivity` wrapped in a `Card`** (the same shared component `Card.tsx` used elsewhere in this app), giving it the same bordered-container treatment as the Table above it — reads as a distinct section, not loose text. Empty-state copy unchanged (already truthful: "Notion change monitoring isn't active in Production yet").
+- **Two real bugs fixed**: `border-line-subtle` → `border-border` in both `NotionSearch.tsx` and `NotionRecentActivity.tsx`. A global jsdom `HTMLDialogElement.showModal()/close()` polyfill added to `apps/website/vitest.setup.mts` (the shared test setup, not a per-file mock) — benefits every current and future test that opens a real Dialog, not just this pass's new tests.
+
+### E. How horizontal scrolling was eliminated
+
+Root cause was two independent factors, both fixed: (1) the dialog's own width was too narrow for grouped content at any reasonable font size once a long value was present — addressed by the `Dialog` `size="lg"` + mobile-safe gutter above; (2) long values (raw URLs, free-text) had no wrapping behavior — addressed by replacing URL display with a fixed-width "Open" button (the value itself never renders) and adding `break-words`/`min-w-0`/`max-w-[60%]` to every remaining text value in the detail view and table cells, so a long value wraps or truncates instead of forcing the container wider. **Caveat, stated honestly**: this is verified by code/class inspection and jsdom-rendered DOM structure (see Tests below), not by an actual rendered-browser measurement — the Chrome extension was not connected this session either, so true visual/viewport confirmation is still the user's to do (see item L).
+
+### F. Responsive behavior
+
+Table still uses `@stayw/ui`'s `Table`, which wraps in `overflow-x-auto` as a last-resort, contained safety net (never a page-level scroll) — with only 5 columns now, this should rarely if ever trigger above ~360px. Filter bar collapses to a single stacked column below Tailwind's `sm` breakpoint (640px). The dialog's `w-[calc(100%-2rem)]` keeps a real gutter on narrow viewports. **Not independently verified at specific breakpoints in a real browser this session** — no browser tool was available; recommend the user's own quick check at a phone-width viewport as part of the review.
+
+### G. Accessibility improvements
+
+- Fixed a real WCAG 2.5.3 (Label in Name) violation caught while writing tests: an initial draft's resource-chip links had an `aria-label` ("Open Airbnb (opens in a new tab)") that didn't contain the visible text ("Airbnb") as delivered — voice-control/speech-recognition users saying "click Airbnb" would have failed to match. Fixed by using `title` instead of `aria-label` for the supplementary hint, so the accessible name is simply the visible text.
+- The detail dialog's resource-action buttons ("Open") intentionally keep a disambiguating `aria-label` ("Open {field label}...") since multiple identical-looking "Open" buttons appear together — this one **does** contain "Open" as a substring of the accessible name, satisfying the same WCAG criterion correctly for that different situation.
+- Focus states, keyboard nav, Escape/close, and the native `<dialog>` focus trap are all unchanged (still the same underlying `@stayw/ui` `Dialog` mechanism) — not regressed.
+- Resource chips/buttons sized for a reasonable tap target (`px-2 py-0.5`–`px-2.5 py-1` with icon), consistent with this design system's existing `Badge`/`Button` sizing conventions.
+- No nested-interactive-element bugs shipped — caught and corrected during implementation (see item D).
+
+### H. Tests/results
+
+- New: `notion-detail-sections.test.ts` (7 tests — grouping correctness, no data rewriting, unmapped-field fallback, empty input). New: `NotionDetailView.test.tsx` (8 tests — grid rendering, URL→"Open" action, non-URL wrapped text, missing-value placeholder, header region/subtitle, empty-sections message, property-context badge, no write affordance) — this component had **zero** test coverage before this increment.
+- Updated: `NotionListingsSearch.test.tsx` — 2 tests rewritten to match the new compact-chip design (asserting the raw URL is never rendered as visible text; the non-URL "Direct" chip carries the full text in `title`, not inline) — all 14 tests in the file pass.
+- `apps/website/src/domains/integrations` suite: **211/211 passing** (was 196).
+- Full `apps/website` suite: **915/918 passing** — same 3 pre-existing, unrelated `OwnerRezConfirmLinkPanel` failures as every prior increment.
+- `OwnerRezMatchReportPreview.test.tsx` (the Dialog component's other consumer): **5/5 passing**, confirming the shared `Dialog` change is backward-compatible.
+- `packages/ui` typecheck: clean.
+- `npx tsc --noEmit -p apps/website/tsconfig.json`: clean.
+- `eslint` on every touched file: 0 errors (one real issue found and fixed — a reference to a rule, `react/no-array-index-key`, not configured in this project, which itself errors as an unused-directive; replaced the array-index key with a stable one instead of suppressing).
+- `next build` (placeholder `N8N_*` env values, same documented method): succeeds, all 27 routes; `/notion` bundle 3.13kB → 4.21kB (expected — more component/grouping code).
+- **What was NOT tested**: actual rendered pixel layout at specific viewport widths (no browser tool available this session) — see item L.
+
+### I. Exact files changed (all local, none committed/pushed/deployed)
+
+Modified: `packages/ui/src/components/Dialog.tsx`, `packages/ui/src/index.ts`, `apps/website/src/domains/integrations/components/{NotionDetailView.tsx,NotionListingsSearch.tsx,NotionListingsSearch.test.tsx,NotionRecentActivity.tsx,NotionSearch.tsx}`, `apps/website/vitest.setup.mts`.
+New: `apps/website/src/domains/integrations/services/{notion-detail-sections.ts,notion-detail-sections.test.ts}`, `apps/website/src/domains/integrations/components/NotionDetailView.test.tsx`.
+`HANDOFF.md` (this increment's own updates, plus the cross-referenced current-status cleanup — see below).
+
+**Confirmed via `git status --porcelain -uall`: every Cielo/August/Nest/OwnerRez/thermostat file, both `.claude/worktrees/` directories, and every `packages/database/*.mjs` diagnostic script remain untouched — exactly as in every prior Notion increment.**
+
+### HANDOFF cleanup performed this increment (separate from the UI work above)
+
+Per explicit instruction: upgraded 8 items to **USER-CONFIRMED PRODUCTION VERIFIED** in the master checklist's Notion section (authenticated `/notion` load, 35-listing baseline, Listing→detail, Search→"Moonlit Cove" positive control, Search→detail, no Edit/Save/Delete/Archive controls, no unapproved sensitive fields, Recent Notion Activity component rendering — explicitly **not** claiming real event ingestion works). Removed/corrected stale "local-only"/"not committed"/"not yet interactively Production-verified" language from the **current-status** sections (the master checklist and its tracking block) — that language now survives only inside Increment 87–89's own historical entries, correctly labeled as describing that point in time. Corrected the webhook-route description: it is now deployed and **publicly reachable**, fails closed as `not_configured` because the verification token isn't set, and no Notion subscription is registered — replacing the previous, now-inaccurate "unreachable from the internet" wording.
+
+### J. Remaining Notion requirements (unchanged in substance from Increment 90, restated per explicit instruction)
+
+```
+[?] additional operational fields to display
+[?] sensitive-field visibility by role
+[ ] real Notion write implementation
+[ ] edit allowlist
+[?] exact editable fields
+[?] roles allowed to edit
+[?] confirmation-before-save
+[ ] Notion webhook registration / live monitoring
+[?] dashboard-only vs Slack alerts
+[?] Slack recipients
+[ ] optional Slack/n8n fan-out
+[?] delete/archive policy — remains disabled
+[?] VA/ops-team role/access model
+```
+
+### K. Smallest exact questions for Kenny/Michelle — unchanged from Increment 88/90, restated
+
+**Visibility**: which fields beyond the 10 live ones; who sees lockbox/access-code-class info; which roles see other sensitive info. **Editing**: which exact fields; which roles; confirm-before-save? **Alerts**: dashboard-only or +Slack; if Slack, who receives them. **Delete/archive**: stays disabled (default, unchanged). Plus the standing, non-original-four question: which real seeded role (or a new one) StayWhile's VAs/ops team actually use to sign in.
+
+### L. Additional safe Notion work remaining before those decisions
+
+**Recommended before shipping this polish, not strictly blocking**: a real-browser visual check at a few viewport widths (no browser tool was available this session — see items E/F/H) to confirm the CSS reasoning above actually holds pixel-for-pixel, since jsdom cannot verify visual layout. **No other safe local Notion work is currently identified.** Every remaining item is either an explicit Kenny/Michelle decision (item K) or a Production/external mutation already covered by Increment 88's approval package (webhook registration, edit-allowlist population) — nothing else was found this pass that could be built without one of those two gates.
+
+### What did NOT happen this increment
+
+No commit, push, deploy, or Production mutation of any kind. No additional Notion field exposed. No sensitive/lockbox/router data shown. No RBAC change. No edit allowlist populated. No editing enabled. No delete/archive enabled. No webhook registration. No n8n activation. No Slack configuration. No Cielo/August/Nest/OwnerRez/other-integration work started.
+
+### Files changed this increment
+
+See item I above, plus `HANDOFF.md`.
+
+## Increment 92 — 2026-09-16 (same day): Increment 91 UI/UX polish independently re-verified line-by-line for correctness (duplicate imports, dead code, stale branches, malformed comments, TS/lint errors, behavior regressions) — none found; full test/typecheck/lint/build suite re-run clean; one real HANDOFF status contradiction found and fixed; visual preview artifact published for review. Still entirely local — no code changes were needed this pass, only verification and one documentation fix.
+
+### Purpose
+
+Before reporting Increment 91 complete, rigorously re-inspect every file it touched for the specific defect classes explicitly called out — duplicate imports, duplicate JSX branches, stale/orphaned components, dead code, malformed comments, duplicated props/interfaces, TypeScript errors, lint errors, and accidental behavior regressions — rather than assuming a large rewrite was correct because it looked correct. Also re-verify the full requested test/build matrix from a clean slate, and finish the HANDOFF cleanup by scanning specifically for old/new Notion status text sitting near each other.
+
+### Code review result: no defects found
+
+Every file Increment 91 touched (`Dialog.tsx`, `index.ts`, `NotionDetailView.tsx`, `NotionDetailView.test.tsx`, `NotionListingsSearch.tsx`, `NotionListingsSearch.test.tsx`, `NotionRecentActivity.tsx`, `NotionSearch.tsx`, `notion-detail-sections.ts`, `notion-detail-sections.test.ts`, `vitest.setup.mts`) was read in full again, end to end. Confirmed: exactly one definition of every component/function (no duplicate `ResourceChips`/`ResourceRow`/`DetailSection`, no leftover pre-redesign table markup), no orphaned imports, no commented-out old code, single `NotionDetailView` usage per caller, single `describe` block per test file with the expected test count in each (14/8/7), consistent key usage in every `.map()` (no array-index keys). **Nothing required fixing.**
+
+### Full verification re-run, clean slate
+
+- `npx tsc --noEmit -p apps/website/tsconfig.json`: clean.
+- `npx tsc --noEmit` (`packages/ui`): clean.
+- `eslint` on all 11 touched files across both packages: **0 errors, 0 warnings**.
+- `apps/website/src/domains/integrations` suite: **211/211 passing**.
+- `OwnerRezMatchReportPreview.test.tsx` (Dialog's other consumer): **5/5 passing** — confirms the shared `Dialog` change stays backward-compatible.
+- `packages/ui` has no dedicated test files (matches this codebase's existing convention of exercising shared chrome components only through their consumers) — nothing to run there directly.
+- Full `apps/website` suite: **915/918 passing** — same 3 pre-existing, unrelated `OwnerRezConfirmLinkPanel` failures as every prior increment, unchanged.
+- `next build` (placeholder `N8N_*` env values, same documented method): succeeds, all 27 routes.
+
+### Explicit behavioral checks
+
+- **Resource href destinations unchanged**: `ResourceChips`/`ResourceRow` both pass the field's real value straight through as `href` — no string manipulation, no truncation of the actual URL, confirmed by direct code read and by tests asserting the exact original URL string on the rendered `<a>`.
+- **External links safe**: every resource link is `isSafeHttpUrl()`-checked before ever rendering as a link, `target="_blank"` + `rel="noopener noreferrer"` on all of them, matching the pre-existing `SafeLink` convention this app already used elsewhere.
+- **All 10 approved standard fields remain accessible**: 3 in the "Property overview" grid (bedrooms/bathrooms/guests) + 5 in "Booking & resources" (direct booking/Airbnb/VRBO/photos/guidebook) + 2 in the header (name as title, address as subtitle) = 10, confirmed by `notion-detail-sections.test.ts`'s own grouping assertions.
+- **35-listing / Search-by-name / Keyword search / Region filter / Reset**: zero changes to the underlying filtering logic (`filtered = useMemo(...)`) — only the table's presentation changed. All 14 `NotionListingsSearch.test.tsx` tests, which exercise every one of these behaviors, pass unchanged in count and assertion intent (2 were rewritten to match the new compact-chip presentation, not to weaken the assertion).
+- **Detail modal / Recent Activity preserved**: same underlying data flow (`buildNotionDetailSections(openListing.visibleFields)`, `listRecentNotionActivity()`), presentation-only changes.
+- **Visibility/RBAC safe client DTO boundary preserved**: `selectVisibleNotionFields()`/`buildNotionListingClientDto()` (Increment 89's fail-closed-by-construction fix) were **not touched at all** this pass — confirmed via `git diff`, zero lines changed in either file since Increment 89/90.
+- **No new sensitive field reaches the client**: no change to `NOTION_VISIBILITY_ALLOWLIST` or `NotionListingRecord`'s field set.
+- **No Notion write functionality enabled**: no change to `notion-edit-allowlist.ts` (still empty) or `NotionClient.updatePageProperty()` (still the `NotImplementedError` stub).
+
+### One real HANDOFF contradiction found and fixed this pass
+
+The master checklist's `[x] 35/35 listing visibility` line still read "**not re-clicked-through this pass (Increment 90)**" — directly contradicting the USER-CONFIRMED PRODUCTION VERIFIED items recorded two lines below it and in the tracking block further down, both of which already state the user re-confirmed the 35-listing baseline live. Corrected to state the re-confirmation plainly. No other contradiction was found on a full re-scan of the current-status section (lines 44–146) — every remaining "not yet"/"NOT" phrase describes something genuinely still open (an OwnerRez item, unrelated; Kenny/Michelle decisions; Increment 91's own honestly-not-yet-deployed status).
+
+### Visual review
+
+No browser tool was available this session either (`tabs_context_mcp` still reports the extension not connected) — re-confirmed by checking again before this pass, not assumed unavailable from last turn. In its place: a static, interactive HTML mockup was built using the exact same class names/structure as the real components (same Tailwind tokens, same grouping logic, same resource-chip/action-button markup) and published for direct visual review: **https://claude.ai/artifact/YTNN36Ps4EQWsKQkHKDQ6w** — clicking between the three sample properties switches the real detail-view markup live. This is a faithful structural reproduction, not a screenshot of the actual running app; true pixel-level confirmation in a real browser is still the user's to do, same caveat as last increment.
+
+### What did NOT happen this increment
+
+No application code was changed (the review found nothing needing a fix). No commit, push, deploy, or Production mutation of any kind. No new Notion field exposed. No RBAC change. No edit allowlist populated. No webhook registration. No n8n/Slack activity. No other integration touched.
+
+### Files changed this increment
+
+`HANDOFF.md` only (one contradiction fix, this log entry).
