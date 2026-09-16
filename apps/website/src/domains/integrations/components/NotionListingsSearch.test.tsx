@@ -4,36 +4,73 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type {
   IntegrationHighlights,
-  NotionListingWithRegion,
+  NotionListingWithVisibility,
 } from "../services/integrations.service";
+
 import { NotionListingsSearch } from "./NotionListingsSearch";
 
 afterEach(cleanup);
 
+// Flat, "logical" overrides (name/address/... at the top level) for test
+// ergonomics — internally routed into the new safe-DTO shape's `fields`
+// object below. NotionListingWithVisibility itself no longer has these keys
+// at the top level (see integrations.service.ts's own doc comment on that
+// type for why) — this helper is the only place that distinction is
+// bridged, so every existing test below keeps working unchanged.
 function listing(
-  overrides: Partial<NotionListingWithRegion>,
-): NotionListingWithRegion {
+  overrides: Partial<{
+    id: string;
+    url: string | null;
+    name: string;
+    address: string | null;
+    bedrooms: number | null;
+    bathrooms: number | null;
+    guests: number | null;
+    directBooking: string | null;
+    airbnbLink: string | null;
+    vrboLink: string | null;
+    googleDrivePhotosUrl: string | null;
+    guidebookUrl: string | null;
+    lastEditedTime: string | null;
+    region: string;
+    propertyContext: NotionListingWithVisibility["propertyContext"];
+  }>,
+): NotionListingWithVisibility {
+  const {
+    id = "1",
+    url = "https://notion.so/1",
+    lastEditedTime = null,
+    region = "SRQ",
+    propertyContext = null,
+    ...fieldOverrides
+  } = overrides;
+
   return {
-    id: "1",
-    url: "https://notion.so/1",
-    name: "Moonlit Cove",
-    address: "123 Main St",
-    bedrooms: 3,
-    bathrooms: 2,
-    guests: 6,
-    directBooking: null,
-    airbnbLink: null,
-    vrboLink: null,
-    googleDrivePhotosUrl: null,
-    guidebookUrl: null,
-    region: "SRQ",
-    ...overrides,
+    id,
+    url,
+    lastEditedTime,
+    region,
+    propertyContext,
+    visibleFields: [],
+    fields: {
+      name: "Moonlit Cove",
+      address: "123 Main St",
+      bedrooms: 3,
+      bathrooms: 2,
+      guests: 6,
+      directBooking: null,
+      airbnbLink: null,
+      vrboLink: null,
+      googleDrivePhotosUrl: null,
+      guidebookUrl: null,
+      ...fieldOverrides,
+    },
   };
 }
 
 function highlights(
-  items: NotionListingWithRegion[],
-): IntegrationHighlights<NotionListingWithRegion> {
+  items: NotionListingWithVisibility[],
+): IntegrationHighlights<NotionListingWithVisibility> {
   return { configured: true, ok: true, items };
 }
 
@@ -273,7 +310,11 @@ describe("NotionListingsSearch", () => {
     );
 
     expect(container.querySelector("form")).toBeNull();
-    expect(container.querySelectorAll("button")).toHaveLength(1); // Reset only
+    // Reset, the one row's "open detail view" button (read-only —
+    // navigates to a view, writes nothing), and the reused Dialog
+    // component's own always-rendered close button (present in the DOM
+    // regardless of open state) — no write/mutation control among them.
+    expect(container.querySelectorAll("button")).toHaveLength(3);
     expect(screen.getByText("Reset")).toBeTruthy();
     expect(screen.queryByText(/edit/i)).toBeNull();
     expect(screen.queryByText(/delete/i)).toBeNull();

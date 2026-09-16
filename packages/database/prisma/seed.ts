@@ -19,6 +19,10 @@ const RESOURCES = [
   // resource from "smart_devices" (read/mapping) rather than folded in.
   "thermostats",
   "integrations",
+  // See packages/auth/src/permissions.ts for why this is separate from
+  // "integrations" — read/manage/update are three distinct Notion gates
+  // (standard visibility, sensitive-field visibility, dashboard edit).
+  "notion",
   "ai_conversations",
   "ai_actions",
   "audit_logs",
@@ -68,6 +72,13 @@ const SYSTEM_ROLES: Array<{
       "thermostats:manage",
       "integrations:read",
       "integrations:update",
+      // Standard-field visibility for the in-dashboard Notion detail view
+      // (same reach ops_manager already has for search/listings via
+      // integrations:read). Deliberately NOT granting notion:manage
+      // (sensitive-field visibility) or notion:update (dashboard edit)
+      // here — both remain ungranted to every role until Kenny/Michelle
+      // confirm which fields/roles qualify.
+      "notion:read",
     ],
   },
   {

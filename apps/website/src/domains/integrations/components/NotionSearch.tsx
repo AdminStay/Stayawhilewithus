@@ -4,7 +4,12 @@ import { Badge, Button, EmptyState, Input, StatusIndicator } from "@stayw/ui";
 import { Search } from "lucide-react";
 import { useActionState, useRef, useState } from "react";
 
-import type { NotionSearchState } from "../services/integrations.service";
+import type {
+  NotionSearchResultCard,
+  NotionSearchState,
+} from "../services/integrations.service";
+
+import { NotionDetailView } from "./NotionDetailView";
 import { isSafeHttpUrl } from "./notion-link.utils";
 
 type ActionState = NotionSearchState | { status: "idle" };
@@ -28,6 +33,9 @@ export function NotionSearch({
 }) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_STATE);
   const [query, setQuery] = useState("");
+  const [openResult, setOpenResult] = useState<NotionSearchResultCard | null>(
+    null,
+  );
   const formRef = useRef<HTMLFormElement>(null);
 
   // Reuses the exact same "submit with an empty query" path the schema
@@ -141,9 +149,13 @@ export function NotionSearch({
                     className="rounded-lg border border-line-subtle p-3"
                   >
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium text-ink">
+                      <button
+                        type="button"
+                        onClick={() => setOpenResult(result)}
+                        className="font-medium text-ink underline-offset-2 hover:underline"
+                      >
                         {result.title}
-                      </span>
+                      </button>
                       <Badge tone="neutral">{result.contentType}</Badge>
                       {result.region && (
                         <Badge tone="success">{result.region}</Badge>
@@ -166,7 +178,7 @@ export function NotionSearch({
                           href={result.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-forest-600 underline underline-offset-2 hover:text-forest-700"
+                          className="text-ink-muted underline underline-offset-2 hover:text-ink"
                         >
                           Open in Notion
                         </a>
@@ -176,6 +188,20 @@ export function NotionSearch({
                 ))}
               </ul>
             )}
+
+            <NotionDetailView
+              open={openResult != null}
+              onClose={() => setOpenResult(null)}
+              title={openResult?.title ?? ""}
+              fields={
+                openResult?.snippet
+                  ? [{ label: "Preview", value: openResult.snippet }]
+                  : []
+              }
+              lastEditedTime={openResult?.lastEditedTime ?? null}
+              notionUrl={openResult?.url ?? null}
+              propertyContext={null}
+            />
           </div>
         )}
     </div>

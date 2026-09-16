@@ -116,6 +116,7 @@ export type NotionPropertyValue =
 export interface NotionDataSourceRow {
   id: string;
   url?: string | null;
+  last_edited_time?: string;
   properties: Record<string, NotionPropertyValue>;
 }
 
@@ -144,4 +145,16 @@ export interface NotionListingRecord {
   vrboLink: string | null;
   googleDrivePhotosUrl: string | null;
   guidebookUrl: string | null;
+  /** Notion's own `last_edited_time` for this row — needed for the in-dashboard detail view's staleness display and, later, the edit-time conflict check. Never a fabricated/derived value. */
+  lastEditedTime: string | null;
 }
+
+/**
+ * The Notion property types the in-dashboard editable-field architecture
+ * knows how to render/validate — deliberately a closed set matching exactly
+ * what "View of Listings" and similar operational databases actually use
+ * (confirmed live), never an open-ended "any Notion type" union. Extending
+ * this list is a deliberate, reviewed addition, not automatic.
+ */
+export type NotionEditableFieldType =
+  "text" | "select" | "multi_select" | "checkbox" | "date" | "number" | "url";

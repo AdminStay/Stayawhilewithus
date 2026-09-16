@@ -534,6 +534,31 @@ model ProviderDevice {
   @@map("provider_devices")
 }
 
+/**
+ * Local record of a classified Notion webhook event — the storage layer for
+ * the "change/delete monitoring" + "Recent Notion Activity" requirements.
+ * Populated only by processNotionWebhookEvent() in apps/website (see
+ * HANDOFF.md's Notion section) — nothing writes here from a real, registered
+ * Notion subscription yet. Deliberately never stores a changed property's
+ * VALUE: Notion's own webhook payload doesn't send values either (only the
+ * ids of properties/blocks that changed), which this model mirrors by
+ * design, not by omission.
+ */
+model NotionPageEvent {
+  id                String   @id @default(uuid()) @db.Uuid
+  notionEventId     String?  @unique @map("notion_event_id")
+  entityId          String   @map("entity_id")
+  entityType        String   @map("entity_type") // "page" | "block" | "database" | "data_source" | "comment"
+  eventType         String   @map("event_type") // Notion's own `type`, e.g. "page.properties_updated"
+  changedFieldNames Json     @default("[]") @map("changed_field_names") // property/block ids only, never values
+  occurredAt        DateTime @map("occurred_at")
+  receivedAt        DateTime @default(now()) @map("received_at")
+
+  @@index([entityId, occurredAt])
+  @@index([occurredAt])
+  @@map("notion_page_events")
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // AI Conversations
 // ─────────────────────────────────────────────────────────────────────────

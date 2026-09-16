@@ -64,6 +64,7 @@ import { prisma } from "@stayw/database";
 import { NOTION_SEARCH_EXCLUDED_DATABASE_IDS } from "../config/notion-search-exclusions";
 import {
   beginDeviceSync,
+  buildNotionListingClientDto,
   disconnectIntegration,
   finishDeviceSync,
   getNotionHighlights,
@@ -687,6 +688,88 @@ describe("listNotionListings", () => {
   });
 });
 
+describe("buildNotionListingClientDto — the one place the safe client DTO is built", () => {
+  const RECORD_WITH_REGION = {
+    id: "page-1",
+    url: "https://notion.so/page-1",
+    name: "Moonlit Cove",
+    address: "123 Main St",
+    bedrooms: 3,
+    bathrooms: 2,
+    guests: 6,
+    directBooking: null,
+    airbnbLink: "https://airbnb.com/rooms/1",
+    vrboLink: null,
+    googleDrivePhotosUrl: null,
+    guidebookUrl: null,
+    lastEditedTime: "2026-09-01T00:00:00.000Z",
+    region: "SRQ",
+  };
+
+  // Requirement 9: no raw Notion provider object is passed to a Client
+  // Component. This is the exact function app/(dashboard)/notion/page.tsx
+  // calls to build what it hands to the (client) NotionListingsSearch —
+  // proving its result is never, and never contains, the input record.
+  it("never returns the input record itself, and the returned object has no property equal to it", () => {
+    const dto = buildNotionListingClientDto(
+      RECORD_WITH_REGION,
+      { canSeeSensitiveFields: false },
+      null,
+    );
+    expect(dto).not.toBe(RECORD_WITH_REGION);
+    expect(dto.fields).not.toBe(RECORD_WITH_REGION);
+    expect(Object.values(dto)).not.toContain(RECORD_WITH_REGION);
+  });
+
+  // Requirement 4: Property Listings still receive all 10 currently
+  // approved standard fields, via the DTO's `fields`.
+  it("carries every standard field into dto.fields with real values", () => {
+    const dto = buildNotionListingClientDto(
+      RECORD_WITH_REGION,
+      { canSeeSensitiveFields: false },
+      null,
+    );
+    expect(dto.fields.name).toBe("Moonlit Cove");
+    expect(dto.fields.address).toBe("123 Main St");
+    expect(dto.fields.airbnbLink).toBe("https://airbnb.com/rooms/1");
+    expect(Object.keys(dto.fields)).toHaveLength(10);
+  });
+
+  it("carries id/url/lastEditedTime/region at the top level — metadata, not gated by the visibility allowlist", () => {
+    const dto = buildNotionListingClientDto(
+      RECORD_WITH_REGION,
+      { canSeeSensitiveFields: false },
+      null,
+    );
+    expect(dto.id).toBe("page-1");
+    expect(dto.url).toBe("https://notion.so/page-1");
+    expect(dto.lastEditedTime).toBe("2026-09-01T00:00:00.000Z");
+    expect(dto.region).toBe("SRQ");
+  });
+
+  it("passes propertyContext through unchanged — never inferred, only what the caller already confirmed", () => {
+    const ctx = { propertyId: "prop-1", propertyName: "Miramar Bliss" };
+    const dto = buildNotionListingClientDto(
+      RECORD_WITH_REGION,
+      { canSeeSensitiveFields: false },
+      ctx,
+    );
+    expect(dto.propertyContext).toBe(ctx);
+  });
+
+  it("dto.visibleFields matches dto.fields exactly — one filter pass, not two independent reads of the record", () => {
+    const dto = buildNotionListingClientDto(
+      RECORD_WITH_REGION,
+      { canSeeSensitiveFields: false },
+      null,
+    );
+    for (const entry of dto.visibleFields) {
+      expect(dto.fields[entry.field]).toEqual(entry.value);
+    }
+    expect(dto.visibleFields).toHaveLength(Object.keys(dto.fields).length);
+  });
+});
+
 describe("searchNotionContent", () => {
   const originalToken = process.env.NOTION_API_KEY;
   const originalDataSourceId = process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
@@ -988,6 +1071,51 @@ describe("searchNotionContent", () => {
       expect(result.results[0]?.title).toBe(
         "Michelle's Guide to Early Check-in Requests",
       );
+    }
+  });
+
+  // Requirement 5: search results still expose only approved preview
+  // information — a general-search result card must never carry any key
+  // beyond NotionSearchResultCard's own closed shape (never page/block
+  // body content, never a raw NotionSearchResultItem's other fields).
+  it("a general search result card has exactly NotionSearchResultCard's fields — nothing extra reaches the client", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    delete process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockSearch.mockResolvedValueOnce([
+      {
+        id: "page-9",
+        title: "Pool heater warranty",
+        url: "https://notion.so/page-9",
+        lastEditedTime: "2026-08-26T00:00:00.000Z",
+        sourceType: "page",
+        parentDatabaseId: null,
+        // Simulates a hypothetical richer provider payload (e.g. if
+        // NotionClient.search() ever started returning more) — proves the
+        // card is built key-by-key, not by spreading the provider result.
+        pageContent: "SENSITIVE: full page body text",
+        rawProperties: { lockbox_code: "1234" },
+      },
+    ]);
+
+    const result = await searchNotionContent(actor, "pool");
+
+    expect(result.configured).toBe(true);
+    if (result.configured && result.ok) {
+      expect(result.results).toHaveLength(1);
+      expect(Object.keys(result.results[0] ?? {}).sort()).toEqual(
+        [
+          "id",
+          "title",
+          "url",
+          "lastEditedTime",
+          "contentType",
+          "region",
+          "snippet",
+        ].sort(),
+      );
+      expect(JSON.stringify(result.results[0])).not.toContain("SENSITIVE");
+      expect(JSON.stringify(result.results[0])).not.toContain("lockbox_code");
     }
   });
 });

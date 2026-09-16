@@ -22,6 +22,16 @@ export const RESOURCES = [
   // bucket. See nest-commands.service.ts.
   "thermostats",
   "integrations",
+  // Deliberately separate from "integrations" — that resource covers the
+  // existing generic read (Search/Property Listings, already live). This
+  // resource is scoped specifically to Notion: "read" is the in-dashboard
+  // detail-view visibility gate for standard fields, "manage" is the
+  // separate sensitive-field visibility gate (lockbox/access-code-class
+  // information, none approved yet), and "update" is the dashboard-edit
+  // write path — kept apart from "read" so granting visibility never
+  // implicitly grants write capability, same reasoning as "thermostats"
+  // above.
+  "notion",
   "ai_conversations",
   "ai_actions",
   "audit_logs",

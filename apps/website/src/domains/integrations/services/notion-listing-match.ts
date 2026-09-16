@@ -6,7 +6,7 @@ import type { NotionListingRecord } from "@stayw/integrations/notion";
  * is components -> services, never the reverse (see e.g.
  * apps/website/src/domains/ai/components importing from ../services).
  */
-function isSafeHttpUrl(value: string | null): boolean {
+function isSafeHttpUrl(value: string | null | undefined): boolean {
   if (!value) return false;
   try {
     const url = new URL(value);
@@ -24,9 +24,17 @@ function isSafeHttpUrl(value: string | null): boolean {
  * no fuzzy matching. Kept as one shared, tested function so the live
  * unified search (searchNotionContent) and the existing Listings table
  * filter can never silently drift apart on what counts as a match.
+ *
+ * Accepts a `Partial` on the client side (NotionListingsSearch.tsx passes
+ * the safe, visibility-filtered `fields` object, where an unauthorized key
+ * is simply absent, not present-but-null) and the full server-side record
+ * (searchNotionContent, pre-filtering) equally — every field is already
+ * handled as possibly-missing below.
  */
 export function matchesListingQuery(
-  listing: Pick<NotionListingRecord, "name" | "address" | "directBooking">,
+  listing: Partial<
+    Pick<NotionListingRecord, "name" | "address" | "directBooking">
+  >,
   rawQuery: string,
 ): boolean {
   const query = rawQuery.trim().toLowerCase();

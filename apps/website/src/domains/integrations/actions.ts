@@ -13,6 +13,10 @@ import {
   searchNotionContent,
   type NotionSearchState,
 } from "./services/integrations.service";
+import {
+  updateNotionField,
+  type NotionEditResult,
+} from "./services/notion-edit.service";
 
 import {
   syncAugustDevices,
@@ -169,4 +173,41 @@ export async function searchNotionAction(
   if (!parsed.success) return { status: "idle" };
 
   return searchNotionContent(actor, parsed.data.query);
+}
+
+export type UpdateNotionFieldActionState =
+  { status: "idle" } | NotionEditResult | { status: "failure"; error: string };
+
+/**
+ * The single entry point for the (currently unreachable, allowlist-empty)
+ * dashboard-edit foundation — see notion-edit.service.ts's own doc comment
+ * for why every real call today resolves to "not_editable" before any
+ * Notion API call happens. Same "never throw to the caller for an expected
+ * per-request outcome" convention as every other action in this app; only
+ * a genuinely unexpected top-level error (RBAC denial, malformed request)
+ * is caught and reported the same way.
+ */
+export async function updateNotionFieldAction(
+  _prevState: UpdateNotionFieldActionState,
+  formData: FormData,
+): Promise<UpdateNotionFieldActionState> {
+  try {
+    const actor = await getCurrentUser();
+    const result = await updateNotionField(actor, {
+      pageId: formData.get("pageId"),
+      dataSourceId: formData.get("dataSourceId"),
+      field: formData.get("field"),
+      expectedLastEditedTime: formData.get("expectedLastEditedTime"),
+      value: formData.get("value"),
+    });
+    if (result.status === "success") {
+      revalidatePath("/notion");
+    }
+    return result;
+  } catch (err) {
+    return {
+      status: "failure",
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
 }

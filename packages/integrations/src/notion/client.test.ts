@@ -556,6 +556,7 @@ describe("NotionClient", () => {
         vrboLink: "https://vrbo.com/x",
         googleDrivePhotosUrl: "https://drive.google.com/x",
         guidebookUrl: "https://guidebook.example/x",
+        lastEditedTime: null,
       });
     });
 
@@ -668,6 +669,7 @@ describe("NotionClient", () => {
         vrboLink: null,
         googleDrivePhotosUrl: null,
         guidebookUrl: null,
+        lastEditedTime: null,
       });
     });
 
@@ -744,6 +746,7 @@ describe("NotionClient", () => {
           vrboLink: null,
           googleDrivePhotosUrl: null,
           guidebookUrl: null,
+          lastEditedTime: null,
         },
       ]);
     });

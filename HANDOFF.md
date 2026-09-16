@@ -6,6 +6,336 @@
 
 ---
 
+# 📋 MASTER PROJECT CHECKLIST — CURRENT STATUS
+
+**As of Increment 86 (2026-09-15), updated 2026-09-16 (pre-meeting cleanup pass — see Google Nest/Trane/Honeywell sections for corrections).** Quick source of truth for where the project stands — see the dated Increment referenced next to each item for full detail; this section summarizes, it doesn't replace, the log below.
+
+**🔴 ACTIVE PRODUCTION INCIDENT:** Nest telemetry refresh is broken — provider escalation pending, **Google Device Access Issue 561849351**. See the Google Nest section below for the full, single authoritative account. Not fixed — awaiting Google's response.
+
+**Legend:** `[x]` completed and Production-verified · `[~]` partially complete / working but remaining work exists · `[ ]` pending, not started · `[!]` blocked — needs external info, provider/account action, or human confirmation. Code existing is not sufficient for `[x]` — the behavior must be confirmed working in Production.
+
+### Core Platform
+
+- [x] Dashboard foundation — all 9 core domains built and Production-verified (Increment 1/17–19)
+- [x] Authentication / RBAC — real Clerk sign-in + role-based permissions working in Production (Increment 18, 23–24)
+- [x] Production deployment — live at `stayawhilewithus-website.vercel.app`, stable across 60+ increments (Increment 23)
+- [x] Property management — Properties domain complete, in active daily use (OwnerRez onboarding pipeline, device mapping)
+- [x] Reservation management — Reservations domain complete, live on `/reservations` (Increment 1, 19)
+- [x] Task management — Tasks domain complete (Increment 1)
+- [x] Activity feed — "Recent Activity" dashboard section live (pre-Increment 52)
+- [~] Manual Sync Now reliability — shipped and Production-verified (Increment 33); a real P2024/pool-timeout incident was root-caused and fixed (Increment 59); Cielo's `pruneStaleDevices()` hard-delete-on-sync behavior remains a flagged, unconfirmed risk (Priority 3, deferred)
+- [ ] Automatic/background synchronization — not implemented for any provider (August/Nest/Cielo/OwnerRez all manual-only as of Increment 83/86)
+- [x] Dynamic device/property mapping — `ProviderDevice` architecture built and in active Production use for both August and Nest (Kenny's Increment 30 requirement); no new hard-coded `*_PROPERTY_MAP` added since
+- [ ] Dashboard quick-view improvements — not separately tracked as a discrete item in this log; no completion evidence found
+- [ ] Sortable dashboard columns — requested by Kenny (Increment 79); not implemented as of Increment 86
+
+### OwnerRez
+
+- [x] OwnerRez connection — Production-verified (Increment 22, 53)
+- [x] Production property/listing sync — pagination fix Production-verified (Increment 55); active onboarding pipeline in use through Increment 73
+- [x] OwnerRez as property source of truth — standing policy, consistently enforced (Increment 21, restated through Increment 86)
+- [x] Miramar-Bliss confirmed link — Production-verified, no duplicate property, existing August associations intact (Increment 80)
+- [x] Surfside Solace link — created from OwnerRez record `456042`, Production-verified (`ONBOARDING` status) (Increment 78)
+- [x] Starfish Waterfront link — created from OwnerRez record `471634`, Production-verified (`ONBOARDING` status) (Increment 78)
+- [!] Poinciana workflow/resolution — identity confirmed by Michelle, but the matching OwnerRez record is **Inactive**; the existing "Create Property" UI only renders for Active records, so no safe linking path exists yet; action still not authorized (Increment 83)
+- [ ] Automatic onboarding of new active OwnerRez properties — required, not yet started (Increment 74/81)
+- [ ] Airbnb alteration request → StayWhile task workflow — not designed (Increment 32, unchanged through 86)
+
+### Notion — active priority while Nest is provider-blocked
+
+**COMPLETED / PRODUCTION VERIFIED:**
+
+- [x] Production authentication/connection — PRODUCTION VERIFIED (Increment 84)
+- [x] Property Listings read access — PRODUCTION VERIFIED (Increment 84)
+- [x] 35/35 listing visibility — confirmed live (Increment 84)
+- [x] Dashboard/general keyword search — PRODUCTION VERIFIED (Increment 84)
+- [x] Positive-control search verification — "Moonlit Cove" search returned exactly 1 correct result (Increment 84)
+- [x] Existing intentional database exclusions (e.g. staff/contact-directory content, Increment 75) — preserved, not affected by anything below
+
+**BUILT & TESTED LOCALLY — NOT YET COMMITTED / PUSHED / DEPLOYED (Increment 87, 2026-09-16; audited/extended Increment 88; client-payload security boundary hardened Increment 89 — all still local-only, 2026-09-16):**
+Implemented continuously per explicit client direction to keep building all Notion work that doesn't require a Kenny/Michelle business decision or a Production/external-system mutation. All of it is local-only: no commit, no push, no Production Notion write, no Production DB mutation, no n8n workflow activation, no external webhook/subscription created. Verified via `npx tsc --noEmit` (clean across `apps/website`, `packages/integrations`, `packages/auth`, `packages/database`), `eslint` (0 errors on every touched file — a handful of pre-existing, unrelated `import/order` warnings remain in files this work didn't restructure, same pattern as every prior increment), the full `apps/website/src/domains/integrations` suite (**196/196 passing**, up from 166 at Increment 87 — Increment 88 added `fieldValueSchemaFor`/edit-conflict/webhook-dedupe-race coverage, Increment 89 added the client-DTO fail-closed-by-construction regression suite), `packages/integrations/src/notion` (46/46 passing), `packages/auth` (21/21 passing), the full `apps/website` suite (**900/903 passing** — the same 3 pre-existing, unrelated failures as every prior pass, in an untouched `OwnerRezConfirmLinkPanel` component test), and a full `next build` (all routes, including `/notion` and the new `/api/webhooks/notion`, compile — the one build failure hit is the same pre-existing, unrelated local `.env.local` n8n webhook misconfiguration documented since Increment 87, confirmed unrelated by rebuilding with placeholder n8n env values only). See "Increment 89" at the bottom of this file for the client-payload security fix; "Increment 88" for the completion audit.
+
+- In-dashboard read-only detail view for both Property Listings and general Search results (`NotionDetailView.tsx`, reused across `NotionListingsSearch.tsx`/`NotionSearch.tsx`) — click a result to view its fields inside StayWhile; "Open in Notion" kept only as a secondary link; no raw Notion IDs/JSON ever reach the UI.
+- Two-tier security model, exactly as required: a **visibility allowlist** (`notion-field-visibility.ts`) gating which fields are shown at all (today: the 10 existing, already-verified listing fields, all tagged `standard`; the mechanism supports adding `sensitive` fields — e.g. Michelle's lockbox/router/service-provider info — later without a redesign) and a separate, independent **edit allowlist** (`notion-edit-allowlist.ts`) gating which fields can be changed (today: intentionally **empty**).
+- New dedicated `notion` RBAC resource (`read` / `update` / `manage`), following this codebase's own existing precedent of splitting a narrow write capability from a broader read one. Only `notion:read` granted to `ops_manager` today (matches current reach); `notion:update` and `notion:manage` are deliberately granted to no role.
+- Dashboard-edit foundation, fail-closed by two independent layers: (1) the edit allowlist is empty, so every edit request resolves `not_editable` before any Notion call; (2) `NotionClient.updatePageProperty()` itself is a deliberate `NotImplementedError` stub, not a real write. Field-type Zod validation (`notion-edit.schema.ts`) and stale-data/conflict-check logic (compare loaded `last_edited_time` vs. Notion's live value) are both implemented and tested, but unreachable in practice today since the allowlist is empty.
+- Property-association read path (`getConfirmedNotionPropertyAssociations()`), using the existing, previously-unpopulated `Property.notionPageId` field — correctly returns an empty map today (no property has been linked yet); population is a separate, not-yet-built admin action, out of scope for this pass.
+- **Change/delete monitoring — full local pipeline, not just architecture.** New `NotionPageEvent` table (local dev DB only, migration `20260915211143_add_notion_page_event`) storing only entity id/type, Notion's own event type, a changed-FIELD-COUNT-safe list of property/block ids (never values), and timestamps. `notion-webhook-signature.ts` (HMAC-SHA256, constant-time compare, confirmed live against Notion's real docs), `notion-webhook-event.schema.ts` (full event-type enum + payload shape, confirmed live against `developers.notion.com/reference/webhooks-events-delivery`), `notion-webhook-classify.ts` (pure classification + reuses the existing staff/contact-directory exclusion so those changes never surface here either), `notion-webhook-event.service.ts` (orchestration: verify → parse → classify → exclude → dedupe by Notion's event id → store; fails closed with `not_configured` whenever `NOTION_WEBHOOK_VERIFICATION_TOKEN` isn't set, which it never is today), and a new route `app/api/webhooks/notion/route.ts` handling both the one-time verification handshake and real signed events. **⚠️ NOT registered with Notion** — creating a real subscription requires a public HTTPS URL and completing Notion's handshake, a genuine external-system action explicitly held for separate approval; the route is unreachable from the internet today.
+- **Recent Notion Activity — built.** `notion-activity.service.ts#listRecentNotionActivity()` (gated by `notion:read`) + `NotionRecentActivity.tsx`, wired into `/notion` below the existing sections. Reads only from `NotionPageEvent`, so it correctly shows an empty state until the webhook pipeline above is ever actually connected to Notion.
+- **Pre-existing, unrelated infra note found and worked around, not fixed**: the local dev Postgres has schema drift from an unmerged branch in a separate git worktree (`worktree-ownerrez-property-sync`, two extra columns on `properties` from a migration that was never merged to `main`). `prisma migrate dev` refused to proceed without a destructive reset; used `prisma db push` + a hand-written, correctly-recorded migration file for `notion_page_events` instead, which touches nothing from that other branch. Flagging so a future increment doesn't mistake this for something today's Notion work caused.
+
+**Increment 88 additions (2026-09-16, same day — completion audit + additional safe local work, still entirely local):**
+
+- **Test-coverage gap closed**: `updateNotionField()`'s conflict/validation/provider-error/success branches were unreachable by any existing test (the allowlist is empty, so every test short-circuited at `not_editable`). Added `notion-edit.schema.test.ts` (9 tests, direct `fieldValueSchemaFor` coverage) and extended `notion-edit.service.test.ts` (+6 tests) using a mocked, per-test-overridden `findEditAllowlistEntry` to simulate an approved field — the real, still-empty `notion-edit-allowlist.ts` is untouched. Proves, before any field is ever approved: the stale-data conflict check works, a Notion read failure returns `provider_error` not a crash, an invalid value is rejected before any Notion call, and — most importantly — a real call into `NotionClient.updatePageProperty()`'s `NotImplementedError` stub is safely caught and returned as `provider_error`, never an unhandled exception, even if the allowlist were ever mistakenly populated.
+- **Real (minor) race condition found and fixed**: `processNotionWebhookEvent()`'s dedupe was `findUnique` then `create` — not atomic. Two concurrent deliveries of the same Notion event (a real possibility; Notion retries on anything but a fast 2xx) could both pass the existence check before either commits, so the loser would throw an uncaught Prisma `P2002` unique-constraint error (500) instead of a clean `duplicate` response. Fixed by catching `P2002` (via this codebase's existing, already-tested `isUniqueConstraintViolation()` helper, reused from `ownerrez-link.service.ts` rather than duplicated) and returning `{ status: "duplicate" }`; a genuine non-constraint DB error still re-throws. 2 new tests added.
+- **New, not-yet-run script**: `packages/database/scripts/grant-notion-permissions.ts` — a narrow, idempotent Production-permission-catalog bootstrap, upserting only the 5 `notion:*` Permission rows and granting `notion:read` to `ops_manager` (+ all 5 to `admin`), mirroring `seed.ts`'s own upsert logic exactly. Written because re-running the **full** `seed.ts` against Production would silently reintroduce `DEMO-001`/`DEMO-002` and other demo rows that were deliberately excluded at cutover (Increment 23) — `seed.ts`'s `main()` unconditionally seeds those. Typechecked and **executed successfully against the local dev DB only** (twice, confirming idempotency) — never run against Production. See "Production approval package" in Increment 88 below for exactly when/how to run it for real.
+- **Forward-looking design note, flagged Increment 88, FIXED Increment 89**: `NotionListingWithVisibility` used to be `NotionListingWithRegion & { visibleFields, propertyContext }` — an intersection, not a replacement, so the full underlying record reached the client component tree alongside the filtered `visibleFields` array. Client-payload boundary hardened to be fail-closed **by construction**, not by coincidence of today's all-standard field set — see "Increment 89" below for the full fix.
+- **Verified, not just re-asserted, via direct code/schema inspection**: the webhook exclusion filter (`isNotionWebhookEventExcluded`) reuses the exact same `NOTION_SEARCH_EXCLUDED_DATABASE_IDS` the search feature uses — a staff/contact-directory change can't surface in Recent Notion Activity either. `getConfirmedNotionPropertyAssociations()` reads only `Property.notionPageId` directly from the database — no fuzzy/inferred matching exists anywhere in this path. `NotionRecentActivity.tsx` never renders `entityId` (only event-type label, entity type, changed-field count, timestamp) — and since it's a Server Component (no `"use client"`), that field never reaches the client bundle at all, not just "isn't shown." Search result snippets are either `listing.address` (an already-approved standard field) or `null` for general search results — `/search` never returns page/block body content, confirmed both in Notion's own docs and in this codebase's own code path.
+- **Real, still-open gap re-confirmed, unchanged since Increment 75**: `cleaner`/`maintenance_tech`/`front_desk` still hold no `integrations:read` or `notion:read` — none of today's seeded non-admin, non-ops_manager roles can reach `/notion` at all. Which real role StayWhile's VAs actually sign in as has still never been confirmed. This blocks the client's own stated end goal (ops team using Notion from inside StayWhile) regardless of anything else in this section being finished — flagged again as a required Kenny/Michelle question, not something Claude can infer or default.
+- **n8n architecture question — RESOLVED by design decision, no code/workflow change:** see "n8n workflows" status below.
+
+**⚠️ TARGET UX PRINCIPLE — read this before designing or building any of the three areas below.** This is not a technical Notion-integration screen and must never become an "n8n admin page." **StayWhile is the operational interface; Notion is the underlying system being synchronized with, working mostly in the background.** The intended flow is: search/browse in StayWhile → select a result → view the useful Notion information inside StayWhile → edit only approved fields, rendered as normal StayWhile UI controls (text/select/multi-select/checkbox/date/number/URL as appropriate — never raw Notion properties or JSON, never a generic "edit any property" interface) → Save → StayWhile validates permissions/data → the approved update is written to Notion in the background → clear success/failure feedback → change recorded in the audit log. "Open in Notion" stays available only as a secondary/fallback action. Users must never need to understand the Notion API, n8n, database IDs, webhooks, or any integration internals to do their job. Changed/deleted-page alerts must surface operationally in the dashboard (and optionally Slack), never left buried in n8n's own logs. Where Notion information corresponds to a StayWhile property, associate it with that property context using only confirmed identifiers/mappings — never fuzzy-matched or guessed. **The design question for every decision here is "can Kenny/Michelle/the ops team accomplish the Notion task from the StayWhile dashboard without opening Notion?" — not "what's easiest against the API."**
+
+**STILL REQUIRED — three areas, from the third client meeting:**
+
+**1. Change / delete monitoring**
+
+- [x] Detect relevant Notion content changes — **full local pipeline built & tested (Increment 87)**: signature verification, event parsing/classification, exclusion filtering, dedupe, storage. Not receiving real traffic (see below).
+- [x] Detect deleted/archived relevant pages, where Notion's API supports it — confirmed live against Notion's current official docs that webhooks support `page.deleted`/`page.undeleted` (deleted = moved to trash, not permanent), and the classifier/schema handle both event types.
+- [ ] Create appropriate alerting — not started; depends on the "Slack alert destination" business decision below
+- [ ] Determine the safest supported architecture using StayWhile's own n8n instance — the receiving pipeline is built app-side; whether/how n8n participates (vs. the Next.js route handling it directly, as built) is still open
+- [x] Verified whether this requires polling/diffing or another officially supported mechanism — **webhooks are officially supported** (`page.created` / `content_updated` / `properties_updated` / `moved` / `deleted` / `undeleted` / `locked` / `unlocked`, plus `database.*`/`data_source.*`/`comment.*` equivalents; requires a public SSL webhook URL, a one-time `verification_token` handshake, and `X-Notion-Signature` HMAC-SHA256 validation on every payload — full payload shape re-confirmed live 2026-09-16 against `developers.notion.com/reference/webhooks-events-delivery`)
+- **Status: architecture/design = DONE.** **Status: local implementation = BUILT & TESTED, not yet reachable.** No real subscription has been created — that requires a public HTTPS URL and completing Notion's handshake, a genuine external-system action explicitly held for separate approval.
+
+**2. In-dashboard Notion view/edit**
+Third-meeting requirement: approved Notion information should eventually be viewable/editable directly inside the StayWhile dashboard, with approved changes written back to Notion in the background. "Open in Notion" may remain as an optional fallback, but is not the intended primary workflow.
+Safety requirements for any eventual implementation: explicit allowlist of editable fields/actions, dedicated RBAC, server-side validation, audit logging, clear save success/failure feedback, stale-data/conflict protection, no delete/archive capability unless separately approved.
+
+- [x] Read-only in-dashboard detail view — **built & tested locally (Increment 87)**, not yet deployed
+- [x] Two-tier visibility/RBAC security (standard vs. sensitive fields, dedicated `notion` RBAC resource) — **built & tested locally (Increment 87)**, not yet deployed
+- [x] Fail-closed editing foundation (empty allowlist + `NotImplementedError` write stub, validation, conflict-check logic) — **built & tested locally (Increment 87)**, not yet deployed
+- **Status: architecture/design = ACTIONABLE NOW — substantially implemented and tested locally, see the Increment 87 bucket above.**
+- **Status: unrestricted editing = NOT APPROVED.**
+- **Status: final editable-field implementation = WAITING FOR BUSINESS CONFIRMATION** — Kenny/Michelle have not yet confirmed exactly which Notion fields/actions should be editable (Increment 75, 84). The edit allowlist stays empty (fail-closed) until that decision is made.
+
+**3. n8n workflows**
+
+- [ ] Notion-specific n8n operational workflows — NOT IMPLEMENTED; the StayWhile n8n instance currently has no real operational StayWhile workflows at all (Increment 40)
+- **Architecture question RESOLVED (Increment 88, 2026-09-16) — n8n has no role in receiving/verifying/classifying/storing Notion webhook events.** The already-built Next.js route (`/api/webhooks/notion`) is the correct, safer, simpler authoritative ingestion path, for reasons confirmed by inspecting both this app's own n8n usage and Notion's protocol: (1) n8n today holds zero Notion credentials (Increment 25/40) and would need `NOTION_WEBHOOK_VERIFICATION_TOKEN` duplicated into a second system just to sit in front of the real route; (2) if n8n only forwarded the raw request untouched, it adds a network hop and a second point of failure for zero benefit — the app still does 100% of the real verify/classify/dedupe work exactly as built; (3) if n8n instead re-verified the HMAC signature itself, that duplicates security-critical crypto logic in two places — exactly what was asked not to do. This matches this codebase's own existing precedent: `/api/webhooks/clerk` already receives Clerk's webhook directly into the app, not via n8n. **Decision: no n8n workflow for inbound Notion webhook processing, ever — not just "not yet."**
+- **n8n's only legitimate role, if the client ever wants Slack alerts** (open "Slack alert destination" decision below): pure downstream fan-out on data the app has _already fully validated and classified_ — the app would call this codebase's existing outbound `triggerWorkflow()` (already used elsewhere, e.g. `properties.service.ts`) with an already-safe payload shaped exactly like `NotionActivityItem` (event-type label, entity type, changed-field count, timestamp — never raw Notion content, never a value). n8n's workflow would do nothing but format that payload into a Slack message. No signature verification, no classification, no dedupe logic would ever exist in n8n. **Not built — this is an architecture decision recorded for when/if Slack alerting is approved, not new code.**
+- **Strict Client C isolation**: use only StayWhile's own n8n instance/configuration/credentials — never Client A or Client B configuration
+
+**Notion requirement tracking (exact status, do not mark "complete" merely because search works):**
+
+```
+[x] Production connection
+[x] Property Listings
+[x] Search
+[x] In-dashboard detail viewing        — built & tested locally, not yet deployed (Increment 87)
+[~] Operational-information display    — architecture supports it; no sensitive field added yet (Michelle's lockbox/router/service-provider info still needs Kenny/Michelle approval)
+[x] visibility/RBAC security           — built & tested locally, not yet deployed (Increment 87)
+[x] editing foundation                 — built & tested locally, not yet deployed (Increment 87); fail-closed by design
+[?] actual editable-field allowlist    — WAITING FOR BUSINESS CONFIRMATION (unchanged)
+[~] change/delete monitoring           — full local pipeline built & tested (Increment 87); NOT registered with Notion, no real traffic possible yet
+[x] Recent Notion Activity             — built & tested locally, not yet deployed (Increment 87); correctly empty until monitoring is ever connected
+[?] Slack alert destination            — open decision, unchanged
+[x] n8n architecture question          — RESOLVED (Increment 88): no n8n role in inbound webhook processing, ever; n8n's only possible role is pure Slack fan-out on already-validated data, if/when Slack alerting is approved
+[ ] Production end-to-end verification — not started, blocked on commit/deploy approval
+[?] VA/ops-team role access to /notion — still unconfirmed which real seeded role StayWhile's VAs use; none of cleaner/maintenance_tech/front_desk can reach /notion today (unchanged since Increment 75)
+```
+
+### August / Yale Locks
+
+- [x] Production authentication — restored after a documented token expiry, independently verified (Increment 85)
+- [x] Full fleet inventory — 43 August LOCK rows, 0 demo, 0 missing `externalDeviceId`, 0 duplicates (Increment 86)
+- [x] Scoped per-lock refresh — Production-verified (Increment 85)
+- [x] Bounded refresh concurrency — max 5 concurrent, deployed and tested (prior session, committed `d017057`)
+- [x] Bulk refresh UI — operator-gated, capped groups of 5, deployed (prior session)
+- [x] 43/43 controlled Production refresh — completed (Increment 86)
+- [x] Post-refresh audit — completed, read-only (Increment 86)
+- [x] Remaining stale-lock root-cause investigation — completed via a dedicated read-only diagnostic (Increment 86)
+- [x] Provider-side stale exceptions documented — 5 locks confirmed provider-side, not a StayWhile bug (Increment 86)
+- [x] Low-battery exceptions documented — Increment 86
+- [ ] Automatic August re-sync — NOT IMPLEMENTED (unchanged since Increment 85/86)
+- [!] Physical lock controls — intentionally restricted; no lock/unlock/PIN/access-code capability exists anywhere in this codebase, by design
+
+**Current facts (Increment 86, 2026-09-15):** 43 locks total · 4 ONLINE / 0 OFFLINE / 39 UNKNOWN · stale (>24h) improved 13 → 5 · remaining 5 stale locks confirmed provider-side (not a refresh/write bug) · low battery: Camingo 13%, Casa Blanca 13%, Las Sirenas 12% · physical lock controls intentionally restricted.
+
+### Google Nest
+
+**[!] PROVIDER ESCALATION PENDING — Google Device Access Issue [561849351](https://issuetracker.google.com/issues/561849351)** (reported by Michelle 2026-09-15; escalated to Google 2026-09-16, status New, P3/S3). This is the single authoritative account of the current incident — superseding any earlier, more fragmented version of this section.
+
+**What's broken:** Production Nest telemetry refresh fails with `Nest OAuth token refresh failed with 400` — Google returns `error: invalid_grant`, `error_description: "Token has been expired or revoked."` The existing Production `NEST_REFRESH_TOKEN` has expired or been revoked. Because `refreshNestTelemetry()` calls `getAccessToken()` before any device read, this single failure blocks 100% of Nest telemetry refresh. **Last successful real Nest telemetry refresh: Sep 10, 2026.**
+
+**Recovery attempted, did not restore access:**
+
+1. **Generic OAuth reauthorization** (`accounts.google.com`, same Client ID/scope) produced a **valid** token (code exchanged, refresh token issued, refresh grant validated) — but `listDevices()` with that token returned **0 devices**. **That 0-device token was not deployed anywhere** — local-only, never sent to Vercel.
+2. **PCM reauthorization** (`nestservices.google.com/partnerconnections/{project-id}/auth`) failed immediately with **"Can't link to StayWhile Nest Integ"**, before reaching our local callback.
+
+**Confirmed state (read-only, via Google Device Access Console + Google Account pages):** Device Access project `StayWhile Nest Integ` is **Active**, tier **Sandbox**; configured OAuth Client ID **matches** the app's own; account has **4 structures** (Bradenton, Panhandle, Roseadre, Starfish-waterfront), below the Sandbox 5-structure limit; the existing Partner Connection/device-sharing configuration **remains present**, untouched; OAuth Publishing Status is **Testing**. All 4 of Google's documented PCM "Can't link" causes were individually investigated and ruled out. **No Production, device, or mapping state was changed at any point during this diagnosis.**
+
+**Separate, not-yet-resolved factors — do not conflate with this incident:**
+
+- **OAuth Testing → In Production** is a **separate durability task** (would remove the 7-day refresh-token-expiry cap that caused the original token to die) — it is not established, and should not be assumed, to fix the PCM "Can't link" failure itself.
+- **Device Access Sandbox → Commercial Development** is a **separate Google program decision** (would remove the 25-user/5-structure/3-project Sandbox caps) — not required to solve this incident, not part of this escalation, not yet decided.
+
+**Safety state while escalation is pending:**
+
+- No unlink of the existing Partner Connection
+- No "Remove access" on the Google Account side
+- No PCM device-selection changes
+- No further OAuth/PCM retry without review
+- No deployment of the 0-device token
+- No Production Nest refresh
+- No mapping changes
+- No thermostat commands
+
+**Pending Nest work, preserved, to resume once authorization is restored:**
+
+- Michelle's broader thermostat discrepancy reconciliation
+- Bonjour Upstairs same-moment Google Home vs. StayWhile comparison (Increment 83)
+- The 10 unresolved ambiguous Nest device mappings
+- Poinciana — remains a **separate, unresolved** item (see OwnerRez section; Inactive-OwnerRez-record blocker, not part of this OAuth incident)
+- Automatic/background Nest refresh — remains **NOT IMPLEMENTED**, unrelated to this incident
+
+- [!] OAuth/authentication — **currently BROKEN in Production, escalated to Google (Issue 561849351)** — see full account above
+- [x] Production discovery — run repeatedly, most recently surfacing 17 newly-authorized devices (Increment 79–81)
+- [~] Current discovered/enabled thermostat inventory — **50 Nest `ProviderDevice` rows total; 39 enabled+mapped `SmartDevice` rows; 11 unmapped/disabled** (the 10 previously-identified ambiguous newly-authorized devices, cross-checked and confirmed still unmapped, plus Poinciana) — re-verified read-only against Production DB 2026-09-15
+- [x] Enabled/mapped devices — 39 confirmed live (see above)
+- [x] Newly discovered PCM thermostats — 17 identified via SDM full-name/unique-suffix matching (Increment 79)
+- [x] Confirmed mappings already completed — 7 of 17 (6 via controlled Production mapping, Increment 79; 1 more resolved by the StayWhile team's own QA, Increment 81)
+- [ ] Ambiguous mappings still pending — 10 of 17, grouped by literal `roomName` (Panhandle Hallway/Living Room/Upstairs/Downstairs/Kitchen, Roseadre Upstairs ×2); a Panhandle Hallway-vs-Upstairs count anomaly is open, not acted on (Increment 81)
+- [!] Poinciana pending workflow — same Inactive-OwnerRez-record blocker as the OwnerRez section above; identity confirmed by Michelle, linking still not authorized (Increment 83)
+- [ ] Miramar ambiguous devices — 2 Nest thermostats ("Miramar Bliss - Living Room," "Miramar Bliss - upstairs") remain unresolved; the OwnerRez property link is resolved but is explicitly not evidence for either thermostat's identity (Increment 81)
+- [!] Controlled telemetry refresh — last succeeded Sep 10, 2026 (Increment 83); **currently blocked by the OAuth incident above** — every refresh attempt since fails before any device is read, so all 39 enabled Nest devices' stored telemetry is now stale as of that date
+- [~] Temperature/humidity telemetry verification — freshness confirmed as a real contributing factor to 2 of 3 investigated discrepancies (Aqua Palm, OUAP) as of the Sep 10 refresh; not claimed fully resolved — no same-moment Google Home comparison exists, and no further refresh is possible until the OAuth incident is fixed (Increment 83)
+- [!] Bonjour Upstairs status discrepancy — remains OPEN; two unproven explanations preserved; needs a same-moment Google Home + StayWhile Refresh comparison that hasn't been arranged yet — further blocked by the current OAuth incident (Increment 83)
+- [ ] Automatic Nest refresh/scheduling — NOT IMPLEMENTED; design proposal only, cadence explicitly TBD (Increment 83)
+- [!] Physical thermostat controls — command action exists in code (RBAC-gated) but no real Production command has ever been sent; explicitly gated behind separate approval (unchanged since Increment 33)
+
+### Cielo
+
+- [x] Authentication/integration — proven live end-to-end (Increment 21), still functioning as of the Increment 83 refresh
+- [x] 3 StayWhile devices identified — Bahamas (Living Room), Sandy Nudes (Garage), Island Tides (Man Cave) — consistently confirmed live
+- [x] Personal/non-StayWhile device exclusion — "7206" (Kenny & Jenny's personal residence) deliberately omitted from `CIELO_PROPERTY_MAP`, never synced (Increment 19)
+- [x] Production telemetry refresh — basic connectivity/status refresh Production-verified via the shared manual Refresh (3 Cielo devices refreshed, Increment 83)
+- [~] Rich telemetry implementation — temperature/mode/fan/humidity/power parsing implemented and reviewed, **still uncommitted** (confirmed: `packages/integrations/src/cielo/client.ts`/`types.ts` remain locally modified, unstaged, as of this session)
+- [ ] Rich telemetry Production verification — never performed; blocked on the above being committed/deployed first
+- [~] Inventory verification — the 3 current devices are confirmed; a 4th historical device ("Miramar Blis - MIL") has unconfirmed current presence (a 2026 search returned 0 results, but a naming/search-term mismatch wasn't ruled out) (Increment 80)
+- [!] Write-capability verification — architecturally blocked: Cielo's control path is WebSocket-only with no REST equivalent, incompatible with this serverless app (established early, unchanged)
+- [ ] Automatic refresh — NOT IMPLEMENTED, same manual-only cadence as Nest (Increment 83)
+- [!] Physical controls — architecturally blocked (see write-capability above), not a StayWhile code gap
+
+### Trane Home — NEW INTEGRATION
+
+Official portal: https://www.tranehome.com/
+
+**Status: [!] PROVIDER-BLOCKED / unsupported for direct programmatic integration under current terms.** Trane Home Support responded (ticket 356604): **programmatic access is prohibited under their terms**; Trane does not provide a public API for the 1050 model; other models use a proprietary backend with no third-party access. Supported third-party control, where it exists at all, is limited to specific certified controller integrations and the 1050 model specifically — not a general API. Portal login remains confirmed working (account active, live telemetry visible, one example device: "Ocean Pearl - Front," reporting temperature/humidity) — that access was, and remains, read-only; no thermostat setting was ever changed. **Do not attempt scraping, reverse engineering, hidden API calls, session-cookie reuse, credential extraction, browser-session reuse, or any other unsupported/unofficial access.**
+
+- [x] Confirm StayWhile Trane Home account/access — login successful, account active, live telemetry visible
+- [~] Inventory Trane/American Standard thermostats belonging to StayWhile — one example confirmed live ("Ocean Pearl - Front"); full inventory not yet completed
+- [!] Record exact thermostat models — **still unknown; critical path** — determines whether the 1050/controller-integration exception could apply at all
+- [!] Determine supported integration/API method for those exact models — Trane Home Support confirmed (ticket 356604) no general API exists; only investigate a supported controller route if the installed model is confirmed to qualify (1050 or a certified controller integration)
+- [ ] Determine authentication method
+- [ ] Determine read-only telemetry capabilities
+- [ ] Determine provider rate limits
+- [ ] Design `ProviderDevice` representation
+- [ ] Match devices to properties only with exact/human-confirmed mapping
+- [ ] Implement read-only discovery
+- [ ] Implement telemetry ingestion
+- [ ] Production read-only verification
+- [ ] Decide later whether write/control capability should be supported
+- [ ] Automatic refresh/scheduling
+
+### Honeywell — active thermostat-integration priority (Trane now provider-blocked for general programmatic access)
+
+**Status: [!] Honeywell/Resideo — provider/account pending.** This is not a new registration: an existing Resideo/Honeywell Home **developer** registration was originally submitted at `developer.honeywellhome.com/user/register` and recorded as **WAITING FOR DEVELOPER ACCOUNT APPROVAL** (historical record, early session) — that account approval/access issue remains unresolved. **This confirms only which developer platform a past registration was submitted against — it does NOT confirm the actual StayWhile-installed thermostat ecosystem, exact models, device inventory, or Production API access, all of which remain unverified.** Do not implement or configure any Honeywell credentials until the account-access issue is resolved and approval is confirmed.
+
+- [ ] Identify which Honeywell platform/account StayWhile uses — a past developer registration targeted Resideo/Honeywell Home, but this has not been confirmed against StayWhile's actual installed thermostats; account-access status needs Resideo follow-up
+- [ ] Inventory the StayWhile Honeywell thermostats
+- [ ] Determine exact thermostat models
+- [ ] Determine whether devices use Resideo/Honeywell Home, Total Connect Comfort, or another Honeywell platform — **unverified against actual installed hardware**; only the developer registration's own target platform (Resideo/Honeywell Home) is known
+- [ ] Determine the official supported API/integration route for those exact devices/account
+- [ ] Establish authentication securely if supported
+- [ ] Perform read-only device discovery first
+- [ ] Determine available telemetry: temperature, humidity, mode, setpoints, connectivity, timestamps, etc.
+- [ ] Create `ProviderDevice` inventory without guessing property mappings
+- [ ] Map devices to properties only after exact identity is confirmed
+- [ ] Production verification must initially remain READ-ONLY
+- [ ] Do not issue thermostat setpoint/mode/fan/power/schedule commands without separate explicit approval
+- [ ] Determine rate limits and a safe refresh strategy before implementing automatic sync
+
+### Other Integrations / Automation
+
+- [~] n8n MCP — connection verified working multiple times, but is session-specific (must be re-checked each session) and currently holds zero real StayWhile workflows (instance effectively empty, Increment 40)
+- [ ] Slack — real credential-gated adapter built (Increment 2), never connected with a live Production credential or verified operationally
+- [ ] Gmail pool-report forwarding — not scoped, not designed, not started (2nd client meeting)
+- [!] Google Voice — supported integration/API feasibility and implementation method still require verification. Requested business workflow: after-cleaning photos/messages → a designated Slack channel. No decision has been made to replace Google Voice with an alternative (e.g. Twilio) — that would only follow if supported options are verified and Kenny/Michelle choose that direction.
+- [ ] Asana — real credential-gated adapter built (Increment 2); MCP-level Asana connection needs authentication; no operational workflow built
+- [!] VA Google Sheet schedule/availability — blocked: Michelle to provide access/a link, not yet received
+- [ ] Airbnb alteration task automation — not designed; needs careful investigation first (OwnerRez already has its own Airbnb sync, interaction risk not understood)
+
+### Current Project / Meeting Priorities (2026-09-16)
+
+**COMPLETED / PRODUCTION VERIFIED**
+
+- OwnerRez core property sync
+- Notion core connection/listings/search
+- August fleet/core refresh
+- Dynamic device/property mapping architecture
+- Core dashboard/manual sync foundation
+
+**CURRENTLY ACTIONABLE**
+
+- Investigate/fix Cielo `pruneStaleDevices()` hard-delete risk
+- **Finish Notion remaining requirements** (active priority while Nest is provider-blocked):
+  - Notion change/delete monitoring architecture + implementation planning
+  - Notion dashboard view/edit architecture
+  - Notion n8n workflow design
+  - Identify exact editable fields/actions requiring Kenny/Michelle approval
+- Review Cielo rich telemetry → commit/deploy/Production-verify, **only after explicit approval for the actual commit/deploy step**
+- OwnerRez automatic onboarding
+- SOP/QA preparation
+- Automatic/background sync architecture/design
+- Monitoring/error-handling design
+- Sortable dashboard columns
+
+**ON HOLD / EXTERNAL**
+
+- Nest → Google Issue 561849351
+- Honeywell/Resideo → developer access/approval
+- Trane → provider restriction (ticket 356604)
+- VA Google Sheet → Michelle access
+
+**PENDING / REQUIRES DECISION OR SCOPE**
+
+- System-wide automatic/background sync
+- August automatic resync
+- Cielo automatic refresh
+- Airbnb alteration → StayWhile task workflow
+- Poinciana handling
+- Notion final editable-field implementation — **WAITING FOR BUSINESS CONFIRMATION** (architecture is actionable now; unrestricted editing is NOT approved)
+- Gmail pool-report → Slack
+- Slack operational use cases
+- Asana operational use cases
+- Google Voice supported implementation
+- Monitoring/alerts
+- Formal QA
+- SOP/training
+- Oct 1 launch scope
+
+### Top 5 recommended next actions (2026-09-16)
+
+1. Investigate/fix Cielo `pruneStaleDevices()` data-loss risk
+2. Notion remaining requirements — **substantially built & tested locally as of Increment 87** (detail view, visibility/RBAC, fail-closed editing foundation, full change/delete-monitoring pipeline, Recent Notion Activity); what's left is Kenny/Michelle's business decisions (editable fields, alert destination) plus the external Notion webhook registration and commit/deploy, once approved — see the Notion section's tracking checklist above
+3. Review/finish Cielo rich telemetry Production verification (actual commit/deploy still requires explicit approval)
+4. OwnerRez automatic onboarding
+5. SOP/QA + launch hardening
+
+Sortable dashboard columns remain pending/actionable, but below these five.
+
+### Meeting decisions needed tomorrow — Notion
+
+Ask Kenny/Michelle:
+
+- Which Notion databases/pages should be editable from the dashboard?
+- Which exact fields/properties may users edit?
+- Which user roles may edit them?
+- Should changes require confirmation before saving?
+- Who should receive alerts when a Notion page is changed/deleted/archived?
+- Where should those alerts appear: dashboard, Slack, or both?
+- Should delete/archive remain completely disabled from the StayWhile dashboard? **Recommended default: YES, until separately approved.**
+
+### October 1, 2026 — target, not a guaranteed date
+
+Kenny's stated target (Increment 79). **Not decided here** which items are in/out of scope — that's Kenny/Michelle's call. For planning purposes only, items fall into three different categories:
+
+- **Launch-critical if unresolved**: Nest restoration (external, Google-dependent), the Cielo `pruneStaleDevices()` data-loss risk, SOPs/training (team needs to operate the platform).
+- **Could reasonably be deferred post-launch**: most "PENDING / REQUIRES DECISION OR SCOPE" items above (automatic sync, new-integration automations, Notion workflows, Slack/Asana/Gmail/Google Voice) — pending an explicit decision either way.
+- **External-provider dependencies StayWhile cannot control the timeline of**: Google (Nest Issue 561849351), Resideo (Honeywell developer approval), Trane (confirmed provider-restricted).
+
+---
+
 # ⚠️ Workspace Isolation — Read First
 
 **This workspace belongs exclusively to StayWhile.** Per `CLAUDE.md`: never reference, import, reuse, or expose information from another client workspace, and never reuse StayWhile-specific code, data, or documentation in another client's project. If a future session (or the audit methodology developed here) is reused elsewhere, only the _process/template_ travels — never this workspace's actual data, credentials, architecture specifics, or file contents. No other client's workspace should ever be read from or written to during a StayWhile session, and vice versa.
@@ -4441,3 +4771,294 @@ No August API call was made by Claude. No Sync Now was run. No additional Refres
 ### Files changed this increment
 
 `HANDOFF.md` only.
+
+## Increment 86 — 2026-09-15: Controlled August fleet refresh complete (43/43); remaining 5 stale locks diagnosed and confirmed provider-side, not a StayWhile bug — August treated as CLOSED for now with documented exceptions
+
+### Purpose of this increment
+
+Record the outcome of the controlled, bounded-concurrency August full-fleet telemetry refresh (built in the prior session as `refreshAugustTelemetryForSelectedLocks()`, committed `d017057`, deployed and verified) and the follow-up read-only investigation into the small number of locks that remained stale afterward.
+
+### Controlled fleet refresh — 43/43 completed
+
+All 43 existing August LOCK `SmartDevice` rows (0 demo, 0 missing `externalDeviceId`, 0 duplicates) were refreshed via the existing per-row Production "Refresh telemetry" action, executed in bounded groups, per-device outcome visible throughout. Post-refresh read-only Production audit:
+
+| Metric                          | Pre-refresh | Post-refresh |
+| ------------------------------- | ----------- | ------------ |
+| Total                           | 43          | 43           |
+| ONLINE                          | 4           | 4            |
+| OFFLINE                         | 0           | 0            |
+| UNKNOWN                         | 39          | 39           |
+| Stale provider telemetry (>24h) | 13          | 5            |
+| No provider telemetry           | 0           | 0            |
+
+Low battery (<20%), unchanged in count (3) but each reading independently confirmed fresh via the refresh:
+
+- Camingo — Camingo - Front Door: 13%
+- Casa Blanca — Casa Blanca - Front Door: 13%
+- Las Sirenas — Las Sirenas - Front Door: 12%
+
+### The remaining 5 stale locks — individually diagnosed, confirmed provider-side
+
+The 5 locks that stayed stale after the full-fleet refresh:
+
+- Aloha by the Sea — Aloha Backup - Front Door
+- Casa Del Mar — Front Door
+- Coco Vista — Coca Vista - Front Door
+- Palm Haven — Front Door
+- Royal Eden — garage Door
+
+A dedicated read-only diagnostic (local-only script, never committed) called August's real `GET /locks/{lockId}` exactly once per lock (5 requests total, no retries) using the correctly-resolved `yale_august` account brand — an earlier attempt at this same diagnostic had used the wrong brand configuration due to a one-off credential-parsing bug in how that attempt's shell command read local env values (quotes weren't stripped), which produced 5 unrelated `HTTP 403` transport failures; that attempt's results were discarded as invalid before any conclusion was drawn from them, and no code change was involved in fixing it — only the shell invocation.
+
+With the correct brand, all 5 requests returned **HTTP success**. In every case, the response's `batteryInfo.infoUpdatedDate` was the **exact same timestamp already stored** in StayWhile's database — not omitted, not older, not newer. Two of the five (Aloha Backup, Casa Del Mar) additionally returned August's own "no battery reading" sentinel for `battery`; the other three (Coco Vista, Palm Haven, Royal Eden) returned a valid, present battery reading alongside that same unchanged timestamp.
+
+**Conclusion: the remaining staleness on these 5 locks is confirmed provider-side — August's own backend has not produced a newer `batteryInfo.infoUpdatedDate` for these specific devices, regardless of how many times a scoped refresh requests it. This is not a StayWhile refresh/write bug** — the refresh code correctly wrote exactly what August returned, request after request; there was simply nothing newer available to write. Royal Eden's garage door in particular has not reported fresh telemetry to August itself since 2023.
+
+### Conclusions
+
+- The August full-fleet refresh capability is proven working end-to-end in Production: 43/43 rows refreshed, telemetry freshness measurably improved (13 → 5 stale), with per-device outcomes visible throughout and no unrelated write.
+- The 5 remaining stale locks are a documented, provider-side exception, not an open StayWhile defect — re-running a refresh against them would not be expected to change their result unless August's own backend produces newer telemetry for that specific device.
+- **Automatic August re-sync remains NOT IMPLEMENTED** — unchanged from prior increments; this session added a manual bulk-refresh capability (Server Action + UI, capped at 5 ids per invocation, operator-gated between groups), not an automatic/scheduled one.
+- **No physical lock actions were performed at any point in this session** — no lock/unlock/PIN capability exists in this codebase, and the diagnostic script used here calls only the same already-audited, read-only `GET /locks/{lockId}` endpoint every other August refresh path uses.
+
+### What did NOT happen this increment
+
+No credential value (access token, install ID, identifier, or any other secret) is recorded in this file or was exposed in this session. No raw August response body was printed by the diagnostic at any point — only derived, non-secret fields (presence booleans, normalized values, timestamp comparison). No discovery, mapping, `ProviderDevice` write, or legacy Sync Now occurred. No database write occurred during the diagnostic (read-only throughout). No commit/push/deploy occurred as part of the diagnostic runs themselves.
+
+### Safety rules — reaffirmed, unchanged by this increment
+
+- No credential/secret value is ever written into this file.
+- No lock/unlock/PIN capability exists or was invoked.
+- No fuzzy/automatic device-property mapping — unaffected by this increment, not touched.
+- Production DB access for this increment's diagnostics was read-only throughout, verified against the expected Production Supabase project identity before each run.
+
+### Files changed this increment
+
+`HANDOFF.md` only.
+
+## Increment 88 — 2026-09-16 (same day): Final Notion completion audit against HANDOFF/third-meeting requirements/Increment 87's actual code; additional safe local work completed (test coverage, one real race-condition fix, a scoped Production-permission bootstrap script); n8n architecture question resolved by design decision; Production approval package prepared — nothing committed/pushed/deployed/migrated/registered
+
+### Purpose
+
+At the client's explicit direction: before accepting "everything remaining is blocked on Kenny/Michelle or Production approval," audit Increment 87's actual code (not just its own HANDOFF claims) against the third-meeting requirements, find and complete any further safe local work, resolve the n8n architecture question if resolvable without a real workflow, and prepare an exact Production approval package. Everything below was verified by directly reading the real source files and prisma schema, not by re-reading HANDOFF's own prior claims.
+
+### A. Final Notion completion matrix
+
+Legend: [x] done + Production-verified · [L] built/tested locally only · [?] waiting Kenny/Michelle decision · [A] waiting explicit Production/external approval · [ ] not built.
+
+| Item                                           | Status                                  | Evidence                                                                                                                                                                                                                                                                       |
+| ---------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Production connection                          | [x]                                     | Increment 84                                                                                                                                                                                                                                                                   |
+| Property Listings 35/35                        | [x]                                     | Increment 84                                                                                                                                                                                                                                                                   |
+| Search                                         | [x]                                     | Increment 75/84                                                                                                                                                                                                                                                                |
+| In-dashboard detail viewing                    | [L]                                     | `NotionDetailView.tsx` verified read-only, no editable control renders                                                                                                                                                                                                         |
+| Property Listing → detail flow                 | [L]                                     | `NotionListingsSearch.tsx` wires `openListing.visibleFields` into the detail view, verified by direct code read                                                                                                                                                                |
+| Search result → detail flow                    | [L]                                     | `NotionSearch.tsx` wires only `{label:"Preview", value: snippet}` — never a raw record                                                                                                                                                                                         |
+| Standard operational information display       | [L]                                     | 10 fields, all `standard`, unchanged from the already-Production-verified set                                                                                                                                                                                                  |
+| Sensitive operational information architecture | [L]                                     | Mechanism exists (`sensitive` tier + `notion:manage` gate), **now fail-closed by construction, not by coincidence** (Increment 89 — see below); zero sensitive fields modeled — Michelle's lockbox/router/service-provider fields still unconfirmed against live Notion schema |
+| Visibility RBAC                                | [L]                                     | `selectVisibleNotionFields()` is the only place fields are selected server-side; verified no bypass in the two callers                                                                                                                                                         |
+| Edit RBAC                                      | [L]                                     | `notion:update` asserted first line of `updateNotionField()`; verified via test                                                                                                                                                                                                |
+| Edit allowlist                                 | [ ]                                     | Deliberately empty; `[?]` waiting Kenny/Michelle field decision                                                                                                                                                                                                                |
+| Real Notion write path                         | [ ]                                     | `NotionClient.updatePageProperty()` is a real `NotImplementedError` throw — verified in source, not just commented                                                                                                                                                             |
+| Server-side validation                         | [L]                                     | `fieldValueSchemaFor()` — now directly unit-tested (Increment 88), previously untested                                                                                                                                                                                         |
+| Conflict protection                            | [L]                                     | Stale-`lastEditedTime` check — now tested via simulated allowlist (Increment 88), previously untested                                                                                                                                                                          |
+| Audit logging                                  | [L]                                     | `recordAudit()` call verified present on the success path only, correct before/after shape — tested                                                                                                                                                                            |
+| Save success/failure UX                        | [L]                                     | `updateNotionFieldAction()` exists; **not wired to any UI** — no Save button/form calls it anywhere today (verified: `NotionDetailView.tsx` renders no editable control)                                                                                                       |
+| Webhook verification                           | [L]                                     | HMAC-SHA256 + constant-time compare, correct length-check-before-compare order — verified in source and tests                                                                                                                                                                  |
+| Change monitoring                              | [L]                                     | Full pipeline verified: verify → parse → classify → exclude → dedupe → store                                                                                                                                                                                                   |
+| Delete/archive monitoring                      | [L]                                     | `page.deleted`/`page.undeleted`/equivalents in the event-type enum, classifier handles both — confirmed against Notion's live docs                                                                                                                                             |
+| Recent Notion Activity                         | [L]                                     | Verified: never renders `entityId`; Server Component, so that field never reaches the client at all                                                                                                                                                                            |
+| n8n participation/architecture                 | [x] resolved (design decision, no code) | See "n8n workflows" in the master checklist above                                                                                                                                                                                                                              |
+| Production webhook registration                | [A]                                     | Requires a public HTTPS URL + Notion's handshake — explicitly held for approval                                                                                                                                                                                                |
+| Production DB migration                        | [A]                                     | One additive `CREATE TABLE` + 2 indexes, zero risk to any existing table — ready, not applied                                                                                                                                                                                  |
+| Production deployment                          | [A]                                     | Ready; exact scoped file list in section F below                                                                                                                                                                                                                               |
+| Production end-to-end verification             | [ ]                                     | Cannot happen before deployment                                                                                                                                                                                                                                                |
+
+**Nothing above is claimed Production-verified. Nothing is claimed complete.** The only status change from Increment 87 is: three items moved from "untested-but-built" to "built-and-tested" (validation, conflict-check, the write-stub safety net), one real bug was fixed (webhook dedupe race), and the n8n question moved from open to resolved-by-design.
+
+### B. Additional safe work found and completed (no business decision, no Production/external mutation)
+
+1. **Closed a real test-coverage gap.** `updateNotionField()`'s conflict/validation/provider-error/success branches were structurally unreachable by every existing test (allowlist is empty, so every prior test hit `not_editable` first). Added `notion-edit.schema.test.ts` (9 tests) and extended `notion-edit.service.test.ts` (+6 tests, using a per-test-mocked `findEditAllowlistEntry` — the real, still-empty allowlist file is untouched) to prove those branches are correct _before_ a field is ever approved, including a specific test proving a real call into the `NotImplementedError` stub is caught cleanly, not left to crash.
+2. **Found and fixed a real (minor) race condition.** `processNotionWebhookEvent()`'s dedupe (`findUnique` then `create`) is not atomic; a concurrent duplicate delivery could hit an uncaught Prisma `P2002` and 500 instead of returning `duplicate`. Fixed using this codebase's existing, already-tested `isUniqueConstraintViolation()` helper (reused from `ownerrez-link.service.ts`, not duplicated). +2 tests.
+3. **Wrote (but did not run against Production) a scoped RBAC bootstrap script**, `packages/database/scripts/grant-notion-permissions.ts` — see section E.
+4. **Documented, did not silently fix**, one forward-looking design gap: the full `NotionListingRecord` (not just `visibleFields`) reaches the client-bound `NotionListingWithVisibility` object today, because the existing already-verified table reads those same fields directly. Zero live risk today (no `sensitive` field exists in the type yet) — but the visibility filter's own "never reaches the browser at all" claim depends on this being fixed before the first sensitive field is added. Deliberately not touched this session — it would mean changing the already-Production-verified listings table's own data flow, which deserves its own reviewed pass.
+5. **Re-confirmed, did not just re-assert**, several of HANDOFF's existing safety claims by reading the actual code: staff/contact-directory exclusion is shared between search and webhook monitoring (same constant, same Set); property association is exact-`notionPageId`-only, no inference; Recent Activity never renders or ships `entityId` to the client; search snippets are never page/block body content.
+6. **Re-confirmed a real, still-open gap**: no non-admin/non-ops_manager seeded role can reach `/notion` at all (unchanged since Increment 75) — recorded again in section D, since it blocks the client's actual end goal regardless of everything else here.
+
+### C. Exact tests/results (this increment, forced fresh)
+
+- `apps/website/src/domains/integrations` suite: **183/183 passing** (was 166; +17 from items B1/B2 above).
+- `packages/integrations/src/notion`: 46/46 passing (unchanged).
+- `packages/auth`: 21/21 passing (unchanged).
+- Full `apps/website` suite: **890/893 passing** — the same 3 pre-existing failures as Increment 87, in `OwnerRezConfirmLinkPanel.test.tsx` (unrelated OwnerRez component, not touched this session or Increment 87 — independently re-confirmed unchanged).
+- `npx tsc --noEmit -p apps/website/tsconfig.json`: clean (one real error introduced by this session's own new test file was found and fixed before this run).
+- `eslint` on every file touched this increment: 0 errors, 1 warning found and fixed (import ordering in `notion-webhook-event.service.ts`).
+- `next build` (with placeholder `N8N_*` env values, matching Increment 87's own documented method): **succeeds, all 27 routes**, including `/notion` and `/api/webhooks/notion`. Without the placeholder values, the build fails at the same pre-existing, unrelated `/api/webhooks/n8n` env-validation step Increment 87 already documented — confirmed unrelated to Notion, not a regression.
+- `grant-notion-permissions.ts`: executed **twice against the local dev database only** (never Production) — confirmed idempotent, confirmed it touches only `permission`/`role`/`role_permission` rows (zero property/reservation/task/user rows affected).
+
+### D. Remaining Kenny/Michelle decisions — smallest set
+
+**Visibility**
+
+- Which operational fields (beyond the 10 already live) should appear in the detail view?
+- Who may see lockbox/access-code-class information?
+- Which roles may see other sensitive operational information?
+
+**Editing**
+
+- Which exact fields may be edited?
+- Which roles may edit them?
+- Should changes require confirmation before saving?
+
+**Alerts**
+
+- Dashboard only, or Dashboard + Slack?
+- If Slack: who receives the alerts?
+
+**Delete/archive**
+
+- Keep dashboard delete/archive disabled? **Default remains YES**, per this file's standing recommendation.
+
+**One item outside the client's original four buckets, but blocking the actual end goal**: which real seeded role (or a new one) StayWhile's VAs/ops team sign in as — today, only `admin` and `ops_manager` can reach `/notion` at all.
+
+### E. Exact Production approval package — safest sequence, determined by inspecting the real deployment/RBAC architecture, not assumed
+
+This order matters and is not the naive "commit → deploy → migrate" order — determined by tracing what actually breaks if steps run out of order:
+
+1. **Apply the Prisma migration to Production** (`prisma migrate deploy`, same method as every migration since Increment 23's cutover): adds `notion_page_events` — one `CREATE TABLE` + 2 indexes, touches no existing table/row. Do this **before** step 2, so the already-Production-verified `/notion` page (35/35 listings, search) is never at risk of hitting a query against a table that doesn't exist yet.
+2. **Commit exactly the scoped file list in section F**, push to `main`. Vercel auto-deploys on push (established pattern, every prior increment). At this point: existing search/listings are unaffected (nothing new reads/writes anything they touch); the new code paths (detail view, edit foundation, webhook route, Recent Activity) are live but **inert for every real user** — `notion:read`/`notion:update`/`notion:manage` don't exist as real grants in Production yet (RBAC here is fully database-driven, not code-constant-driven — confirmed by reading `packages/auth/src/rbac.ts`), so `hasPermission(actor, "notion:read")` returns `false` for everyone including admin until step 4, and the Recent Activity section simply doesn't render (verified: `page.tsx` skips calling `listRecentNotionActivity()` entirely when that check is false — no crash risk either way).
+3. **Read-only Production smoke test**: re-verify Search + 35/35 Property Listings still work exactly as before (regression check — should be unaffected); open a real listing's new in-dashboard detail view and confirm it renders the same fields already visible in the table (read-only click, zero mutation); confirm no console/network errors on `/notion`.
+4. **Only once step 3 passes**, run `packages/database/scripts/grant-notion-permissions.ts` (section B3/E) against Production — **not** the full `seed.ts`, which would reintroduce `DEMO-001`/`DEMO-002` and other demo rows explicitly excluded at cutover. This is the step that actually grants `notion:read` to `ops_manager` (and all `notion:*` to `admin`, preserving admin's existing "full access" invariant for this new resource).
+5. **Re-verify Recent Notion Activity renders** (correctly empty) for an `ops_manager`/`admin` account, and that Search/Listings/detail-view are still unaffected.
+6. **Explicitly do NOT, without a separate approval on each**: populate `NOTION_EDIT_ALLOWLIST` (waiting on Kenny/Michelle's field decision — section D), register a real Notion webhook subscription (needs a public HTTPS URL + Notion's one-time handshake, and the resulting `verification_token` needs to be retrieved from Vercel's function logs promptly and set as `NOTION_WEBHOOK_VERIFICATION_TOKEN` — an operational step, not a code change), or create/activate any n8n workflow (per the resolved architecture decision above, none is needed for this feature at all).
+
+### F. Exact files that would be committed (Notion-scoped only — verified via `git diff`/`git status`, excludes every unrelated uncommitted file already in this working tree)
+
+Modified:
+`apps/website/app/(dashboard)/notion/page.tsx`, `apps/website/src/domains/integrations/actions.ts`, `apps/website/src/domains/integrations/components/{NotionListingsSearch.tsx,NotionListingsSearch.test.tsx,NotionSearch.tsx}`, `apps/website/src/domains/integrations/services/integrations.service.ts`, `packages/auth/src/permissions.ts`, `packages/database/prisma/{schema.prisma,seed.ts}`, `packages/integrations/src/notion/{client.ts,client.test.ts,types.ts}`.
+
+New:
+`apps/website/app/api/webhooks/notion/route.ts`, `apps/website/src/domains/integrations/components/{NotionDetailView.tsx,NotionRecentActivity.tsx,NotionRecentActivity.test.tsx}`, `apps/website/src/domains/integrations/config/{notion-edit-allowlist.ts,notion-field-visibility.ts,notion-field-visibility.test.ts}`, `apps/website/src/domains/integrations/schemas/{notion-edit.schema.ts,notion-edit.schema.test.ts,notion-webhook-event.schema.ts}`, `apps/website/src/domains/integrations/services/{notion-activity.service.ts,notion-activity.service.test.ts,notion-edit.service.ts,notion-edit.service.test.ts,notion-webhook-classify.ts,notion-webhook-classify.test.ts,notion-webhook-event.service.ts,notion-webhook-event.service.test.ts,notion-webhook-signature.ts,notion-webhook-signature.test.ts,notion-webhook-verification.service.ts,notion-webhook-verification.service.test.ts}`, `packages/database/prisma/migrations/20260915211143_add_notion_page_event/migration.sql`, `packages/database/scripts/grant-notion-permissions.ts`.
+
+**Explicitly excluded** (pre-existing, unrelated, untouched, still uncommitted from earlier sessions — not part of any Notion commit): `.env.example`, `.gitignore`, `apps/website/app/(dashboard)/layout.tsx` (sign-out button, Increment 22), the Cielo rich-telemetry files (`packages/integrations/src/cielo/*`), the thermostat/provider-devices service changes, every `packages/database/*.mjs` one-off diagnostic script, the `_tmp-*.mjs` files, `thermostat-permission-gating.test.ts`, and the two `.claude/worktrees/` directories. `HANDOFF.md` itself is updated separately, as always, never bundled into a feature commit.
+
+### G. HANDOFF contradictions found this increment
+
+**None requiring correction.** The one real historical contradiction on record (Increment 75/76's "Production-verified" search claim vs. the Sep 9, 2026 meeting notes' "still pending" statement) was already explicitly resolved by Increment 84's direct Production verification — re-checked this increment, still correctly resolved, not reopened. No other internal inconsistency was found in the Notion section during this audit.
+
+### H. Assessment: are we genuinely at the Production approval boundary?
+
+**Yes, for the code.** Every remaining code-shaped task that could be done without a business decision or a real external/Production mutation has now been done — including two items (test coverage for dead-but-important branches, a real concurrency bug) that weren't previously identified as safe work still available, and one architecture question (n8n) that was open only because it hadn't been explicitly resolved, not because it was actually ambiguous.
+
+**No, for the feature as the client actually experiences it.** Even with full approval on every step in section E, the result is still: search/listings exactly as they are today, a working read-only detail view, an empty (correctly so) Recent Activity feed, and a Notion webhook that isn't registered yet. Nothing becomes _editable_, no alert is ever sent, and no VA/ops-team role can reach any of it — those are not implementation gaps, they are the four items in section D. **The honest framing for the client: "local build is finished and audited; the next concrete step is your approval on section E's sequence, and in parallel, your answers to section D — both can happen independently, neither blocks the other."**
+
+### What did NOT happen this increment
+
+No commit, push, deploy, migration, Notion webhook registration, n8n workflow creation/activation, or Production database mutation of any kind. `grant-notion-permissions.ts` was run only against the local dev database. No Cielo/August/OwnerRez/Nest/Honeywell/Trane/sortable-columns work was started, per explicit instruction.
+
+### Files changed this increment
+
+`apps/website/src/domains/integrations/schemas/notion-edit.schema.test.ts` (new), `apps/website/src/domains/integrations/services/notion-edit.service.test.ts` (extended), `apps/website/src/domains/integrations/services/notion-webhook-event.service.ts` (bug fix), `apps/website/src/domains/integrations/services/notion-webhook-event.service.test.ts` (extended), `packages/database/scripts/grant-notion-permissions.ts` (new, not executed against Production), `HANDOFF.md`.
+
+## Increment 89 — 2026-09-16 (same day): client-payload security boundary hardened — Notion listing DTO is now fail-closed by construction, not by coincidence of today's all-standard field set; regression suite added; Production approval package re-confirmed unchanged in sequence, updated in file list — still nothing committed/pushed/deployed/migrated/registered
+
+### Purpose
+
+Increment 88 flagged, but deliberately did not fix, one forward-looking design gap: `NotionListingWithVisibility` was `NotionListingWithRegion & { visibleFields, propertyContext }` — an intersection, so the full raw `NotionListingRecord` (every field Notion returned) reached the client component tree alongside the server-filtered `visibleFields` array, because the existing table read those same fields directly. Zero live risk existed (no `sensitive` field is modeled in `NotionListingRecord` yet), but the client's explicit requirement is that the guarantee must not depend on that — Michelle's confirmed future sensitive fields (lockbox/access-code, router/internet, service-provider info) must never be one accidental "spread `item`" refactor away from reaching the browser. This increment closes that gap.
+
+### A. Exact security issue fixed
+
+The client-bound Notion listing object carried every field of the raw provider record, not just the fields the server-side visibility policy had approved for the current actor. The existing components happened to only _render_ the approved `visibleFields` array, but nothing stopped a field from being _sent_. This was "sent but not rendered," not "never sent" — the requirement is the latter.
+
+### B. Exact architecture before vs after
+
+**Before:**
+
+```
+Notion provider record (NotionListingRecord)
+  → spread wholesale into NotionListingWithVisibility ({...item, visibleFields, propertyContext})
+  → passed to client component (NotionListingsSearch)
+  → component reads item.address / item.bedrooms / ... directly (all fields present)
+  → component ALSO reads item.visibleFields for the generic detail dialog
+```
+
+Any field ever added to `NotionListingRecord` (including a future `sensitive` one) would reach the browser automatically — being excluded from `visibleFields` only meant "not shown in the dialog," never "not sent."
+
+**After:**
+
+```
+Notion provider record (NotionListingRecord)  [server-side only, never crosses the boundary]
+  → selectVisibleNotionFields(record, {canSeeSensitiveFields})   [one filter pass — notion-field-visibility.ts]
+      → { fields: Partial<NotionListingRecord>, list: NotionVisibleField[] }   [only authorized keys, either representation]
+  → buildNotionListingClientDto(record, context, propertyContext)   [integrations.service.ts — the ONLY place the client DTO may be built]
+      → NotionListingWithVisibility { id, url, lastEditedTime, region, fields, visibleFields, propertyContext }
+  → passed to client component (NotionListingsSearch)
+  → component reads item.fields.address / item.fields.bedrooms / ... (only ever the authorized subset)
+```
+
+`NotionListingWithVisibility` is now a plain interface, not an intersection with the raw record type — it is structurally impossible to satisfy that interface by spreading a `NotionListingRecord` into it (TypeScript's own structural check rejects extra/mismatched shape at the one construction site, and there is only one construction site). `id`/`url`/`lastEditedTime`/`region` remain unfiltered at the top level, unchanged from before — they are structural metadata (Notion page id for the click-to-open interaction, the explicitly-approved "Open in Notion" link, conflict/staleness metadata, and an app-computed region string), never operational content, and were never in scope for the visibility allowlist.
+
+`selectVisibleNotionFields()` also gained an optional third `allowlist` parameter (defaults to the real `NOTION_VISIBILITY_ALLOWLIST` for every real caller — no production code path ever passes it) purely so tests can inject a temporary fake `sensitive` entry and prove the gating logic itself, without needing a real sensitive field to exist first.
+
+`matchesListingQuery()` (shared between the live search and the Listings table's keyword filter) now accepts `Partial<Pick<NotionListingRecord, "name"|"address"|"directBooking">>` instead of the non-optional `Pick<...>`, since the client now only ever holds the filtered `fields` object, where an unauthorized key is genuinely absent (not present-with-null).
+
+`searchNotionContent()`'s `NotionSearchResultCard` was already a safe DTO by construction (built key-by-key, never a spread of a Notion object) — verified by direct code read, not changed, and now has a regression test locking that in (section C, item 5).
+
+### C. Tests/results
+
+New/extended tests, mapped to the 9 requirements:
+
+1. **A field not in the visibility allowlist cannot appear in the client DTO** — `notion-field-visibility.test.ts`: "never includes a field absent from the allowlist, even though it's present on the source record" (checks `id`/`url`/`lastEditedTime`, which exist on the record but never in the allowlist).
+2. **A sensitive field cannot reach a standard-role client payload** — `notion-field-visibility.test.ts`, simulated-sensitive-field block: "excludes the simulated sensitive field for an actor without canSeeSensitiveFields."
+3. **A hypothetical sensitive field doesn't auto-leak** — same block: "a field present on the record but absent from EVERY allowlist entry never appears, regardless of role"; "includes the simulated sensitive field only for an actor WITH canSeeSensitiveFields" (proves the gate works in both directions, not just fail-closed-always).
+4. **Property Listings still receive all 10 approved standard fields** — `notion-field-visibility.test.ts` ("includes exactly the 10 currently-approved standard fields, with their real values") and `integrations.service.test.ts` ("carries every standard field into dto.fields with real values").
+5. **Search results still expose only approved preview information** — new `integrations.service.test.ts` test: a simulated richer provider payload (`pageContent`, `rawProperties.lockbox_code`) is proven absent from the resulting card via an exact-key-set check and a `JSON.stringify` substring check.
+6. **Detail view still works from the safe DTO** — `NotionListingsSearch.test.tsx`'s full existing suite (14 tests, all still passing against the new `item.fields.*` wiring) plus the shared `NotionDetailView` itself, unchanged.
+7. **Recent Activity exposes no raw Notion content/value/entity ID** — new `NotionRecentActivity.test.tsx` test: renders an item with a realistic-looking raw entity id and asserts it never appears in `container.textContent`.
+8. **Existing database exclusions remain preserved** — untouched code path, existing `notion-search-exclusions.test.ts` (8 tests) and the webhook classifier's own exclusion test both still pass unchanged.
+9. **No raw Notion provider object is passed to a Client Component** — `integrations.service.test.ts`, `buildNotionListingClientDto` block: "never returns the input record itself, and the returned object has no property equal to it" (`toBe`/`Object.values(...).not.toContain` identity checks, not just a deep-equality check that a coincidental duplicate could pass).
+
+Full results, forced fresh:
+
+- `apps/website/src/domains/integrations` suite: **196/196 passing** (up from 183 at Increment 88; +13 — 6 new field-visibility tests, 6 new `buildNotionListingClientDto`/search-DTO tests, 1 new Recent Activity test).
+- Full `apps/website` suite: **900/903 passing** — same 3 pre-existing, unrelated `OwnerRezConfirmLinkPanel` failures as every prior increment, independently re-confirmed unchanged.
+- `packages/integrations/src/notion`: 46/46 (unchanged — this package's own client/types weren't touched this increment).
+- `packages/auth`: 21/21 (unchanged).
+- `npx tsc --noEmit -p apps/website/tsconfig.json`: clean (two real type errors from the refactor itself — a dynamic-keyof assignment in `notion-field-visibility.ts` and an `undefined`-vs-`null` mismatch in `notion-listing-match.ts` — were found and fixed before this run, not left for CI to catch).
+- `eslint` on every touched file: 0 errors (a few pre-existing, unrelated `import/order` warnings remain in files whose import blocks this work didn't restructure, same pattern as every prior increment's build output).
+- `next build` (placeholder `N8N_*` env values, same documented method): succeeds, all 27 routes, `/notion` bundle 3.07kB → 3.13kB (expected, from the added indirection).
+
+### D. Exact files changed this increment
+
+Modified: `apps/website/app/(dashboard)/notion/page.tsx`, `apps/website/src/domains/integrations/components/NotionListingsSearch.tsx`, `apps/website/src/domains/integrations/components/NotionListingsSearch.test.tsx`, `apps/website/src/domains/integrations/services/integrations.service.ts`, `apps/website/src/domains/integrations/services/integrations.service.test.ts`, `apps/website/src/domains/integrations/services/notion-listing-match.ts`.
+Further edited (already new/untracked since Increment 87, content changed again): `apps/website/src/domains/integrations/config/notion-field-visibility.ts`, `apps/website/src/domains/integrations/config/notion-field-visibility.test.ts` (rewritten), `apps/website/src/domains/integrations/components/NotionRecentActivity.test.tsx` (one test added).
+`HANDOFF.md`.
+
+**Confirmed via `git status --porcelain -uall` (full listing inspected): every Cielo/August/Nest/OwnerRez/thermostat file, both `.claude/worktrees/` directories, and every `packages/database/*.mjs`/`_tmp-*` diagnostic script remain exactly as they were — untouched by this increment, same as Increment 87/88.**
+
+### E. Updated Production approval package
+
+**Sequence unchanged from Increment 88** — still: (1) migrate, (2) commit exact file list + push (Vercel auto-deploys), (3) read-only smoke test, (4) run `grant-notion-permissions.ts` against Production (not full `seed.ts`), (5) re-verify Recent Activity, (6) explicitly withhold edit allowlist / webhook registration / any n8n workflow. Only the **file list** in step 2 changes — see the cumulative, exact list below (supersedes Increment 88's section F).
+
+**Exact files that would be committed (Notion-scoped only, cumulative across Increments 87–89):**
+
+Modified (14): `apps/website/app/(dashboard)/notion/page.tsx`, `apps/website/src/domains/integrations/actions.ts`, `apps/website/src/domains/integrations/components/{NotionListingsSearch.tsx,NotionListingsSearch.test.tsx,NotionSearch.tsx}`, `apps/website/src/domains/integrations/services/{integrations.service.ts,integrations.service.test.ts,notion-listing-match.ts}`, `packages/auth/src/permissions.ts`, `packages/database/prisma/{schema.prisma,seed.ts}`, `packages/integrations/src/notion/{client.ts,client.test.ts,types.ts}`.
+
+New (23): `apps/website/app/api/webhooks/notion/route.ts`, `apps/website/src/domains/integrations/components/{NotionDetailView.tsx,NotionRecentActivity.tsx,NotionRecentActivity.test.tsx}`, `apps/website/src/domains/integrations/config/{notion-edit-allowlist.ts,notion-field-visibility.ts,notion-field-visibility.test.ts}`, `apps/website/src/domains/integrations/schemas/{notion-edit.schema.ts,notion-edit.schema.test.ts,notion-webhook-event.schema.ts}`, `apps/website/src/domains/integrations/services/{notion-activity.service.ts,notion-activity.service.test.ts,notion-edit.service.ts,notion-edit.service.test.ts,notion-webhook-classify.ts,notion-webhook-classify.test.ts,notion-webhook-event.service.ts,notion-webhook-event.service.test.ts,notion-webhook-signature.ts,notion-webhook-signature.test.ts,notion-webhook-verification.service.ts,notion-webhook-verification.service.test.ts}`, `packages/database/prisma/migrations/20260915211143_add_notion_page_event/migration.sql`, `packages/database/scripts/grant-notion-permissions.ts`.
+
+Explicitly excluded — unchanged from Increment 88: `.env.example`, `.gitignore`, the sign-out button (`layout.tsx`), Cielo rich telemetry, thermostat/provider-devices changes, every `packages/database/*.mjs` script, `_tmp-*` files, `thermostat-permission-gating.test.ts`, both worktree directories.
+
+### F. Remaining Kenny/Michelle decisions
+
+**Unchanged from Increment 88, section D** — visibility (which fields, who sees sensitive info), editing (which fields/roles, confirm-before-save), alerts (dashboard vs. +Slack, recipients), delete/archive (stays disabled), and the still-open VA/ops-team role-access question. This increment was a pure security-hardening fix, not new scope — it doesn't add or resolve any client-facing decision.
+
+### G. Is all safe local Notion work now genuinely complete?
+
+**Yes.** Every item on the client's explicit checklist (this message's 9 numbered inspection points plus the earlier completion audit) has been verified against the real code, not re-asserted from a prior increment's claims. The one real gap found across both audits — the client-payload boundary — is now fixed and regression-tested. No further safe-without-a-business-decision, safe-without-a-Production-mutation Notion work is currently known. The next actions are exactly Increment 88's section E (Production approval) and section D/this increment's section F (Kenny/Michelle decisions) — both still outstanding, neither blocking the other.
+
+### What did NOT happen this increment
+
+No commit, push, deploy, migration, Notion webhook registration, n8n workflow creation/activation, Production database mutation, edit-allowlist population, or sensitive-field exposure of any kind. No Cielo/August/OwnerRez/Nest/Honeywell/Trane/sortable-columns work was started.
+
+### Files changed this increment
+
+See section D above, plus `HANDOFF.md`.

@@ -1,6 +1,6 @@
 import type { SyncDirection } from "@stayw/database/enums";
 
-import { HttpClient } from "../core";
+import { HttpClient, NotImplementedError } from "../core";
 import type {
   BaseIntegrationClient,
   IntegrationCapability,
@@ -22,6 +22,7 @@ import type {
 } from "./types";
 
 export type {
+  NotionEditableFieldType,
   NotionHighlight,
   NotionDataSourceQueryResult,
   NotionListingRecord,
@@ -189,6 +190,7 @@ function mapListingRecord(row: NotionDataSourceRow): NotionListingRecord {
       props[LISTING_PROPERTY.googleDrivePhotosUrl],
     ),
     guidebookUrl: extractUrlValue(props[LISTING_PROPERTY.guidebookUrl]),
+    lastEditedTime: row.last_edited_time ?? null,
   };
 }
 
@@ -473,5 +475,28 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
     }
 
     return rows.map(mapListingRecord);
+  }
+
+  /**
+   * NOT YET IMPLEMENTED — deliberately. The dashboard-edit foundation
+   * (RBAC, allowlist, validation, conflict check — see
+   * apps/website's notion-edit.service.ts) is built and callable, but the
+   * real edit allowlist is empty (no field/database has been approved by
+   * the client yet), so this method can never actually be reached from a
+   * real request today. Throwing here — rather than a real `PATCH
+   * /v1/pages/{id}` implementation — is a second, independent fail-closed
+   * layer on top of the empty allowlist: even a bug that somehow bypassed
+   * the allowlist check could still not perform a real Notion write,
+   * because there is no real write call to perform. Implement the real
+   * PATCH call only once specific fields are approved (same "build the
+   * real thing only when actually needed" discipline this package's own
+   * write-capability README section already documents).
+   */
+  async updatePageProperty(
+    _pageId: string,
+    _propertyKey: string,
+    _value: unknown,
+  ): Promise<never> {
+    throw new NotImplementedError("Notion", "updatePageProperty");
   }
 }

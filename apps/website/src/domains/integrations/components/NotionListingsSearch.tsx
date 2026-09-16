@@ -1,6 +1,5 @@
 "use client";
 
-import { useMemo, useState } from "react";
 import {
   Badge,
   Button,
@@ -17,6 +16,7 @@ import {
   TableRow,
 } from "@stayw/ui";
 import { Search } from "lucide-react";
+import { useMemo, useState } from "react";
 
 import {
   NOTION_REGIONS,
@@ -24,9 +24,11 @@ import {
 } from "../config/notion-region-reference";
 import type {
   IntegrationHighlights,
-  NotionListingWithRegion,
+  NotionListingWithVisibility,
 } from "../services/integrations.service";
 import { matchesListingQuery } from "../services/notion-listing-match";
+
+import { NotionDetailView } from "./NotionDetailView";
 import { isSafeHttpUrl } from "./notion-link.utils";
 
 const ALL_REGIONS_VALUE = "";
@@ -65,11 +67,12 @@ function SafeLink({ href, label }: { href: string | null; label: string }) {
 export function NotionListingsSearch({
   listings,
 }: {
-  listings: IntegrationHighlights<NotionListingWithRegion>;
+  listings: IntegrationHighlights<NotionListingWithVisibility>;
 }) {
   const [nameQuery, setNameQuery] = useState("");
   const [keywordQuery, setKeywordQuery] = useState("");
   const [region, setRegion] = useState(ALL_REGIONS_VALUE);
+  const [openListingId, setOpenListingId] = useState<string | null>(null);
 
   const allItems = listings.configured && listings.ok ? listings.items : [];
 
@@ -78,13 +81,18 @@ export function NotionListingsSearch({
     const keyword = keywordQuery.trim().toLowerCase();
 
     return allItems.filter((item) => {
-      if (name && !item.name.toLowerCase().includes(name)) return false;
+      if (name && !(item.fields.name ?? "").toLowerCase().includes(name)) {
+        return false;
+      }
 
       // Same match rule as the unified "Search Notion" feature above uses
       // for a listing (see notion-listing-match.ts) — kept as one shared,
       // tested function so the two features can never silently drift apart
-      // on what counts as a match.
-      if (keyword && !matchesListingQuery(item, keywordQuery)) return false;
+      // on what counts as a match. Matches against item.fields (the safe,
+      // already-visibility-filtered DTO), never a raw record.
+      if (keyword && !matchesListingQuery(item.fields, keywordQuery)) {
+        return false;
+      }
 
       if (region && item.region !== region) return false;
 
@@ -195,7 +203,13 @@ export function NotionListingsSearch({
             {filtered.map((item) => (
               <TableRow key={item.id}>
                 <TableCell className="font-medium text-ink">
-                  {item.name}
+                  <button
+                    type="button"
+                    onClick={() => setOpenListingId(item.id)}
+                    className="text-left underline-offset-2 hover:underline"
+                  >
+                    {item.fields.name ?? "—"}
+                  </button>
                 </TableCell>
                 <TableCell>
                   <Badge
@@ -207,37 +221,71 @@ export function NotionListingsSearch({
                   </Badge>
                 </TableCell>
                 <TableCell className="text-ink-muted">
-                  {item.address ?? "—"}
+                  {item.fields.address ?? "—"}
                 </TableCell>
                 <TableCell className="text-ink-muted">
-                  {item.bedrooms ?? "—"}
+                  {item.fields.bedrooms ?? "—"}
                 </TableCell>
                 <TableCell className="text-ink-muted">
-                  {item.bathrooms ?? "—"}
+                  {item.fields.bathrooms ?? "—"}
                 </TableCell>
                 <TableCell className="text-ink-muted">
-                  {item.guests ?? "—"}
+                  {item.fields.guests ?? "—"}
                 </TableCell>
                 <TableCell>
-                  <SafeLink href={item.directBooking} label="Book" />
+                  <SafeLink
+                    href={item.fields.directBooking ?? null}
+                    label="Book"
+                  />
                 </TableCell>
                 <TableCell>
-                  <SafeLink href={item.airbnbLink} label="Airbnb" />
+                  <SafeLink
+                    href={item.fields.airbnbLink ?? null}
+                    label="Airbnb"
+                  />
                 </TableCell>
                 <TableCell>
-                  <SafeLink href={item.vrboLink} label="VRBO" />
+                  <SafeLink href={item.fields.vrboLink ?? null} label="VRBO" />
                 </TableCell>
                 <TableCell>
-                  <SafeLink href={item.googleDrivePhotosUrl} label="Photos" />
+                  <SafeLink
+                    href={item.fields.googleDrivePhotosUrl ?? null}
+                    label="Photos"
+                  />
                 </TableCell>
                 <TableCell>
-                  <SafeLink href={item.guidebookUrl} label="Guidebook" />
+                  <SafeLink
+                    href={item.fields.guidebookUrl ?? null}
+                    label="Guidebook"
+                  />
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       )}
+
+      {(() => {
+        const openListing = openListingId
+          ? allItems.find((item) => item.id === openListingId)
+          : null;
+        return (
+          <NotionDetailView
+            open={openListing != null}
+            onClose={() => setOpenListingId(null)}
+            title={openListing?.fields.name ?? ""}
+            fields={
+              openListing?.visibleFields.map((f) => ({
+                label: f.label,
+                value: f.value,
+              })) ?? []
+            }
+            lastEditedTime={openListing?.lastEditedTime ?? null}
+            notionUrl={openListing?.url ?? null}
+            propertyContext={openListing?.propertyContext ?? null}
+          />
+        );
+      })()}
     </div>
   );
 }

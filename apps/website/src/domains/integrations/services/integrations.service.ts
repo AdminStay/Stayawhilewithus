@@ -21,11 +21,17 @@ import {
 
 export type { IntegrationConnection };
 
-import type { DisconnectIntegrationInput } from "../schemas/integrations.schema";
-import { matchesListingQuery } from "./notion-listing-match";
-import { isExcludedFromVaSearch } from "./notion-search-exclusions";
-import { resolveRegion } from "./notion-region-matching";
+import {
+  selectVisibleNotionFields,
+  type NotionVisibilityContext,
+  type NotionVisibleField,
+} from "../config/notion-field-visibility";
 import { UNKNOWN_REGION } from "../config/notion-region-reference";
+import type { DisconnectIntegrationInput } from "../schemas/integrations.schema";
+
+import { matchesListingQuery } from "./notion-listing-match";
+import { resolveRegion } from "./notion-region-matching";
+import { isExcludedFromVaSearch } from "./notion-search-exclusions";
 
 import { recordAudit } from "@/platform/audit/record-audit";
 
@@ -424,6 +430,61 @@ export async function getNotionListingsAccessProof(
 export type NotionListingWithRegion = NotionListingRecord & { region: string };
 
 /**
+ * The SAFE CLIENT DTO for a Notion listing — the only shape of a listing
+ * that may ever be passed to a client component. Deliberately NOT a
+ * `NotionListingWithRegion & {...}` intersection: that would keep every raw
+ * record field (`name`, `address`, ...) directly, unfiltered, on the
+ * object, with `visibleFields` merely an additive, easy-to-ignore extra
+ * array alongside it — exactly the "sent but not rendered" shape this type
+ * exists to rule out. `fields` is the only place a listing's Notion
+ * property values live here, and it is never anything but the `fields`
+ * returned by selectVisibleNotionFields() — see buildNotionListingClientDto
+ * below, the one function that may construct this type.
+ *
+ * `id`/`url`/`lastEditedTime`/`region` are not gated by the visibility
+ * allowlist: `id` is Notion's page identifier (structural plumbing, not
+ * operational content), `url` is the explicitly-approved "Open in Notion"
+ * fallback link, `lastEditedTime` is conflict/staleness metadata, and
+ * `region` is app-computed from the property name against a static
+ * reference list — never raw Notion content.
+ */
+export interface NotionListingWithVisibility {
+  id: string;
+  url: string | null;
+  lastEditedTime: string | null;
+  region: string;
+  /** Only the fields this actor is authorized to see. Never spread a NotionListingRecord/NotionListingWithRegion into this shape. */
+  fields: Partial<NotionListingRecord>;
+  visibleFields: NotionVisibleField[];
+  propertyContext: NotionPropertyAssociation | null;
+}
+
+/**
+ * The one and only place a NotionListingWithVisibility (the safe client
+ * DTO) may be constructed. Takes the full server-side NotionListingWithRegion
+ * (which itself must never cross the server/client boundary) and returns
+ * only what selectVisibleNotionFields() actually authorized — see that
+ * function's own doc comment for why `record` itself must never be spread
+ * into the result.
+ */
+export function buildNotionListingClientDto(
+  record: NotionListingWithRegion,
+  visibilityContext: NotionVisibilityContext,
+  propertyContext: NotionPropertyAssociation | null,
+): NotionListingWithVisibility {
+  const { fields, list } = selectVisibleNotionFields(record, visibilityContext);
+  return {
+    id: record.id,
+    url: record.url,
+    lastEditedTime: record.lastEditedTime,
+    region: record.region,
+    fields,
+    visibleFields: list,
+    propertyContext,
+  };
+}
+
+/**
  * Real, read-only, fully paginated read of every row in "View of Listings" —
  * the data source this dashboard's search/listing display is built on. Not
  * a proof read (unlike getNotionListingsAccessProof above): this returns
@@ -701,4 +762,38 @@ export async function getNotionIntegrationConfigStatus(
 ): Promise<{ configured: boolean }> {
   await assertPermission(actor, "integrations:read");
   return { configured: Boolean(process.env.NOTION_API_KEY) };
+}
+
+export interface NotionPropertyAssociation {
+  propertyId: string;
+  propertyName: string;
+}
+
+/**
+ * Confirmed Notion page ↔ StayWhile Property associations, keyed by Notion
+ * page id — reads `Property.notionPageId` only, never inferred from name/
+ * address similarity, matching the same standard already enforced for
+ * every other provider mapping in this app (August/Cielo *_PROPERTY_MAP,
+ * OwnerRez linking, Nest ProviderDevice mapping). `notionPageId` is not yet
+ * populated for any property as of this pass — this correctly returns an
+ * empty map today, so the in-dashboard detail view shows no property
+ * context for anything until a human explicitly sets this field for a
+ * specific property (a separate, not-yet-built admin action).
+ */
+export async function getConfirmedNotionPropertyAssociations(
+  actor: AuthContext,
+): Promise<Map<string, NotionPropertyAssociation>> {
+  await assertPermission(actor, "integrations:read");
+
+  const rows = await prisma.property.findMany({
+    where: { notionPageId: { not: null }, deletedAt: null },
+    select: { id: true, name: true, notionPageId: true },
+  });
+
+  const map = new Map<string, NotionPropertyAssociation>();
+  for (const row of rows) {
+    if (!row.notionPageId) continue;
+    map.set(row.notionPageId, { propertyId: row.id, propertyName: row.name });
+  }
+  return map;
 }
