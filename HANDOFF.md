@@ -64,8 +64,10 @@
 - [x] **Recent Notion Activity component renders in Production — USER-CONFIRMED PRODUCTION VERIFIED.** Precisely: the _component_ renders correctly. **Not claimed**: real Notion event ingestion — webhook registration remains disabled and there is no live event traffic, so the section is correctly showing its empty state, not "working" in the monitoring sense.
 
 - [x] **UI/UX polish (Increment 91/92/93) — desktop — USER-CONFIRMED PRODUCTION VERIFIED (2026-09-16).** The user personally inspected the real authenticated Production `/notion` UI at desktop viewport after deployment of commit `4ff39d0` and confirmed, in the real rendered page: `/notion` loads; 35/35 listings render; the redesigned 5-column table (Property/Region/Address/Capacity/Resources) renders with no horizontal scroll at desktop width; Moonlit Cove renders correctly; region badges render; Capacity is cleanly consolidated (bedrooms/bathrooms/guests); Resource links are consolidated into compact actions (Direct/Airbnb/VRBO/Photos/Guidebook), no raw URLs in the table; the Property name/Keyword/Region/Reset filter controls render in an organized area. Opening the Moonlit Cove detail modal: opens with no horizontal scrollbar; no raw URLs displayed; Property Overview renders cleanly (Bedrooms 5, Bathrooms 3, Max guests 12); Booking & Resources is clearly grouped with a clean "Open" action for each of Direct booking/Airbnb/VRBO/Photos/Guidebook; "Open in Notion" remains secondary/fallback; Last-updated info renders cleanly; no Edit/Save/Delete/Archive controls visible; no unapproved sensitive fields visible; no raw Notion JSON/internal IDs visible.
+- [x] **Modal region rendering (e.g. "SRQ") — USER-CONFIRMED PRODUCTION VERIFIED**, after a hard refresh (see below).
+- [x] **Modal address rendering (e.g. "7415 6th Ave NW, Bradenton, FL 34209") — USER-CONFIRMED PRODUCTION VERIFIED**, after a hard refresh (see below).
 - **Scope of this confirmation, stated precisely**: **desktop viewport only** — the user tested and confirmed the desktop view shown in their own screenshots. **Tablet/mobile/responsive behavior remains automated/local-verified only** (Increment 91's own test coverage + code review), **not manually Production-tested** — do not upgrade responsive/mobile to USER-CONFIRMED based on this entry.
-- **One real presentation issue found during this verification, investigated and locally fixed — see "Increment 94" at the bottom of this file for the full writeup.** The Moonlit Cove detail modal's header was missing the SRQ region badge and the property address, even though the same data renders correctly in the listings table. Investigation found the data-wiring and rendering logic were **already correct** (confirmed by direct source inspection of the exact deployed commit, and by already-passing tests) — the real, fixable issue was a **visual-consistency gap**: the modal's region badge always used the muted "neutral" tone regardless of region, while the table already used a more prominent "success" (green) tone for any known region — making the modal's badge easy to overlook by comparison. Fixed locally (badge tone now matches the table's own convention; address subtitle given slightly more visual weight) — **this fix is local only, NOT committed, NOT pushed, NOT deployed**, held for the user's review per explicit instruction.
+- **USER HARD-REFRESH VERIFICATION (resolves the apparent-missing-header investigation below): the Moonlit Cove modal header DOES render the existing approved safe DTO values in real authenticated Production — Region: SRQ, Address: 7415 6th Ave NW, Bradenton, FL 34209.** The prior apparent absence, first observed and reported during the same-day verification above, was resolved by a hard refresh of the already-live page — a stale client-side cache, not any application defect. **No data-wiring fix was required.** A local, uncommitted visual experiment was made in response to the initial report (region badge tone changed from neutral to success/green, address given more font weight) — **this was NOT approved for deployment and has been reverted**; the application code is confirmed byte-identical to what deployed commit `4ff39d0` shipped. **Current Production Increment 93 UI (including the existing neutral-tone region badge) remains the accepted, unchanged design.** Full investigation trail preserved in "Increment 94" below for the record.
 
 Earlier UI/UX polish trail (built Increment 91, re-reviewed Increment 92, committed/pushed/deployed Increment 93 as commit `4ff39d0`) — see those entries at the bottom of this file for the full history.
 
@@ -148,7 +150,8 @@ Safety requirements for any eventual implementation: explicit allowlist of edita
 [?] VA/ops-team role/access model        — OPEN, unconfirmed which real seeded role StayWhile's VAs use; cleaner/maintenance_tech/front_desk/read_only confirmed to hold zero Notion permissions in Production (Increment 90) — deliberate, not an oversight
 [x] UI/UX polish — desktop           — USER-CONFIRMED PRODUCTION VERIFIED (commit 4ff39d0, Increment 93/94) — table, filter bar, and detail modal all confirmed in the real authenticated Production UI at desktop viewport
 [~] UI/UX polish — tablet/mobile     — automated/local-verified only (Increment 91's own test coverage + code review); NOT manually Production-tested
-[~] Modal header region/address      — one real visual-consistency gap found + fixed LOCALLY (Increment 94, badge tone now matches the table's convention); fix is NOT yet committed/pushed/deployed
+[x] Modal region rendering           — USER-CONFIRMED PRODUCTION VERIFIED, after a hard refresh — no data-wiring defect; a stale client-side cache explained the earlier apparent absence
+[x] Modal address rendering          — USER-CONFIRMED PRODUCTION VERIFIED, after a hard refresh — same resolution as above
 ```
 
 **Do not call the Notion requirement complete merely because this read-only foundation is deployed.** Editing, live webhook monitoring, Slack/n8n alerting, sensitive-field exposure, and VA/ops-team access are all still either explicitly withheld or waiting on a Kenny/Michelle decision — see Increment 90's sections G/H below for the full, current punch list.
@@ -5409,3 +5412,43 @@ No commit/push/deploy of the `NotionDetailView` code fix. No Production database
 ### Files changed this increment
 
 `HANDOFF.md` (committed separately, see below). `apps/website/src/domains/integrations/components/{NotionDetailView.tsx,NotionDetailView.test.tsx}` (local only, not committed).
+
+**Correction/resolution, same day, after this increment — see "Increment 95" below for the full record.** The user performed a hard refresh of the live Production page and confirmed the Moonlit Cove modal header DOES render SRQ and the full address correctly — the apparent absence recorded above was a stale client-side cache, not an application defect, exactly as this increment's own "ruled out (D)" note anticipated as a possibility. The badge-tone/font-weight experiment described above was explicitly **not approved for deployment** and has been reverted; Production's existing neutral-tone region badge remains the accepted design. Treat this increment's "real issue found" framing as superseded by that resolution — there was no shippable issue after all, only a genuine, understandable transient cache artifact.
+
+## Increment 95 — 2026-09-16 (same day): final user hard-refresh verification resolves the Increment 94 investigation — no data-wiring bug, no design change needed; Increment 94's local badge-tone/font-weight experiment reverted; working tree confirmed byte-identical to deployed Increment 93 baseline; documentation-only commits pushed to StayWhile main
+
+### Purpose
+
+Record the user's final hard-refresh re-check of the Moonlit Cove modal (resolving Increment 94's investigation), revert the local-only visual experiment that was not approved for deployment, confirm the application code is back to exactly what's live in Production, and push the accumulated documentation-only commits.
+
+### A. Increment 94 temporary code reverted
+
+`git checkout -- apps/website/src/domains/integrations/components/NotionDetailView.tsx apps/website/src/domains/integrations/components/NotionDetailView.test.tsx` — before running, `git status` confirmed exactly those two files (and only those two) held uncommitted changes relative to `HEAD`; `git diff 4ff39d0 HEAD` for both files was already empty (HEAD's committed version matched the deployed commit exactly, since the intervening `edd7346` commit touched only `HANDOFF.md`), so the revert target was unambiguous. After the revert, `git diff 4ff39d0 -- <both files>` is empty — confirmed byte-identical to the deployed baseline.
+
+### B. Application code now matches the deployed Increment 93 baseline
+
+Confirmed via direct diff against commit `4ff39d0` (empty) — not assumed.
+
+### C. Tests after revert
+
+`NotionDetailView.test.tsx`: **8/8** (back from 10 — the 2 tone-specific tests were part of the reverted experiment, not committed separately, so nothing needed explicit removal beyond the file revert itself). Full `apps/website/src/domains/integrations` suite: **211/211** (back from 213, matching Increment 93's own deployed count exactly). `npx tsc --noEmit -p apps/website/tsconfig.json`: clean. `eslint` on both files: 0 errors/warnings.
+
+### D/H. Final HANDOFF wording/status
+
+See the master checklist's Notion section (top of this file) for the corrected wording, now stating plainly: modal region and address rendering are USER-CONFIRMED PRODUCTION VERIFIED after a hard refresh; no data-wiring fix was required; the temporary visual experiment was not approved and was reverted; current Production Increment 93 UI (unchanged) remains the accepted design.
+
+### E/F. Documentation commits and push
+
+Two documentation-only commits were pending push at the start of this increment (`edd7346`, from Increment 94) plus this increment's own correction. Both were staged as `HANDOFF.md`-only changes, reviewed via `git diff --cached`, and pushed together via `git push origin main` over the dedicated `github-staywhile` SSH remote — no `gh`, no `vercel`, no Client B identity involved at any point. **Exact commit SHA(s) and push result recorded in the response returned to the user this turn**, since this file cannot record its own final commit hash before that commit is made.
+
+### G. Final git status for Notion/HANDOFF files
+
+`apps/website/src/domains/integrations/components/NotionDetailView.tsx` and `.test.tsx`: clean, matching `HEAD`/`4ff39d0` exactly, zero uncommitted changes. `HANDOFF.md`: clean after this increment's commit. No other Notion-domain file was touched. All pre-existing unrelated dirty/untracked files (Cielo, thermostat, sign-out button, worktrees, diagnostic scripts) remain exactly as they have been throughout this entire Notion workstream — confirmed, not assumed.
+
+### What did NOT happen this increment
+
+No new application-code change (the revert restored exactly the already-deployed code, nothing new). No Production database mutation. No RBAC/migration/webhook/n8n change. No `gh api` or other authenticated GitHub CLI use. No `vercel login/link/pull`. No deployment-configuration change. A documentation-only push may trigger Vercel's normal pipeline to rebuild from the new HEAD — since the application code at that HEAD is unchanged from the already-deployed `4ff39d0`, no application behavior is expected to change as a result.
+
+### Files changed this increment
+
+`HANDOFF.md` only. `NotionDetailView.tsx`/`.test.tsx` were reverted, not changed — confirmed byte-identical to the already-deployed, already-committed version.
