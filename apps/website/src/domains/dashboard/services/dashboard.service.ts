@@ -28,6 +28,7 @@ import {
   listSmartDevices,
 } from "@/domains/smart-devices/services/smart-devices.service";
 import { listTasks } from "@/domains/tasks/services/tasks.service";
+import { getTeamAvailabilitySnapshot } from "@/domains/team/services/schedule.service";
 
 /**
  * Resolves to `[]` when the actor lacks the underlying permission, rather
@@ -101,6 +102,7 @@ export async function getDashboardSummary(actor: AuthContext) {
     recentlyRescheduledCleanings,
     notionHighlights,
     ownerRezHighlights,
+    teamAvailability,
   ] = await Promise.all([
     safeList(() => listProperties(actor)),
     safeList(() => listGuests(actor)),
@@ -121,6 +123,15 @@ export async function getDashboardSummary(actor: AuthContext) {
     safeResult(() => getOwnerRezHighlights(actor), {
       configured: false,
     } as const),
+    safeResult(() => getTeamAvailabilitySnapshot(actor), {
+      lastSyncedAt: null,
+      isStale: true,
+      lastFetchError: null,
+      workingNow: [],
+      comingUp: [],
+      off: [],
+      unmappedCount: 0,
+    }),
   ]);
 
   const today = todayUtc();
@@ -230,6 +241,7 @@ export async function getDashboardSummary(actor: AuthContext) {
     recentlyRescheduledCleanings,
     notionHighlights,
     ownerRezHighlights,
+    teamAvailability,
     openTasks: tasks.filter(
       (t) => t.status === "TODO" || t.status === "IN_PROGRESS",
     ),

@@ -59,8 +59,13 @@ vi.mock("@/domains/reservations/services/reservations.service", () => ({
 vi.mock("@/domains/tasks/services/tasks.service", () => ({
   listTasks: vi.fn(),
 }));
+vi.mock("@/domains/team/services/schedule.service", () => ({
+  getTeamAvailabilitySnapshot: vi.fn(),
+}));
 
 import { ForbiddenError } from "@stayw/auth";
+
+import { getDashboardSummary } from "./dashboard.service";
 
 import {
   listAiConversations,
@@ -83,8 +88,7 @@ import { listProperties } from "@/domains/properties/services/properties.service
 import { listReservations } from "@/domains/reservations/services/reservations.service";
 import { listSmartDevices } from "@/domains/smart-devices/services/smart-devices.service";
 import { listTasks } from "@/domains/tasks/services/tasks.service";
-
-import { getDashboardSummary } from "./dashboard.service";
+import { getTeamAvailabilitySnapshot } from "@/domains/team/services/schedule.service";
 
 const actor = { userId: "user-1" };
 
@@ -214,6 +218,15 @@ function mockAllLists() {
   } as never);
   vi.mocked(getOwnerRezHighlights).mockResolvedValue({
     configured: false,
+  } as never);
+  vi.mocked(getTeamAvailabilitySnapshot).mockResolvedValue({
+    lastSyncedAt: null,
+    isStale: true,
+    lastFetchError: null,
+    workingNow: [],
+    comingUp: [],
+    off: [],
+    unmappedCount: 0,
   } as never);
 }
 
@@ -357,6 +370,27 @@ describe("getDashboardSummary", () => {
     expect(summary.recentlyRescheduledCleanings).toEqual([{ id: "rc1" }]);
     expect(summary.notionHighlights).toEqual({ configured: false });
     expect(summary.ownerRezHighlights).toEqual({ configured: false });
+    expect(summary.teamAvailability.workingNow).toEqual([]);
+  });
+
+  it("degrades team availability to the same empty/unstale-free fallback when the actor lacks team:read, instead of failing the whole summary", async () => {
+    mockAllLists();
+    vi.mocked(getTeamAvailabilitySnapshot).mockRejectedValueOnce(
+      new ForbiddenError("team:read"),
+    );
+
+    const summary = await getDashboardSummary(actor);
+
+    expect(summary.teamAvailability).toEqual({
+      lastSyncedAt: null,
+      isStale: true,
+      lastFetchError: null,
+      workingNow: [],
+      comingUp: [],
+      off: [],
+      unmappedCount: 0,
+    });
+    expect(summary.properties).toHaveLength(2);
   });
 
   it("computes today's operational metrics from reservations/tasks/cleaning schedules", async () => {

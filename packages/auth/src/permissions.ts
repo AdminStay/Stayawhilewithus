@@ -32,6 +32,17 @@ export const RESOURCES = [
   // implicitly grants write capability, same reasoning as "thermostats"
   // above.
   "notion",
+  // The VA/team schedule domain (Michelle's Google Sheet → derived
+  // availability). Separate from every device/property resource above —
+  // "read" is the dashboard widget + dedicated schedule view (both show
+  // exact source identities, never gated per-person; see
+  // team-identity-mapping.ts), "update" is the manual on-demand refresh
+  // trigger (re-fetches the source; never writes to it), and "manage" is
+  // the admin-only unresolved-identity diagnostic. No role has any of
+  // these granted anywhere yet outside a local dev bootstrap — see
+  // packages/database/scripts/grant-team-permissions.ts and HANDOFF.md's
+  // Increment 98 for why this is explicitly NOT applied to Production.
+  "team",
   "ai_conversations",
   "ai_actions",
   "audit_logs",

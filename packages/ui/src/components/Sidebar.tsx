@@ -5,6 +5,7 @@ import {
   Bot,
   Building2,
   CalendarRange,
+  Clock,
   ListChecks,
   Lock,
   Menu,
@@ -52,6 +53,7 @@ const NAV_ICONS = {
   plug: Plug,
   shield: ShieldCheck,
   userCog: UserCog,
+  clock: Clock,
 } as const;
 
 export type NavIconKey = keyof typeof NAV_ICONS;

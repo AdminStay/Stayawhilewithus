@@ -93,8 +93,9 @@ describe("listIntegrationConnections", () => {
     const result = await listIntegrationConnections(actor);
 
     expect(assertPermission).toHaveBeenCalledWith(actor, "integrations:read");
-    // 12 providers in the IntegrationProvider enum.
-    expect(prisma.integrationConnection.upsert).toHaveBeenCalledTimes(12);
+    // 13 providers in the IntegrationProvider enum (GOOGLE_SHEETS added for
+    // the VA/team schedule — Increment 100).
+    expect(prisma.integrationConnection.upsert).toHaveBeenCalledTimes(13);
     expect(prisma.integrationConnection.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { provider: "OWNERREZ" },

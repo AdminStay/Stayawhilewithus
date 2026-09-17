@@ -24,6 +24,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: "/ownerrez", label: "OwnerRez", icon: "calendar" },
       { href: "/notion", label: "Notion", icon: "plug" },
       { href: "/guests", label: "Guests", icon: "users" },
+      { href: "/team", label: "Team Schedule", icon: "clock" },
     ],
   },
   {

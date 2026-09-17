@@ -24,8 +24,27 @@ import type { ComponentType, ReactNode } from "react";
 
 import type { getDashboardSummary } from "../services/dashboard.service";
 
+import {
+  TeamAvailability,
+  type TeamAvailabilityDisplayEntry,
+} from "@/domains/team/components/TeamAvailability";
+
 type Summary = Awaited<ReturnType<typeof getDashboardSummary>>;
 type SmartDeviceLike = Summary["smartDevices"][number];
+type TeamAvailabilityEntryLike =
+  Summary["teamAvailability"]["workingNow"][number];
+
+/** The dashboard-summary shape (person.sourceKey/stayWhileUserId) → the presentational component's own display shape — kept at this one call site rather than duplicated across every group. */
+function toDisplayEntry(
+  entry: TeamAvailabilityEntryLike,
+): TeamAvailabilityDisplayEntry {
+  return {
+    sourceKey: entry.person.sourceKey,
+    mapped: entry.person.stayWhileUserId !== null,
+    role: entry.role,
+    timeLabel: entry.timeLabel,
+  };
+}
 
 // "On the books" = anything not yet checked out and not cancelled — the
 // standard hospitality meaning of confirmed-or-pending future/current stays.
@@ -348,6 +367,30 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
           )}
         />
       </MetricStrip>
+
+      {/* Team Availability — a prominent, full-width operational feature
+          directly under the metrics, above every other section, per
+          explicit client direction: nobody should have to scroll past
+          AI Assistant/Notion/OwnerRez to see who's working right now. */}
+      <div className="mt-10">
+        <TeamAvailability
+          lastSyncedAt={summary.teamAvailability.lastSyncedAt}
+          isStale={summary.teamAvailability.isStale}
+          lastFetchError={summary.teamAvailability.lastFetchError}
+          workingNow={summary.teamAvailability.workingNow.map(toDisplayEntry)}
+          comingUp={summary.teamAvailability.comingUp.map(toDisplayEntry)}
+          off={summary.teamAvailability.off.map(toDisplayEntry)}
+          unmappedCount={summary.teamAvailability.unmappedCount}
+          action={
+            <Link
+              href="/team"
+              className="text-xs font-medium text-forest-600 hover:underline"
+            >
+              View Full Schedule
+            </Link>
+          }
+        />
+      </div>
 
       <div className="mt-10 grid gap-x-10 gap-y-10 lg:grid-cols-3">
         {/* Attention & action items — the highest-weight content section after the metrics themselves. */}

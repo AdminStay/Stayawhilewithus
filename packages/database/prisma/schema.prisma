@@ -881,6 +881,10 @@ enum IntegrationProvider {
   NEST
   ECOBEE
   CIELO
+  // The VA/team schedule's Google Sheet source (Increment 100) — reuses the
+  // existing IntegrationConnection/IntegrationSyncLog durable-sync pattern
+  // (see those models' own doc comments) rather than inventing a new one.
+  GOOGLE_SHEETS
 }
 
 enum IntegrationStatus {
@@ -894,6 +898,11 @@ enum IntegrationAuthType {
   OAUTH2
   API_KEY
   WEBHOOK_SECRET
+  // For a provider with no credential at all — e.g. GOOGLE_SHEETS's
+  // unauthenticated public CSV export. Distinct from a provider that merely
+  // hasn't been connected yet (that's IntegrationStatus.DISCONNECTED); this
+  // is a provider that structurally has no auth step to complete.
+  NONE
 }
 
 enum SyncDirection {

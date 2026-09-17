@@ -51,6 +51,10 @@ const PROVIDER_DEFAULTS: Record<
   NEST: { displayName: "Nest", authType: "OAUTH2" },
   ECOBEE: { displayName: "Ecobee", authType: "OAUTH2" },
   CIELO: { displayName: "Cielo", authType: "API_KEY" },
+  GOOGLE_SHEETS: {
+    displayName: "VA/Team Schedule (Google Sheet)",
+    authType: "NONE",
+  },
 };
 
 /**
@@ -83,6 +87,9 @@ export const PROVIDER_CLIENT_STATUS: Record<
   // (read-only: listDevices() only, no write/command path yet).
   NEST: "real",
   ECOBEE: "stub",
+  // Real, unauthenticated GET against Google's own CSV export — see
+  // team/services/schedule-source.ts.
+  GOOGLE_SHEETS: "real",
 };
 
 /**

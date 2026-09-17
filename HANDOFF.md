@@ -8,11 +8,15 @@
 
 # 📋 MASTER PROJECT CHECKLIST — CURRENT STATUS
 
-**As of Increment 86 (2026-09-15), updated 2026-09-16 (pre-meeting cleanup pass — see Google Nest/Trane/Honeywell sections for corrections).** Quick source of truth for where the project stands — see the dated Increment referenced next to each item for full detail; this section summarizes, it doesn't replace, the log below.
+**As of Increment 98 (2026-09-16), updated 2026-09-17 (Increment 99 — September 16 client meeting requirements incorporated as the current client direction; see "Increment 99" at the bottom of this file).** Quick source of truth for where the project stands — see the dated Increment referenced next to each item for full detail; this section summarizes, it doesn't replace, the log below.
 
-**🔴 ACTIVE PRODUCTION INCIDENT:** Nest telemetry refresh is broken — provider escalation pending, **Google Device Access Issue 561849351**. See the Google Nest section below for the full, single authoritative account. Not fixed — awaiting Google's response.
+**🎯 ACTIVE WORKSTREAM (per the September 16 meeting, reaffirmed): VA/Team Schedule.** Do not abandon, pause, restart, or switch away from this merely because other meeting action items were also recorded below. **The target is the REAL StayWhile Production dashboard — localhost is development/verification only, never the deployment target and never where the user should be sent for acceptance.** Currently: local pipeline + durable persistence + automatic Vercel Cron trigger + manual Refresh all implemented and tested locally (Increment 101); Production deployment has NOT happened — see the "VA/Team schedule & availability" block further down for the exact current state. Continue this to its next genuine approval/Production boundary before starting Supabase/August/Notion/Asana/Ecobee/other implementation work, unless the user explicitly redirects.
 
-**Legend:** `[x]` completed and Production-verified · `[~]` partially complete / working but remaining work exists · `[ ]` pending, not started · `[!]` blocked — needs external info, provider/account action, or human confirmation. Code existing is not sufficient for `[x]` — the behavior must be confirmed working in Production.
+**✅ P0 SECURITY — Supabase RLS/exposure review: REMEDIATION VERIFIED (Increments 102–108).** RLS enabled on all 27 `public` tables; `anon`/`authenticated` no longer hold any table privileges (existing or future) on them; `service_role`/`postgres`/ownership/schema USAGE all confirmed unchanged. The user personally verified the real Production dashboard (Dashboard/Properties/Locks/property detail/Notion) post-Phase-2 with no regression. Only remaining item: repository migration-history reconciliation (administrative, not a security gap) — see "Increment 108."
+
+**🔴 ACTIVE PRODUCTION INCIDENT:** Nest telemetry refresh is broken — provider escalation pending, **Google Device Access Issue 561849351**. See the Google Nest section below for the full, single authoritative account. Not fixed — awaiting Google's response. Google/Nest access remains externally blocked as of the September 16 meeting; do not ask the team to test Nest, do not trust current inventory for operational testing, no thermostat commands, no unnecessary destroy/recreate of the existing setup.
+
+**Legend:** `[x]` implemented **and** verified · `[~]` in progress · `[ ]` pending/actionable, not started · `[?]` waiting on a client decision · `[!]` externally/provider blocked · `[-]` explicitly deferred/on hold. Code existing is not sufficient for `[x]` — the behavior must be confirmed working (locally for local-only work, in Production for anything claimed Production-verified).
 
 ### Core Platform
 
@@ -29,6 +33,40 @@
 - [ ] Dashboard quick-view improvements — not separately tracked as a discrete item in this log; no completion evidence found
 - [ ] Sortable dashboard columns — requested by Kenny (Increment 79); not implemented as of Increment 86
 
+### Supabase Security — P0 SECURITY PRIORITY (REMEDIATION VERIFIED, Increment 108 — only repository migration-history reconciliation remains)
+
+**Status:**
+
+```
+[x] Phase 1 — RLS enabled on all 27 Production public tables
+[x] Phase 1 authenticated Production verification
+[x] Phase 2 — anon/authenticated existing-table grants revoked
+[x] Phase 2 — postgres future default privileges hardened
+[x] Phase 2 authenticated Production application verification
+[x] Production security remediation verified
+[~] Repository migration-history reconciliation pending
+```
+
+**The database-level security remediation itself is complete and verified** — both the raw DB state (read-only-checked, Increment 107) and the real application (the user personally verified Dashboard, Properties, Locks, a property detail page, and Notion on the real Production dashboard post-Phase-2, no regression observed). **This does not mean every possible application write path was manually tested** — the authenticated verification was specifically those five real Production read surfaces; that is the honest scope of what was checked. The one remaining open item is purely administrative: making the repository's own migration history accurately reflect what Production already has, for future fresh-environment reproducibility — see "Increment 108."
+
+Phase 1 was closed (Increment 106) on architectural evidence: Prisma connects as the `postgres` role (confirmed both table-owner AND holder of the explicit `BYPASSRLS` role attribute), RLS is enabled but not forced, and real authenticated reads were confirmed working post-RLS. Phase 2 (revoking `anon`/`authenticated`'s existing-table grants AND hardening `postgres`'s default privileges so future tables don't silently re-grant them) was applied to Production (Increment 107) and is now also application-verified (Increment 108).
+
+**Required process** (per explicit instruction — do not skip steps or blindly enable RLS):
+
+- [x] Identify the exact affected tables — all 27 `public`-schema tables (the complete StayWhile Prisma schema)
+- [x] Determine actual public/anonymous exposure — every table had full CRUD SQL grants to `anon`/`authenticated` (Phase 2 target, still present), AND RLS was disabled on every table (Phase 1 target, now fixed)
+- [x] Inspect current Row Level Security (RLS) state per table — `true` on all 27, none forced
+- [x] Inspect existing policies and grants — zero policies exist anywhere; grants unchanged, still present (Phase 2 territory)
+- [x] Determine application dependencies on current access patterns — the app never uses Supabase's JS client, REST API, anon key, or service-role key anywhere (re-verified multiple times by code search). All access is Prisma → `DATABASE_URL`/`DIRECT_URL`, server-only, connecting as the `postgres` role, which owns every table.
+- [x] Determine what could break before proposing any change — assessed as low risk given the ownership fact
+- [x] Any Production correction requires explicit review/approval — **Phase 1 explicitly approved and applied 2026-09-17 (Increment 103); Phase 2 remains NOT approved, pre-mutation audit only as of Increment 106.**
+- [x] **Authenticated Production DB reads verified by the user (2026-09-17, Increment 104)** — real click-through: `/properties` (38 real properties), `/locks` (real August device/telemetry), Moonlit Cove property detail.
+- [-] Rollback-only DB-role write test (Increment 105's proposal) — **the user explicitly decided this was not required**: it would only reconfirm the database-role permission model already conclusively established, not exercise the actual application request path.
+
+**Full findings**: identity/schema/RLS/grants/architecture/remediation-proposal all recorded in "Increment 102" at the bottom of this file. Summary: `public.*` (all 27 tables) — RLS disabled, 0 policies, `anon`+`authenticated`+`service_role` all hold full `SELECT/INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER` via Supabase's own default grants, and both `anon`/`authenticated` have schema-level `USAGE` on `public` (i.e. PostgREST can reach every table). The app itself never touches these roles/keys — this is a **platform-level** exposure (anyone who obtains this Supabase project's anon key, which Supabase's own model treats as safe-to-publish _only when RLS is configured_, could fully read/write every table via the REST API) rather than an application-code defect. **Not tested by actually calling the API with a key** — no key was available/used, per the read-only/no-penetration-testing instruction.
+
+Nothing has been investigated yet. Do not assume the current Production Supabase posture is safe or unsafe until the audit above is actually performed.
+
 ### OwnerRez
 
 - [x] OwnerRez connection — Production-verified (Increment 22, 53)
@@ -42,6 +80,8 @@
 - [ ] Airbnb alteration request → StayWhile task workflow — not designed (Increment 32, unchanged through 86)
 
 ### Notion — active priority while Nest is provider-blocked
+
+**September 16 meeting reaffirmed this as HIGH PRIORITY**, with 4 explicit directives: (1) finish a useful property information/search experience — substantially done, see below; (2) verify "Open in Notion" works — USER-CONFIRMED PRODUCTION VERIFIED (Increment 90/94, see below); (3) keep editing disabled until Admin/VA permissions are defined — unchanged, edit allowlist remains empty; (4) StayWhile should surface useful operational Notion information without forcing routine opening of Notion — this is the existing in-dashboard detail-view design intent (see the "TARGET UX PRINCIPLE" note below), already shipped for the 10 standard listing fields. **Preserve all already-completed/deployed Notion work** — nothing below is being redone.
 
 **COMPLETED / PRODUCTION VERIFIED:**
 
@@ -156,7 +196,33 @@ Safety requirements for any eventual implementation: explicit allowlist of edita
 
 **Do not call the Notion requirement complete merely because this read-only foundation is deployed.** Editing, live webhook monitoring, Slack/n8n alerting, sensitive-field exposure, and VA/ops-team access are all still either explicitly withheld or waiting on a Kenny/Michelle decision — see Increment 90's sections G/H below for the full, current punch list.
 
+### General Resources / Helpful Links — NEW REQUIREMENT (September 16 meeting)
+
+**Status: [ ] not started — not designed, not scoped in detail, nothing built.**
+
+A configurable resource/link feature, requested new at the September 16 meeting. Eventually, authorized users should be able to: add a URL, give it a name, save it, and see it in StayWhile. Requirements as given, none invented beyond them:
+
+- [ ] Must support resources not tied to any specific property
+- [ ] Must support service-provider information
+- [ ] Must support SOPs
+- [ ] Must support general operations resources
+- [ ] Must support useful external links generally
+- [ ] Must NOT be limited to Notion — this is a separate, general-purpose feature, not a Notion view
+- [ ] Must NOT hard-code every resource — needs to be dashboard-managed/database-backed, matching this codebase's own standing "no hard-coded provider/resource mapping" architecture principle (see the "Dynamic, Dashboard-Configurable Integrations" requirement further below, same reasoning applies here)
+
+**Explicitly not decided, do not invent:** which roles may add/edit/delete resources; whether resources are global or per-property-optional; whether categorization/tagging is required; RBAC resource/permission naming. Wait for an explicit decision before designing the schema/permissions — this is new-feature design work, not yet approved to build past the requirements above.
+
 ### August / Yale Locks
+
+**September 16 meeting — HIGH PRIORITY, new/reaffirmed action items (not yet started, recorded here so they aren't lost):**
+
+- [ ] Fix inventory/replacement/reconciliation reliability — when a physical lock is replaced/added/deleted/removed, StayWhile must reconcile correctly (no orphaned rows, no silently-missing replacement)
+- [ ] Investigate the ONLINE-in-August-vs-UNKNOWN-in-StayWhile discrepancy specifically (distinct from the already-documented general UNKNOWN-connectivity pattern below)
+- [ ] Track "MJ - front door replacement" specifically through to confirmed reconciliation
+- [ ] Verify the exact provider-side names "Casablanca" / "Casa Delmare" against actual August provider data before acting on either (do not assume they match existing "Casa Blanca"/"Casa Del Mar" rows already in this checklist — confirm first, no fuzzy/auto-mapping)
+- [ ] Prepare a sanitized August JSON/payload for Kenny — secrets/API keys/tokens/credentials must be stripped before it's shared
+- [ ] Notify Kenny when the replacement/reconciliation workflow is genuinely ready for testing — not before
+- **Standing rules reaffirmed, unchanged**: no fuzzy/auto-mapping; no lock/unlock/PIN/physical-device command without explicit approval (see `[!] Physical lock controls` below, already enforced by design)
 
 - [x] Production authentication — restored after a documented token expiry, independently verified (Increment 85)
 - [x] Full fleet inventory — 43 August LOCK rows, 0 demo, 0 missing `externalDeviceId`, 0 duplicates (Increment 86)
@@ -202,6 +268,8 @@ Safety requirements for any eventual implementation: explicit allowlist of edita
 - No mapping changes
 - No thermostat commands
 
+**September 16 meeting — reaffirms this exact blocked status, no new information, plus an explicit restoration sequence:** Kris already opened the Google support case (the escalation above). Until Google restores access: do not ask the team to test Nest; do not trust the current inventory for operational testing; no thermostat commands; no unnecessary destroy/recreate of the existing setup. Continue other work instead of waiting. **When Google restores access, in this order**: reconnect safely → retrieve complete live inventory → reconcile counts → reconcile mappings → verify telemetry → move to proper Production authorization/configuration → verify automatic sync → verify manual Refresh → only then perform the first controlled real command, with explicit approval.
+
 **Pending Nest work, preserved, to resume once authorization is restored:**
 
 - Michelle's broader thermostat discrepancy reconciliation
@@ -238,11 +306,13 @@ Safety requirements for any eventual implementation: explicit allowlist of edita
 - [ ] Automatic refresh — NOT IMPLEMENTED, same manual-only cadence as Nest (Increment 83)
 - [!] Physical controls — architecturally blocked (see write-capability above), not a StayWhile code gap
 
-### Trane Home — NEW INTEGRATION
+### Trane Home
 
 Official portal: https://www.tranehome.com/
 
-**Status: [!] PROVIDER-BLOCKED / unsupported for direct programmatic integration under current terms.** Trane Home Support responded (ticket 356604): **programmatic access is prohibited under their terms**; Trane does not provide a public API for the 1050 model; other models use a proprietary backend with no third-party access. Supported third-party control, where it exists at all, is limited to specific certified controller integrations and the 1050 model specifically — not a general API. Portal login remains confirmed working (account active, live telemetry visible, one example device: "Ocean Pearl - Front," reporting temperature/humidity) — that access was, and remains, read-only; no thermostat setting was ever changed. **Do not attempt scraping, reverse engineering, hidden API calls, session-cookie reuse, credential extraction, browser-session reuse, or any other unsupported/unofficial access.**
+**Status: [-] EXPLICITLY ON HOLD PER KENNY (September 16 meeting).** Stop active development. Keep tracked (below, unchanged/preserved). Occasionally check official API availability. Resume only if an official path becomes available or Kenny changes priority. This is a business/priority decision, layered on top of — not a replacement for — the pre-existing provider-terms blocker documented below.
+
+**Status (unchanged, historical): [!] PROVIDER-BLOCKED / unsupported for direct programmatic integration under current terms.** Trane Home Support responded (ticket 356604): **programmatic access is prohibited under their terms**; Trane does not provide a public API for the 1050 model; other models use a proprietary backend with no third-party access. Supported third-party control, where it exists at all, is limited to specific certified controller integrations and the 1050 model specifically — not a general API. Portal login remains confirmed working (account active, live telemetry visible, one example device: "Ocean Pearl - Front," reporting temperature/humidity) — that access was, and remains, read-only; no thermostat setting was ever changed. **Do not attempt scraping, reverse engineering, hidden API calls, session-cookie reuse, credential extraction, browser-session reuse, or any other unsupported/unofficial access.**
 
 - [x] Confirm StayWhile Trane Home account/access — login successful, account active, live telemetry visible
 - [~] Inventory Trane/American Standard thermostats belonging to StayWhile — one example confirmed live ("Ocean Pearl - Front"); full inventory not yet completed
@@ -259,7 +329,9 @@ Official portal: https://www.tranehome.com/
 - [ ] Decide later whether write/control capability should be supported
 - [ ] Automatic refresh/scheduling
 
-### Honeywell — active thermostat-integration priority (Trane now provider-blocked for general programmatic access)
+### Honeywell / Resideo — externally blocked pending official developer/API access
+
+**September 16 meeting update: Kris has ALREADY contacted/emailed Resideo about the existing request. Michelle will CALL/follow up on that same existing request** — do not create a duplicate request unnecessarily, and do not build unsupported workarounds while waiting. Track: existing request status, missing requirements, escalation path, case/reference number, and Resideo's response — **no case/reference number has been provided/recorded as of this note**; add it here the moment it's known.
 
 **Status: [!] Honeywell/Resideo — provider/account pending.** This is not a new registration: an existing Resideo/Honeywell Home **developer** registration was originally submitted at `developer.honeywellhome.com/user/register` and recorded as **WAITING FOR DEVELOPER ACCOUNT APPROVAL** (historical record, early session) — that account approval/access issue remains unresolved. **This confirms only which developer platform a past registration was submitted against — it does NOT confirm the actual StayWhile-installed thermostat ecosystem, exact models, device inventory, or Production API access, all of which remain unverified.** Do not implement or configure any Honeywell credentials until the account-access issue is resolved and approval is confirmed.
 
@@ -277,17 +349,59 @@ Official portal: https://www.tranehome.com/
 - [ ] Do not issue thermostat setpoint/mode/fan/power/schedule commands without separate explicit approval
 - [ ] Determine rate limits and a safe refresh strategy before implementing automatic sync
 
+### Ecobee
+
+**CORRECTED STATUS (September 16 meeting) — do NOT revert this to the older "blocked/awaiting API access" status recorded in earlier increments below.** API access has been received; credentials/configuration already exist and integration/sync work was underway. Superseding language only — the older entries (e.g. "SmartBuildings auth/connectivity/discovery not started," Increment 76/83) describe an earlier point in time and are left in place as history, not deleted.
+
+**Status: [~] in progress.** Per this codebase's own Integration Completion Rule (see the standing rules section below — never call an integration finished merely because authentication works), remaining work before this can be marked `[x]`:
+
+- [x] API access — RECEIVED (September 16 meeting correction)
+- [ ] Verify the API connection actually works end-to-end (not just that access was granted)
+- [ ] Retrieve live inventory
+- [ ] Verify devices against that live inventory
+- [ ] Determine exact property mappings — human-confirmed only, no fuzzy/name-based mapping
+- [ ] Verify telemetry
+- [ ] Verify synchronization
+- [ ] Determine safe control capability
+- [ ] Test before any broad control capability is enabled
+- [!] No thermostat command without explicit approval — standing rule, unchanged
+
+**Historical note, do not treat as current**: earlier increments (76, 83) describe Ecobee Client ID/Secret as "configured locally, not yet used," auth as a PIN-based OAuth2 flow requiring a token-storage/refresh design not yet built, and connectivity as not started. The September 16 correction above supersedes the "not started" framing — API access is confirmed received — but does **not** by itself confirm that a token-storage/refresh implementation now exists; that's exactly what the "verify the API connection" item above needs to establish before this integration can be called anything more than in-progress.
+
 ### Other Integrations / Automation
 
 - [~] n8n MCP — connection verified working multiple times, but is session-specific (must be re-checked each session) and currently holds zero real StayWhile workflows (instance effectively empty, Increment 40)
-- [ ] Slack — real credential-gated adapter built (Increment 2), never connected with a live Production credential or verified operationally
+- [-] Slack — **September 16 meeting: still part of the overall project but explicitly NOT an immediate priority — keep on backlog, do not prioritize ahead of active VA Schedule completion, August, Notion, or Asana.** Real credential-gated adapter built (Increment 2), never connected with a live Production credential or verified operationally.
 - [ ] Gmail pool-report forwarding — not scoped, not designed, not started (2nd client meeting)
 - [!] Google Voice — supported integration/API feasibility and implementation method still require verification. Requested business workflow: after-cleaning photos/messages → a designated Slack channel. No decision has been made to replace Google Voice with an alternative (e.g. Twilio) — that would only follow if supported options are verified and Kenny/Michelle choose that direction.
-- [ ] Asana — real credential-gated adapter built (Increment 2); MCP-level Asana connection needs authentication; no operational workflow built
-- [!] VA Google Sheet schedule/availability — blocked: Michelle to provide access/a link, not yet received
+- [ ] Asana — **September 16 meeting: start/continue while Nest remains externally blocked, AFTER respecting the active VA Schedule workstream and current higher-priority fixes.** Michelle's current operational integration focus is August + Notion + Asana. Before building assumptions, inspect the REAL StayWhile Asana setup first — projects, tasks, users, assignments, statuses, custom fields, automation. Begin discovery/read-only unless an approved write workflow already exists. Real credential-gated adapter built (Increment 2); MCP-level Asana connection needs authentication; no operational workflow built; discovery not yet performed.
+- [~] **VA/Team schedule & availability — ACTIVE PRIORITY, reaffirmed by the September 16 meeting: do not abandon, pause, restart, or switch away from this merely because other meeting action items were added. Full breakdown, see "Increment 98"–"Increment 101" at the bottom of this file.** Google Sheet URL was supplied by the user on 2026-09-16 (Increment 97); timezone was confirmed by the user later the same day (Increment 98: **America/Chicago**, both source and dashboard display). The real end-to-end pipeline (fetch → parse → derive → widget + dedicated `/team` view) is built, durably persisted, and now has a fully implemented (locally) automatic Vercel Cron trigger every 15 minutes (Increment 101) alongside manual Refresh — all still gated on local-only RBAC. **Every piece below is local-only; nothing has been committed, pushed, or deployed, and Production is explicitly untouched.** Still tracked separately, per explicit instruction, none conflated with "complete":
+  - [x] Google Sheet access — CONFIRMED read-only accessible, unauthenticated, 2026-09-16 (Increment 97)
+  - [x] Sheet structure verified — CONFIRMED by directly parsing the real live export (Increment 97), not guessed
+  - [x] Schedule source timezone — CONFIRMED by user 2026-09-16: **America/Chicago** (Increment 98). _Historical: earlier increments (96, 97) correctly describe this as unknown at that point in time — see those entries below, left unchanged as history._
+  - [x] Schedule dashboard display timezone — CONFIRMED: **America/Chicago** (Increment 98), same operating timezone already used for thermostat/August "last refreshed" timestamps
+  - [x] Parser/normalization — REAL parser built & tested locally (Increment 97): `csv.ts` (RFC 4180), `sheet-schedule-parser.ts` (`parseScheduleGrid()`/`toNormalizedShifts()`), `timezone.ts` (DST-aware, dependency-free). Validated against the real live export (31,143 slots, 18 benign warnings, 0 crashes).
+  - [x] Read-only server fetch layer — NEW (Increment 98): `schedule-source.ts`, a single GET to Google's unauthenticated CSV export, with explicit typed TIMEOUT/NON_200/EMPTY_RESPONSE/NETWORK_ERROR failure handling — never throws, never writes.
+  - [x] SchedulePerson/User separation — NEW (Increment 98): a schedule identity (`SchedulePerson.sourceKey`) never requires a StayWhile `User` account to render; `stayWhileUserId` is nullable and populated only by the existing, still-empty `resolveTeamMember()`.
+  - [!] Personnel identity mapping — **every one of the 24 real identities found remains UNMAPPED** (confirmed: 0 match any existing StayWhile `User` record) — includes several likely-typo name-variant pairs (e.g. "Henry"/"Heny", "Michelle"/"Mcihelle") deliberately left unmerged, pending explicit human confirmation. No longer blocks the schedule from rendering (see SchedulePerson above) — exact source names are shown directly; an admin-only diagnostic panel lists the unresolved identities.
+  - [x] Availability derivation logic — now live: `getTeamAvailabilitySnapshot()` derives WORKING_NOW/SCHEDULED_LATER/OFF against real Chicago calendar-day boundaries and the real `now`, using `mergeContiguousShifts()` to coalesce the source's hourly rows into real shift blocks first.
+  - [x] Dashboard UI — `TeamAvailability.tsx` widget wired into `DashboardSummary.tsx` (real dashboard data, "View schedule" link to `/team`) — NEW (Increment 98)
+  - [x] Dedicated schedule view — NEW (Increment 98): `/team` (Today/Tomorrow/Week navigation, merged shift blocks, Central Time throughout, admin-only unresolved-identity diagnostic)
+  - [x] **Durable schedule persistence — local verified (Increment 100).** Reuses the EXISTING `IntegrationConnection`/`IntegrationSyncLog` pattern (same one August/Cielo/OwnerRez "Sync Now" already uses) rather than a new table — additive migration `20260917113152_add_google_sheets_integration_provider` adds `IntegrationProvider.GOOGLE_SHEETS`/`IntegrationAuthType.NONE`. The schedule snapshot (windowed to ~2 days back/10 days forward — everything Today/Tomorrow/Week ever needs) lives in `IntegrationConnection.metadata`/`lastSyncedAt`; last-attempted/result/error lives in `IntegrationSyncLog` rows. Verified against the real local database, not just unit tests: ran a real sync (495 real shifts persisted), then read the identical data back from a completely separate fresh process with zero in-memory state — direct proof of restart-survival.
+  - [x] **Automatic refresh trigger — local implemented/tested, architecture CHANGED from Vercel Cron to StayWhile's own n8n (Increment 110).** The StayWhile Vercel project is confirmed **Hobby plan** (user-verified 2026-09-17), which does not support a sub-daily cron interval — Vercel Cron is ruled out for the approved 15-minute cadence. `apps/website/vercel.json` (created solely for the Vercel Cron entry, nothing else in it) has been **removed**. The trigger route itself, `app/api/cron/schedule-refresh/route.ts`, needed **zero functional change** — its `Authorization: Bearer $CRON_SECRET` check was always trigger-agnostic (validates a header value, not who sent it or how), so it works identically when called by StayWhile's own dedicated n8n instance (`adminstay.app.n8n.cloud`) instead of Vercel's cron infrastructure. Doc comment updated to reflect n8n as the real trigger. All 6 existing route-level tests still pass unchanged. **The n8n workflow itself has been designed but NOT created** — see Increment 110 for the exact node-by-node plan. **The Production `CRON_SECRET` still has not been created or set anywhere.**
+  - [x] **Manual Refresh — local implemented/tested.** `RefreshScheduleButton`/`refreshTeamScheduleAction`, gated on `team:update`, unchanged in effect, now durable underneath (Increment 100/101).
+  - [x] Concurrency protection — the same two-key Postgres advisory lock protecting `beginDeviceSync()` now protects schedule syncs too (`beginScheduleSync()`), so an automatic Cron tick and a manual Refresh click can never race or corrupt the durable snapshot.
+  - [x] Failure/stale behavior — a failed sync (automatic or manual) never wipes the last known-good schedule and never touches `lastSyncedAt` as though it succeeded; `isStale`/`lastFetchError` are both durable now (read from `IntegrationSyncLog`, survive a restart).
+  - [!] Personnel identity mapping — **every one of the 24 real identities found remains UNMAPPED** (0 match any existing StayWhile `User` record), including known typo-variant pairs (Henry/Heny, Michelle/Mcihelle, Gracey/Garcey/Grace, Catherine/Catheirne, Ken/Kenny) deliberately left unmerged pending explicit human confirmation. Does not block rendering — exact source names are shown directly.
+  - [x] Timezone — RESOLVED, America/Chicago authoritative throughout (source parsing, dashboard, `/team`, cron sync).
+  - [~] Production migration — pending approval (the enum-addition migration above has only ever run against the local dev database).
+  - [~] Production `CRON_SECRET`/Vercel config — pending approval (route/`vercel.json` code exists locally; no Production secret/env var created, no Vercel config changed).
+  - [~] RBAC — Production grant pending approval. **Corrected policy (2026-09-17, Increment 109): admin gets exactly `team:read`/`team:update`/`team:manage` — NOT `team:create`/`team:delete`** (narrowed from the original all-`team:*` grant; `grant-team-permissions.ts` updated accordingly). ops_manager still gets `team:read` only. `team:create`/`team:delete` remain in the permission catalog itself (every resource in this app gets the same 5-action set by uniform design — see `permissions.ts`) but are granted to no role. **Local dev's actual DB state still reflects the OLDER (pre-correction) run from Increment 98** — the script file is fixed, but it has not been re-run locally since; nothing granted in Production either way.
+  - [ ] Production deployment — not done; nothing committed or pushed this session.
+  - [ ] Production verification — not done; cannot start until identity mapping is resolved and the three pending-approval items above are explicitly approved and completed.
 - [ ] Airbnb alteration task automation — not designed; needs careful investigation first (OwnerRez already has its own Airbnb sync, interaction risk not understood)
 
-### Current Project / Meeting Priorities (2026-09-16)
+### Current Project / Meeting Priorities (2026-09-16, PRE-MEETING SNAPSHOT — superseded by "September 16 Meeting — Master Action Items" below; preserved as history, not deleted)
 
 **COMPLETED / PRODUCTION VERIFIED**
 
@@ -336,7 +450,39 @@ Official portal: https://www.tranehome.com/
 - SOP/training
 - Oct 1 launch scope
 
-### Top 5 recommended next actions (2026-09-16)
+### September 16 Meeting — Master Action Items & Execution Order (CURRENT — recorded 2026-09-17, supersedes the pre-meeting snapshot above where they conflict)
+
+Full source detail lives in the increment log — see "Increment 99" at the bottom of this file. This block is the quick-reference summary.
+
+**0. ACTIVE WORKSTREAM RIGHT NOW — VA/Team Schedule.** Do not abandon, pause, restart, or switch away from it merely because the items below were added. The target is the REAL StayWhile Production dashboard, not localhost. Currently: local pipeline + durable persistence + automatic Vercel Cron trigger + manual Refresh all implemented/tested locally (Increment 101); Production deployment not started. Finish this to its next genuine approval/Production boundary first, unless the user explicitly redirects.
+
+**1. Supabase Security — P0.** Queued, not started; does not preempt item 0 per the user's explicit sequencing. See the "Supabase Security" checklist section above for the required audit steps before any mutation.
+
+**2. August — HIGH PRIORITY.** Inventory/replacement/reconciliation reliability; ONLINE-vs-UNKNOWN investigation; MJ front-door replacement tracking; Casablanca/Casa Delmare name verification against real provider data; sanitized JSON for Kenny; notify Kenny when replacement workflow is ready for testing. See the "August / Yale Locks" checklist section above.
+
+**3. Notion — HIGH PRIORITY.** Finish the useful property information/search experience; verify "Open in Notion"; keep editing disabled until Admin/VA permissions are defined; preserve completed/deployed work. See the "Notion" checklist section above.
+
+**4. General Resources / Helpful Links — NEW.** Configurable, not Notion-limited, not hard-coded. See the new "General Resources / Helpful Links" checklist section above. Not started.
+
+**5. VA/Team Schedule — ACTIVE PRIORITY** (same item as #0 — listed again here to match the meeting's own numbering). After visual-review feedback: fix any verified UI/data problems; determine and implement the correct durable automatic-update mechanism; resolve/handle personnel mappings safely; prepare Production RBAC changes for approval; deploy only after explicit approval; verify Production after deployment. Do not claim complete before those boundaries are resolved.
+
+**6. Asana.** Start/continue while Nest remains externally blocked, AFTER items 0/1/2/3. Discovery/read-only first — inspect the real StayWhile Asana setup (projects, tasks, users, assignments, statuses, custom fields, automation) before building assumptions.
+
+**7. Ecobee.** API access CONFIRMED RECEIVED (corrects the older "pending" status — see the new "Ecobee" checklist section above). Remaining: verify API connection, retrieve live inventory, verify devices, exact property mappings, verify telemetry, verify synchronization, determine safe control capability, test before broad controls. No thermostat command without explicit approval.
+
+**8. Nest.** Externally blocked (Google Issue 561849351, Kris already opened the case). Do not ask the team to test it; do not trust current inventory for operational testing; no commands; no unnecessary destroy/recreate. Continue other work instead of waiting. See the restoration sequence in the "Google Nest" checklist section above.
+
+**9. Honeywell/Resideo.** Externally blocked. Kris already contacted/emailed Resideo; Michelle will call/follow up on the existing request — do not duplicate it, do not build workarounds. See the "Honeywell / Resideo" checklist section above.
+
+**10. Trane.** Explicitly ON HOLD per Kenny — stop active development, keep tracked, check occasionally, resume only on an official path or Kenny's say-so. See the "Trane Home" checklist section above.
+
+**11. Slack.** Backlog — not an immediate priority; do not prioritize ahead of items 0/2/3/6.
+
+**12. Team testing rule (standing, applies to all of the above).** Never announce the whole platform is ready for team testing. Testing is module-specific: when something is accurate and safe, notify Kenny/Michelle with exactly what is ready, exactly what to test, exactly what NOT to test; collect feedback; fix discrepancies before expanding testing.
+
+**Integration completion rule (standing, applies to August/Nest/Ecobee/Honeywell/Trane and any future device integration):** never call an integration "finished" merely because authentication works. Track, per integration: authentication → live inventory → mappings → telemetry → sync → reconciliation → dashboard accuracy → permissions → safe testing.
+
+### Top 5 recommended next actions (2026-09-16, PRE-MEETING — superseded by the "September 16 Meeting — Master Action Items" execution order above; preserved as history)
 
 1. Investigate/fix Cielo `pruneStaleDevices()` data-loss risk
 2. Notion remaining requirements — **substantially built & tested locally as of Increment 87** (detail view, visibility/RBAC, fail-closed editing foundation, full change/delete-monitoring pipeline, Recent Notion Activity); what's left is Kenny/Michelle's business decisions (editable fields, alert destination) plus the external Notion webhook registration and commit/deploy, once approved — see the Notion section's tracking checklist above
@@ -5452,3 +5598,946 @@ No new application-code change (the revert restored exactly the already-deployed
 ### Files changed this increment
 
 `HANDOFF.md` only. `NotionDetailView.tsx`/`.test.tsx` were reverted, not changed — confirmed byte-identical to the already-deployed, already-committed version.
+
+## Increment 96 — 2026-09-16 (same day): New workstream — VA/Team schedule & availability. Full audit performed (not assumed); found the Google Sheet reference does NOT actually exist anywhere in this repo, contradicting this increment's own opening instruction — flagged, not silently resolved. Safe, structure-agnostic local foundation built (availability derivation, identity-mapping scaffold, dashboard widget) — none of it wired to a real data source, none of it deployed. Notion, OwnerRez, August, Nest, Cielo, and all physical devices untouched.
+
+### Purpose
+
+Move to the next StayWhile requirement — VA/team schedule and personnel availability on the dashboard — per explicit instruction to stop Notion business-decision-dependent work for now. Audit the existing repo/HANDOFF first, per explicit instruction, rather than inventing an architecture; do only the safe local work that doesn't require a credential, Production mutation, Sheet modification, an unavailable business decision, or fuzzy personnel mapping.
+
+### A. Existing schedule requirement found in HANDOFF/docs
+
+Real, and already tracked before this increment: `[!] VA Google Sheet schedule/availability — blocked: Michelle to provide access/a link, not yet received` (master checklist), and from the Sep 9, 2026 Touch Base #4 meeting notes: "Michelle said the VA schedule is maintained in a Google Sheet and will provide access/a link (not yet received, as of this meeting record)." The same meeting notes also record the related, separate Airbnb-alteration-task requirement: a future task-routing feature should use "the current schedule/availability to route the task, rather than permanently assigning it to a specific VA" — explicitly NOT this increment's scope, noted only so it isn't lost.
+
+**⚠️ Direct contradiction found and flagged, not silently resolved either way**: this increment's own opening instruction stated "Michelle has already supplied the Google Sheet used for the VA/team schedule." A full-repo search (see C below) found **no** Google Sheet URL, ID, or any other reference anywhere in this repository, in `HANDOFF.md`, or in `.env.example` — the most recent record on file states the opposite. This is reported as a real discrepancy for the client to resolve, not assumed to be a miscommunication in either direction.
+
+### B. Existing schedule-related code/schema
+
+**None**, before this increment. No `schedule`/`personnel`/`team`/`availability` domain folder existed (confirmed: `apps/website/src/domains/` held only `ai, audit, cleaning, communications, dashboard, guests, integrations, maintenance, notifications, properties, reservations, smart-devices, tasks, users`). No Prisma model for shifts, schedules, or availability. No VA-specific RBAC role. No Airbnb-alteration-task routing code (confirmed via targeted grep — zero hits for VA-routing/alteration logic anywhere in `apps/website/src`).
+
+### C. Google Sheet reference/access status
+
+**Not accessible — no reference exists.** Full-repo `grep` for `docs.google.com`, `spreadsheets`, `google-spreadsheet`, `googleapis`, `GOOGLE_SHEETS`, `GOOGLE_SERVICE_ACCOUNT`, `GOOGLE_CLIENT` etc. across every `.ts`/`.tsx`/`.md`/`.env*`/`.json` file found only: this same HANDOFF language documenting the block, and Nest's own unrelated Smart Device Management OAuth (`smartdevicemanagement.googleapis.com`/`oauth2.googleapis.com` — a completely different Google API, already covered by the existing Nest integration, not schedule-related). No `googleapis`/`google-spreadsheet`/`google-auth-library` dependency exists in any `package.json` across the monorepo. `.env.example` has `GOOGLE_VOICE_API_KEY` (unrelated — Google Voice) and Nest's OAuth vars (unrelated); nothing Sheets-shaped. `packages/integrations/src/` has real client packages for `airbnb, asana, august, cielo, core, ecobee, gmail, google-voice, nest, notion, ownerrez, slack, yale` — notably a `gmail` package already exists (unused/unbuilt per HANDOFF's own "Gmail pool-report forwarding — not scoped, not designed, not started" note) but there is no `google-sheets` package of any kind.
+
+### D. Actual Sheet structure
+
+**Cannot be determined — no access exists.** Every column this increment was asked to identify (name, role/team, date, shift start/end, timezone, status, break info, recurring-vs-date-specific, off days, PTO/leave, notes, multi-shift behavior) remains genuinely unknown. Not guessed at.
+
+### E. Current personnel/user model
+
+`packages/database/prisma/schema.prisma`'s `User` model: `id, clerkUserId, email, firstName, lastName, phone, avatarUrl, status, lastLoginAt, deletedAt, createdAt, updatedAt` plus RBAC relations (`userRoles`, task/maintenance/audit/message/AI relations). **No** `availability`, `schedule`, `shift`, `timezone`, or `team` field exists on `User`. The RBAC `Role` catalog (`packages/database/prisma/seed.ts`) is `admin, ops_manager, cleaner, maintenance_tech, front_desk, read_only` — no "VA"/"team lead"/"scheduler" role exists, and (per Increment 75/88/90's own repeated, unresolved finding) which real seeded role StayWhile's VAs actually use has never been confirmed. `Property.timezone` (a real, existing per-property IANA string, e.g. `America/Chicago`) is this codebase's own established precedent for "timezone must always be explicit, never assumed" — directly relevant to the schedule source's own unknown timezone.
+
+### F. Identity-mapping approach
+
+Mirrors the exact same standing, repeatedly-enforced pattern already used for August locks, Cielo thermostats, and OwnerRez/Notion properties: an explicit, human-confirmed mapping table (`team-identity-mapping.ts`'s `TEAM_IDENTITY_MAPPINGS`), deliberately empty today, with `resolveTeamMember()` returning `null` (UNKNOWN/UNMAPPED) for anything not explicitly present — no name normalization, no case-folding, no fuzzy matching, ever. Built and tested (proving the lookup rule itself is fail-closed) without inventing a single fake mapping.
+
+### G. Proposed availability states, based only on what's derivable from shift time ranges alone
+
+`WORKING_NOW` (a shift's `[start, end)` contains `now`), `SCHEDULED_LATER` (no current shift, but one starts later today), `OFF` (has shift data for today, all of it already finished, none upcoming), `UNKNOWN` (no shift data for this person at all — the honest default, never treated as "off"). `UNAVAILABLE` exists only as an **explicit override path** (for a real PTO/leave column, if the actual sheet turns out to have one) — never inferred from an empty shift list, since an empty list far more often just means "not on today's schedule." No other status was invented.
+
+**Timezone — explicit open question, not assumed**: what timezone the Sheet's times are written in, and what timezone the dashboard should display them in, are both unknown. `deriveAvailability()` takes only already-resolved `Date` instants and does zero timezone conversion itself — the eventual real adapter is where that decision has to be made, once the source is confirmed.
+
+### H. Proposed dashboard UI/placement
+
+`TeamAvailability.tsx` — a "Team Availability" section following the exact structure the user's own example sketched (Working now / Coming up / Off, each a compact name+role+time list), built using only existing design-system primitives (`SectionHeader`, `Badge`, `EmptyState` — no new component library). **Placement recommendation, not a decision made here**: this matches the existing dashboard's own "supporting column" widget pattern (Notion/OwnerRez/Recent Activity on `/`, each with a "View all" link to a dedicated page) — likely a homepage widget plus, once there's enough real data to justify it, a dedicated `/team` page mirroring `/notion`/`/ownerrez`. **Not wired into `DashboardSummary.tsx` or any route this increment** — deliberately, since there is no real data yet to visually validate against, and that already-Production-verified page shouldn't be touched without being able to see the result.
+
+### I. Refresh/stale/failure approach
+
+`isScheduleDataStale(lastSyncedAt, now, staleThresholdMs)` — same "never claim confidently current" discipline already used for device telemetry (mirrors `dashboard.service.ts`'s `TELEMETRY_STALE_THRESHOLD_MS`/staleness pattern) — built and tested, with the threshold left as a parameter since the right cadence for a schedule source (how often the real Sheet actually changes) is a real unknown, not a number to guess. `TeamAvailability.tsx` renders an explicit "Possibly stale" badge plus last-synced time when stale, and "never synced successfully" when there's no successful sync at all — UNKNOWN is always preferred to confidently-wrong. Automatic refresh frequency, manual refresh UX, and true Google-Sheets-unavailable failure handling cannot be designed further without knowing the real access method (a public link can be polled freely; an API/OAuth credential has real rate limits, matching this codebase's own prior per-provider research discipline for August/Cielo/Nest/Notion).
+
+### J. RBAC/security considerations
+
+No schedule-specific RBAC resource/permission exists or was created this increment. `TeamAvailability.tsx` never renders raw schedule-source identities (only already-identity-resolved display names, or an aggregate unmapped count), never renders phone numbers/private emails/Google account identifiers/raw Sheet metadata, and contains no write/mutation control of any kind (tested). **Which roles should see this data at all is an open question** — flagged, not decided, matching item K below.
+
+### K. Safe local work completed now
+
+1. `services/availability.ts` + tests — pure `deriveAvailability()`/`isScheduleDataStale()`.
+2. `services/team-identity-mapping.ts` + tests — empty, fail-closed identity-mapping scaffold.
+3. `components/TeamAvailability.tsx` + tests — presentational dashboard widget, unwired.
+4. `README.md` — documents the exact blocker and every open question, so a future session doesn't have to re-derive this audit.
+
+**Explicitly NOT built, and why**: the real Google Sheets adapter/parser (would require guessing both the auth method and the column layout — exactly the "don't invent an architecture" instruction this increment opened with); any populated identity mapping (no real VA roster); any Prisma schema/migration (premature before the real data shape is known); any dashboard/route wiring (nothing real to show yet, and the live dashboard is already Production-verified — not touched without being able to see the result); any RBAC resource (no decision on which roles should see this).
+
+### L. Tests/results
+
+New: `availability.test.ts` (11 tests), `team-identity-mapping.test.ts` (3 tests), `TeamAvailability.test.tsx` (8 tests) — **22/22 passing**. One real bug found and fixed during this pass: `TeamAvailability.tsx`'s stale-data description wasn't rendering because `@stayw/ui`'s `SectionHeader` only shows its `description` prop at `size="lg"`, which wasn't being passed — caught by the tests, not shipped. Full `apps/website` suite: **937/940 passing** — the same 3 pre-existing, unrelated `OwnerRezConfirmLinkPanel` failures as every prior increment, +22 new, zero regressions elsewhere. `npx tsc --noEmit -p apps/website/tsconfig.json`: clean. `eslint` on all 7 new files: 0 errors/warnings. `next build`: succeeds, still exactly 27 routes (confirming this new domain is genuinely inert dead code today — zero effect on the deployed app, as intended).
+
+### M. Exact files changed
+
+All new, nothing modified: `apps/website/src/domains/team/README.md`, `apps/website/src/domains/team/services/{availability.ts,availability.test.ts,team-identity-mapping.ts,team-identity-mapping.test.ts}`, `apps/website/src/domains/team/components/{TeamAvailability.tsx,TeamAvailability.test.tsx}`. **Confirmed via `git status --porcelain -uall`**: no Notion/OwnerRez/August/Nest/Cielo/Honeywell/lock/thermostat/Production/credential file was touched.
+
+### N. What remains
+
+Everything gated on the Google Sheet reference itself: real access (URL + auth method), real column structure, real timezone, real identity mapping, the real adapter/parser, dashboard wiring/placement decision, RBAC decision, refresh cadence, and Production verification — see the master checklist's newly-expanded VA/Team tracking block above for the itemized breakdown.
+
+### O. Exact blocker / smallest question for the client
+
+**The Google Sheet itself.** This increment's instruction stated it was "already supplied," but no reference to it exists anywhere this session has access to — not in this repo, not in `HANDOFF.md`, not in any config file. **Needed to proceed**: the actual Sheet URL or ID, and how the app should be allowed to read it (e.g. a public "anyone with the link, view-only" share link, vs. a Google service-account credential, vs. OAuth) — matching the same "confirm the real access method before building" discipline already used for every other provider in this codebase.
+
+### P. Additional safe local work available right now?
+
+**No further safe local work was identified beyond what's listed in K.** Everything else genuinely requires either the real Sheet reference (item O) or a business decision this repo has no record of (dashboard placement, RBAC, refresh cadence) — continuing further without either would mean guessing at exactly the architecture this increment was explicitly told not to invent.
+
+### What did NOT happen this increment
+
+No Google Sheet was accessed, read, modified, or connected to (none exists to connect to). No credential was requested or created. No Production mutation. No fuzzy personnel mapping. No RBAC change. No dashboard/route wiring. No commit/push/deploy. Notion, OwnerRez, August, Nest, Cielo, Honeywell, locks, thermostat controls, and all physical devices were not touched.
+
+### Files changed this increment
+
+See item M above. `HANDOFF.md` (this entry).
+
+## Increment 97 — 2026-09-16 (same day): Real VA/team Google Sheet URL supplied — resolves Increment 96's flagged discrepancy. Confirmed read-only, unauthenticated public access; downloaded and directly parsed the real live export (not guessed); real calendar-grid structure, real data-quality issues, and real (all-unmapped) identity list all confirmed by evidence. Real parser (CSV + timezone + grid) built & tested — 31,143 real shift entries parsed successfully from the live sheet, 0 crashes. Everyone in the sheet remains UNMAPPED (0 matching StayWhile User records). Timezone remains the single smallest blocking question. Notion, OwnerRez, August, Nest, Cielo, Honeywell, locks, and physical devices untouched. Nothing committed/pushed/deployed; the Sheet itself was never modified.
+
+### Purpose
+
+The user supplied the real Google Sheet URL, resolving Increment 96's flagged "Sheet reference missing" discrepancy. Test read-only access using the least-privileged method first (no sharing/permission changes, no new credentials), inspect the real structure instead of guessing, audit data quality, classify real identities against StayWhile's actual User records, and continue all safe local implementation the real structure now makes possible — stopping only at a genuine authentication, identity, business-decision, Production, or destructive-action boundary.
+
+### A. Google Sheet access result — CONFIRMED, read-only, unauthenticated
+
+Tried the least-privileged method first, per explicit instruction: Google's own unauthenticated CSV export endpoint (`https://docs.google.com/spreadsheets/d/<id>/export?format=csv&gid=<gid>`). Result: `200 OK`, real CSV content, **no login, no service account, no OAuth, no StayWhile Google credential of any kind used or requested**. Every request made throughout this increment was a `GET` — no cell was edited, no row inserted/deleted, no formatting/sharing/permissions changed, nothing was written back. The full workbook was also exported once (`.../export?format=xlsx`, same unauthenticated method) purely to read its internal `xl/workbook.xml` and enumerate the real tab list — not to extract cell data via that route.
+
+### B. Exact tab(s) inspected
+
+**Two tabs total** in the real workbook (confirmed via the workbook's own internal XML, not guessed):
+
+- **`"2025"`** (gid `583841225`, the tab/gid supplied) — the one actually inspected in depth.
+- **`"August 2026 Draft"`** (gid `1942890585`, located via the sheet's own public page markup after the CSV export's `sheet=<name>` parameter didn't resolve it directly) — confirmed **completely empty** (0-byte CSV export; not a false negative, its `Content-Disposition` filename correctly matched the tab name, confirming the gid was right and the tab is simply unused).
+
+### C. Actual Sheet structure
+
+A **calendar grid**, not a row-per-shift list — see this domain's `README.md` for the full ASCII diagram. Column 0 = time-slot label; every week is a repeating 3-row header (date per day-group / day name / role label) + 17 hourly time-slot rows (6:00 AM–11:00 PM/12:00 AM) + a blank separator. Role labels observed: `Operations`, `MOD`, `EA` (plus two rarer variants, `EA/Projects` and `EA/Project day`, on specific day-columns in specific weeks — column-header drift, not normalized away). **The `"2025"`-named tab's real date range is March 3, 2025 through at least October 4, 2026** — it is the live, current schedule despite its stale-sounding name; confirmed by scanning every date header actually present in the export, not assumed from the tab name. No other tabs are needed to interpret it (the only other tab is empty).
+
+### D. Data-quality audit — real findings, none silently normalized
+
+- **24 distinct person-name tokens**, several clear typo/spelling variants of the same apparent person left deliberately unmerged: `Henry`/`Heny`, `Michelle`/`Mcihelle`, `Catherine`/`Catheirne`, `Ken`/`Kenny`, `Gracey`/`Garcey`/`Grace` (three variants).
+- **Two different multi-person delimiters** used inconsistently in the same tab: `/` and `|` (e.g. a real cell has three people separated by `|`). 1,852 of 31,143 parsed entries came from a multi-person cell.
+- **Blank cell vs. explicit `-`** both occur, inconsistently — the parser records which one it was (`wasExplicitDash`) rather than assuming they're equivalent, even though both currently collapse to "no shift" for availability purposes.
+- **215 cells carry a parenthetical annotation** (e.g. `(project)`, `(Mark training)`) mixed into the name field — extracted into a separate `note`, never treated as a person or silently dropped.
+- **Inconsistent date-cell formatting** (`"March 5,2025"` vs. `"March 5, 2025"`) and **inconsistent time-slot label formatting** (`"6:00-7:00 AM"` vs. `"11:00 AM - 12:00 PM"` vs. a genuine midnight-crossing `"11:00 PM-12:00 AM"`) — the parser's regexes tolerate all observed variants; midnight-crossing is handled explicitly (adds 24h to the end instant), never producing an inverted/zero-length shift.
+- **18 `DAY_NAME_MISMATCH` warnings** (all on the same one real date, where the sheet's own printed weekday doesn't match the calendar) — reported, not silently trusted or silently corrected.
+- **No email addresses or phone-number-shaped strings found anywhere** in a full-export scan — the sheet appears to hold first names and shift assignments only.
+- **No legend, key, or timezone indicator anywhere in the sheet** — a full-export scan for "legend"/"key"/"notes"/"timezone"/timezone-name words found zero matches. Confirmed absent, not assumed absent.
+- **31,143 total (date, time-slot, role, person) entries parsed successfully from the real live export, 0 crashes** — validated by actually running the real parser against the real download (not committed anywhere — see K).
+
+### E. Timezone finding
+
+**Cannot be determined from the source — confirmed absent, not guessed.** No timezone name, UTC offset, or any related word appears anywhere in the sheet. `WORKING_NOW` is deliberately NOT derived from real sheet data without this — `toNormalizedShifts()` requires an explicit IANA timezone argument with no default, so a future caller can't silently assume one. **This is the smallest remaining blocking question for the client** — see Q below.
+
+### F. Source identities found
+
+24 distinct tokens (listed in full in this domain's `README.md`, not duplicated here to avoid restating real personnel data twice in this file). Includes the client's own principals appearing as working team members in the schedule (consistent with a small operations team) — treated with exactly the same no-fuzzy-matching discipline as everyone else, not special-cased.
+
+### G. Exact/unmapped/ambiguous mapping status
+
+**All 24 are UNMAPPED.** Cross-checked, read-only, against the local dev database's real `User` table (`firstName`/`lastName`/`email`/`status` only, via a temporary script created, run, and deleted immediately — same established pattern as every prior increment's diagnostics). The database holds exactly 2 users (the seeded bootstrap admin and the developer's own test account) — **zero matches** against any of the 24 real schedule identities. None is EXACTLY MAPPED. None is AMBIGUOUS in the sense of matching more than one existing StayWhile user (there are no VA/team `User` records yet to be ambiguous against). `TEAM_IDENTITY_MAPPINGS` remains empty, per explicit instruction not to populate it without deterministic evidence or approval — neither exists yet.
+
+### H. Read-only adapter/parser implementation
+
+Three new modules, replacing Increment 96's structure-agnostic placeholder assumption with the real thing:
+
+- `services/csv.ts` — RFC 4180 CSV parser (handles the real export's quoted, comma-containing date cells; no CSV library existed in this monorepo, none was added).
+- `services/timezone.ts` — `zonedTimeToUtc()`, a dependency-free, DST-aware wall-clock→UTC converter using the platform's built-in `Intl` timezone database (no date/timezone library existed in this monorepo, none was added).
+- `services/sheet-schedule-parser.ts` — `parseScheduleGrid()` (real CSV rows → structured `ScheduleSlot[]` + non-fatal parse warnings) and `toNormalizedShifts()` (bridges to `availability.ts`'s existing, unchanged shape). Detects day-column groups from the date row itself rather than hardcoding "7 days × 3 roles," so a differently-shaped week wouldn't silently misalign.
+
+### I. Availability derivation changes
+
+**None needed.** `availability.ts`'s `deriveAvailability()`/`isScheduleDataStale()` were already source-agnostic by design (Increment 96) — the real data confirmed that design was correct, not wrong. Per explicit instruction to modify only where the real structure proves an assumption wrong: nothing here was wrong.
+
+### J. Dashboard UI changes
+
+**None needed.** `TeamAvailability.tsx` already took pre-resolved display entries with no assumption about the underlying source shape — confirmed still correct. Still not wired into any route or into `DashboardSummary.tsx` — no real, identity-mapped, timezone-resolved data exists yet to feed it.
+
+### K. Refresh/stale/failure design
+
+Confirmed feasible cadence-wise: the export is a plain unauthenticated `GET`, not gated by any StayWhile-held API quota. No official Google rate-limit research exists yet for this specific unauthenticated-export mechanism (unlike this codebase's own researched-and-documented limits for Notion/OwnerRez/Cielo/August) — recommend a modest polling interval once real automatic refresh is approved, researched the same way those were, not guessed. `isScheduleDataStale()` (built Increment 96) is ready to be wired to a real "last successful fetch" timestamp once a sync job exists — none does yet. The real downloaded CSV/XLSX files and one validation script used to confirm the parser against the live data were all deleted from the session's scratch directory immediately after use — nothing from the real sheet's content was committed anywhere; the committed test suite uses only synthetic fixtures with fake names.
+
+### L. Security/RBAC considerations
+
+No schedule-specific RBAC resource/permission exists or was created. No email, phone number, or other private-data field was found in the sheet at all (confirmed by scan, not assumed). `TeamAvailability.tsx` still never renders raw schedule-source identities, only already-resolved display names or an aggregate unmapped count — and today that count would be 100% of everyone, since nobody is mapped. Which roles should eventually see this data is still an open question (see Q).
+
+### M. Tests/results
+
+New: `csv.test.ts` (6 tests), `timezone.test.ts` (4 tests), `sheet-schedule-parser.test.ts` (17 tests, synthetic fake-name fixtures mirroring every real structural quirk found — multi-delimiter cells, blank-vs-dash, parenthetical notes, whitespace padding, date/time formatting variance, midnight-crossing, day-name-mismatch detection, week-block boundary detection). One real test-authoring bug was found and fixed mid-pass (a fixture-cell miscount, not a parser bug) before all tests passed. `apps/website/src/domains/team` suite: **49/49 passing** (was 22, +27). Full `apps/website` suite: **964/967 passing** — the same 3 pre-existing, unrelated `OwnerRezConfirmLinkPanel` failures as every prior increment, zero regressions elsewhere. `npx tsc --noEmit -p apps/website/tsconfig.json`: clean. `eslint` on all 7 new/touched files: 0 errors/warnings. `next build`: succeeds, still exactly 27 routes (this domain remains genuinely inert/unwired today). **Separately, the real parser logic was validated against the actual live sheet export** (outside the committed test suite, per instruction not to commit private schedule contents as fixtures): 31,143 slots parsed, 0 crashes, 18 benign warnings — see D above.
+
+### N. Exact files changed
+
+New: `apps/website/src/domains/team/services/{csv.ts,csv.test.ts,timezone.ts,timezone.test.ts,sheet-schedule-parser.ts,sheet-schedule-parser.test.ts}`. Modified: `apps/website/src/domains/team/services/team-identity-mapping.ts` (doc comment only, citing the real typo-variant findings — `TEAM_IDENTITY_MAPPINGS` itself is unchanged, still empty), `apps/website/src/domains/team/README.md` (substantially rewritten with real findings, replacing placeholder/unknown language). **Unchanged, confirmed correct as-is**: `availability.ts`/`availability.test.ts`, `TeamAvailability.tsx`/`TeamAvailability.test.tsx`. **Confirmed via `git status --porcelain -uall`**: no Notion/OwnerRez/August/Nest/Cielo/Honeywell/lock/thermostat/Production/credential file was touched.
+
+### O. HANDOFF correction
+
+The master checklist's VA/Team line no longer states "Michelle to provide access/a link, not yet received" as the current status — that language now survives only inside its own historical increment entries (Sep 9, 2026 Touch Base #4; Increment 96), correctly marked as describing that point in time. Current status: Sheet access and structure both confirmed; identity mapping and timezone remain genuinely open.
+
+### P. What remains
+
+Timezone confirmation (the single smallest blocker); identity mapping (needs real `User` accounts for these people, plus explicit human confirmation of each pairing, including the typo-variant question); role-label meaning confirmation (MOD/EA are inferred, not confirmed); dashboard placement decision; RBAC decision; refresh-cadence research; then, only after all of that, Production verification.
+
+### Q. Exact smallest blocker/question for the client
+
+**What timezone are the shift times in the Google Sheet written in, and what timezone should the StayWhile dashboard display them in?** Nothing else blocks deriving real WORKING_NOW/SCHEDULED_LATER/OFF status from the real data today except this one fact.
+
+### R. Is the schedule dashboard foundation ready for review?
+
+**The parsing/derivation foundation: yes** — built against, and validated directly against, the real live data, not assumptions. **The end-to-end feature: no** — it cannot produce a single real, displayable, identity-confirmed availability entry until the timezone question is answered and at least some real identities are explicitly mapped to real StayWhile `User` accounts. Both are genuine external/business-decision boundaries, not implementation work.
+
+### What did NOT happen this increment
+
+The Google Sheet was never modified — no cell edited, no row inserted/deleted, no formatting/sharing/permissions changed. No credential was created (none was needed). No fuzzy personnel mapping — `TEAM_IDENTITY_MAPPINGS` remains empty. No RBAC change. No dashboard/route wiring. No commit/push/deploy. No Production mutation. Notion, OwnerRez, August, Nest, Cielo, Honeywell, locks, thermostat controls, and all physical devices were not touched.
+
+### Files changed this increment
+
+See item N above. `HANDOFF.md` (this entry).
+
+## Increment 98 — 2026-09-16 (same day): Timezone confirmed by the user (America/Chicago, both source and dashboard display) — resolves Increment 97's flagged blocker; full local schedule pipeline built end-to-end — read-only server fetch, real availability derivation, Chicago-day navigation, dashboard widget, and a dedicated `/team` view — all local-only, gated on a local-dev-only RBAC bootstrap, nothing committed/pushed/deployed
+
+### A. Timezone implementation
+
+`SCHEDULE_TIMEZONE = "America/Chicago"` is now a single named constant in the new `chicago-date.ts`, the one place this codebase states it. Every conversion still goes through the existing `zonedTimeToUtc()` (Increment 97, `Intl`-based, DST-aware) — nothing here hardcodes a fixed UTC offset or a "CDT" abbreviation. `chicago-date.ts` adds: `getCalendarDateInZone()` (which Chicago calendar day an instant falls on), `addCalendarDays()`, `calendarDayWindowUtc()` (the real `[start, end)` UTC window for a Chicago calendar day — 23h on the spring-forward transition day, 25h on fall-back, verified against the real 2026 US DST transition dates via `Intl`, not assumed), `formatChicagoTime()`/`formatChicagoTimeRange()` (e.g. "6:00 AM", "6:00 AM – 2:00 PM"), and `formatCalendarDateLabel()` (e.g. "Wed, Jan 15"). 11 new tests, including explicit CST/CDT and both real DST-transition-day tests.
+
+### B. Schedule-person/User separation
+
+New `SchedulePerson` type (`schedule.service.ts`): `{ sourceKey: string; stayWhileUserId: string | null }`. Nothing anywhere in the new pipeline requires `stayWhileUserId` to be non-null before rendering — `getTeamAvailabilitySnapshot()` and `getScheduleForRange()` both key everything off the sheet's own raw `sourceKey` and only _attach_ `resolveTeamMember(sourceKey)`'s (still-empty) result as an informational `mapped`/`stayWhileUserId` flag. No fake `User` row was created; `TEAM_IDENTITY_MAPPINGS` is still empty, unchanged from Increment 97.
+
+### C. Real Sheet fetch layer
+
+New `schedule-source.ts`: `fetchScheduleSheetCsv()` — one `GET` (explicit `method: "GET"`, `cache: "no-store"`) to the exact confirmed unauthenticated CSV export URL, wrapped in an `AbortController` 15s timeout. Never throws; returns a typed `{ok:true, csvText} | {ok:false, reason: "TIMEOUT"|"NON_200"|"EMPTY_RESPONSE"|"NETWORK_ERROR", detail}`. No OAuth, no service account, no Google credential of any kind, no write of any kind — confirmed by reading the file back, it issues exactly one fetch call. 6 tests, each failure mode mocked at the `fetch` level.
+
+### D. Real availability derivation
+
+`getTeamAvailabilitySnapshot(actor, now)` in the new `schedule.service.ts`: fetches (or reuses a fresh in-memory snapshot — see H), filters shifts to those overlapping _today's real Chicago calendar day_ (via `calendarDayWindowUtc()`, not a fixed 24h window), merges the source's hourly rows into real contiguous shift blocks (`mergeContiguousShifts()`, new in `availability.ts` — exact-match `personKey`+`label`+back-to-back-instant only, never fuzzy, never gap-bridging), then calls the existing (unchanged) `deriveAvailability()`. This is what makes "until 8:00 AM" correct instead of "until 7:00 AM" for someone actually on a 6 AM–2 PM shift built from 8 separate hourly rows. 5 new `mergeContiguousShifts()` tests plus 6 new `schedule.service.ts` derivation tests exercise WORKING_NOW/SCHEDULED_LATER/OFF against real Chicago-instant math.
+
+### E. Chicago date/day handling
+
+"Today"/"Tomorrow"/"Week" on `/team` and the dashboard widget's "today" scoping are both computed from `getCalendarDateInZone(now, "America/Chicago")` — never the server's or a browser's own timezone. `getScheduleForRange()` builds 1 day ("today"/"tomorrow") or 7 days ("week", starting today) via `addCalendarDays()`, each day's shifts selected by `calendarDayWindowUtc()` overlap, matching D's own midnight-crossing-safe logic.
+
+### F. Dashboard widget implementation
+
+`TeamAvailability.tsx` rewritten to the new contract: renders the exact source name (`sourceKey`) directly — never gated on `mapped` — with an optional per-person role/time label; a `lastFetchError` banner distinct from the existing `isStale` badge (a failed refresh never blanks out previously-known data, see H); one "Central Time"/"CT" mention in the section header, never per-row; an `action` slot now carries a "View schedule" link to `/team`. Wired into `dashboard.service.ts` (`getTeamAvailabilitySnapshot` added to the existing `Promise.all`, degrading to an empty/never-synced fallback via the existing `safeResult()` on a `ForbiddenError`, same convention as every other dashboard widget) and rendered in `DashboardSummary.tsx`.
+
+### G. Dedicated schedule view
+
+New route `apps/website/app/(dashboard)/team/page.tsx`: Today/Tomorrow/Week pill navigation (`?range=` query param, plain `<Link>`s — no client JS needed), a manual Refresh button (gated on `team:update`), a stale/failure banner, `ScheduleRangeView` (new component — one section per day, merged shift blocks, Chicago time throughout), and an admin-only "Admin diagnostics" section (gated on `team:manage`) rendering the new `UnresolvedIdentities` component — every currently-unmapped real source identity, named directly, so a human can actually act on the typo-variant question instead of it staying invisible.
+
+### H. Refresh/stale/failure handling
+
+`schedule.service.ts` keeps a module-scoped (in-memory only, resets on server restart — no DB persistence yet, see O) last-known-good snapshot plus the most recent fetch failure, separately. A 5-minute reuse window avoids re-fetching Google on every page load; a 1-hour staleness threshold flags (but never hides) old data. Critically: **a failed refresh never overwrites `lastGoodSnapshot`** — confirmed by a dedicated test (`schedule.service.test.ts`, "keeps showing the last known-good data... after a later fetch fails") that fetches successfully, then forces a failing refresh, then asserts the original data is still returned. A parse that yields zero slots from an otherwise-200 response is treated the same way (a `MALFORMED_SCHEDULE` failure, not a silently-accepted empty schedule). `forceRefreshSchedule()` (`team:update`) always bypasses the reuse window; `refreshTeamScheduleAction`/`RefreshScheduleButton` wire it to both `/team` and the dashboard, mirroring `RefreshThermostatsButton`'s exact isPending/disabled pattern.
+
+### I. Identity handling
+
+Exact source names are shown directly everywhere in the new UI — the dashboard widget, `/team`'s day list, and the admin diagnostic panel — per the explicit instruction that this is allowed without claiming an authenticated-user identity. No automatic merging anywhere; `mergeContiguousShifts()` (D) only ever merges a person's own back-to-back time slots, never two different `personKey`s. The admin-only `getUnresolvedScheduleIdentities()` (`team:manage`) is the one place the raw list of unmapped identities is surfaced, kept out of the ordinary widget/page per the "no scary technical warnings for ordinary users" instruction.
+
+### J. RBAC handling
+
+Added a new `"team"` resource to `packages/auth/src/permissions.ts` (additive; generates `team:create/read/update/delete/manage` the same way every other resource does). New `packages/database/scripts/grant-team-permissions.ts`, an exact structural mirror of Increment 88's `grant-notion-permissions.ts` — narrow, idempotent, upserts only the 5 `team:*` permission rows and grants admin all of them, ops_manager `team:read` only. **Run only against the local dev database** (`packages/database/.env`'s `DATABASE_URL` → `127.0.0.1:5432/staywhile_dev` — confirmed before running, never Supabase/Production) so the bootstrap admin account can actually view `/team` and the widget locally. **Not run against Production, and no Production permission was granted** — that remains an explicit future approval step, same as every other resource's Production RBAC rollout in this codebase.
+
+### K. Exact local UI now ready for review
+
+The dashboard's "Team Availability" widget (real data, wired into `DashboardSummary.tsx`) and the dedicated `/team` page (Today/Tomorrow/Week + admin diagnostics) are both fully wired against the real pipeline. `next dev` starts cleanly and serves both routes (verified: Clerk's own dev-browser auth handshake responds correctly on `/`, confirming the route/middleware/RBAC chain is intact) — actually seeing the rendered widget requires the user's own authenticated browser session, the same as every other dashboard page in this codebase; this pass could not simulate that itself. The local RBAC bootstrap (J) has already been run so that session will have access.
+
+### L. Tests/results
+
+New: `chicago-date.test.ts` (11), `schedule-source.test.ts` (6), `schedule.service.test.ts` (12), `ScheduleRangeView.test.tsx` (4), `UnresolvedIdentities.test.tsx` (2), plus 5 new `mergeContiguousShifts` tests in `availability.test.ts` and a rewritten `TeamAvailability.test.tsx` (10) for the new source-name/lastFetchError contract. `apps/website/src/domains/team` suite: **91/91 passing** (was 49, +42). `dashboard.service.test.ts`: **11/11 passing** (+2 for the new `teamAvailability` field, including a `ForbiddenError`-degrades-gracefully test). Full `apps/website` suite: **1007/1010 passing** — the same 3 pre-existing, unrelated `OwnerRezConfirmLinkPanel` failures as every prior increment (confirmed unrelated: they fail identically on the pre-existing baseline, unchanged by this increment). `npx tsc --noEmit`: clean, whole app. `eslint` on every new/touched file: 0 errors (a handful of `import/order` warnings, all confirmed pre-existing on the baseline before this increment's edits, checked file-by-file via `git stash`). `next build` currently fails — but for a **pre-existing, unrelated reason**: `apps/website/.env.local`'s `N8N_BASE_URL` value is truncated/invalid and `N8N_WEBHOOK_SHARED_SECRET`/`N8N_INBOUND_WEBHOOK_SHARED_SECRET` are entirely absent, which fails `env.ts`'s strict validation while Next statically collects page data for the (unrelated) `/api/webhooks/clerk` route — that `.env.local` file predates this session and was never touched by it. `next dev` (which doesn't eagerly load that module) starts and serves cleanly.
+
+### M. Exact files changed
+
+New: `apps/website/src/domains/team/services/{chicago-date.ts,chicago-date.test.ts,schedule-source.ts,schedule-source.test.ts,schedule.service.ts,schedule.service.test.ts}`, `apps/website/src/domains/team/{actions.ts,components/RefreshScheduleButton.tsx,components/ScheduleRangeView.tsx,components/ScheduleRangeView.test.tsx,components/UnresolvedIdentities.tsx,components/UnresolvedIdentities.test.tsx}`, `apps/website/app/(dashboard)/team/page.tsx`, `packages/database/scripts/grant-team-permissions.ts`. Modified: `apps/website/src/domains/team/services/availability.ts`/`.test.ts` (added `mergeContiguousShifts`), `apps/website/src/domains/team/components/TeamAvailability.tsx`/`.test.tsx` (new contract), `apps/website/src/domains/dashboard/services/dashboard.service.ts`/`.test.ts`, `apps/website/src/domains/dashboard/components/DashboardSummary.tsx`, `apps/website/src/platform/layout/nav-config.ts`, `packages/auth/src/permissions.ts`, `packages/ui/src/components/Sidebar.tsx` (added a `clock` nav icon). **Confirmed via `git status`**: no Notion/OwnerRez/August/Nest/Cielo/Honeywell/lock/thermostat/Production/credential file was touched.
+
+### N. HANDOFF update
+
+Master checklist's VA/Team block rewritten (see above): timezone marked resolved on both fronts (source + display), every new capability itemized, RBAC explicitly marked local-only, Production verification's remaining blockers narrowed to identity mapping + the Production RBAC approval.
+
+### O. Remaining requirements/blockers
+
+Real identity mapping (needs real StayWhile `User` accounts for these 24 people, then explicit human-confirmed pairing, including the typo-variant question — still the largest remaining gap). Production RBAC grant — an explicit, separate approval, not yet requested or given. A durable (DB-backed) last-known-good snapshot + sync log, replacing today's in-memory-only cache that resets on server restart — the same architecture already used for `SmartDevice`/telemetry. A researched (not guessed) automatic-refresh cadence, if the client wants one beyond manual refresh. Role-label meaning (MOD/EA) is still an inference, not a confirmed fact. Commit/push/Production deploy — none of this increment's work has been committed.
+
+### P. Exact next step for the user's visual review
+
+Sign in locally (the bootstrap admin account already has `team:read`/`team:update`/`team:manage` via this increment's local RBAC grant) and open the dashboard's "Team Availability" widget and `/team` directly — both render against the real, live Google Sheet data today, not a mock. No further local build step is needed first.
+
+### Q. Whether any additional safe local work remains
+
+Yes, but all of it is now secondary polish rather than pipeline gaps: a DB-backed snapshot/sync-log table (currently in-memory only); a researched refresh-cadence decision; possibly surfacing `ScheduleParseWarning`s (e.g. `DAY_NAME_MISMATCH`) somewhere admin-facing, the same way unresolved identities already are. None of it blocks today's local review, and none of it was started this pass without being asked, per the "don't do speculative work" standing instruction.
+
+### What did NOT happen this increment
+
+The Google Sheet was never modified. No Production RBAC permission was granted — only the local dev database's roles were touched, verified via `packages/database/.env`'s `DATABASE_URL` before running. No fuzzy personnel mapping — `TEAM_IDENTITY_MAPPINGS` remains empty. No commit, no push, no deploy, no Production mutation of any kind. Notion, OwnerRez, August, Nest, Cielo, Honeywell, locks, thermostat controls, and all physical devices were not touched.
+
+### Files changed this increment
+
+See item M above. `HANDOFF.md` (this entry).
+
+## Increment 99 — 2026-09-17: DOCUMENTATION ONLY — September 16 client meeting requirements incorporated as current client direction; VA Schedule reaffirmed as the active workstream mid-local-visual-review; no implementation/Production/Sheet/integration/device change made
+
+**Context**: the user is actively doing local visual review of the Increment 98 VA/Team Schedule work (dashboard widget + `/team`, both live at `http://localhost:3101/`) when a new, larger set of September 16 client meeting requirements arrived. Per the user's own explicit instruction, this increment is HANDOFF documentation only — no code, no server stop, no Production/Supabase/RBAC/migration/deploy/commit/push, no Google Sheet change, no integration/device change.
+
+### A. September 16 requirements added
+
+New master-checklist sections: **Supabase Security (P0)** (RLS/exposure audit process, nothing started), **General Resources / Helpful Links** (new configurable-link feature, nothing started). New corrected/expanded section: **Ecobee** (previously only tracked inline, now its own section reflecting API access received). Updated in place: Notion (4 explicit September 16 directives recorded), August (6 new high-priority action items: inventory/replacement reconciliation, ONLINE-vs-UNKNOWN investigation, "MJ - front door replacement" tracking, Casablanca/Casa Delmare name verification, sanitized JSON for Kenny, notify-when-ready), Honeywell/Resideo (Kris already contacted Resideo; Michelle will follow up on the existing request, not a new one), Trane (explicitly ON HOLD per Kenny, new `[-]` status), Nest (restoration sequence recorded, existing blocked status reaffirmed unchanged), Asana (discovery-first instruction, explicit sequencing after VA Schedule + higher-priority fixes), Slack (explicitly backlog, `[-]`), VA/Team Schedule (reaffirmed ACTIVE PRIORITY, corrected the refresh/sync line — see C below). New standing rules recorded: the Team Testing module-specific-notification rule, and the Integration Completion Rule (authentication → live inventory → mappings → telemetry → sync → reconciliation → dashboard accuracy → permissions → safe testing) for August/Nest/Ecobee/Honeywell/Trane.
+
+### B. VA Schedule represented as the active workstream
+
+The master checklist's top banner now leads with "🎯 ACTIVE WORKSTREAM (per the September 16 meeting, reaffirmed): VA/Team Schedule," explicitly stating: do not abandon/pause/restart/switch away merely because other meeting items were recorded; continue to the next genuine approval/Production boundary before starting Supabase/August/Notion/Asana/Ecobee/other implementation work, unless the user explicitly redirects. The VA/Team Schedule checklist block itself now states "ACTIVE PRIORITY" in its opening line, records the local-visual-review URLs, and lists "Local visual review — IN PROGRESS as of 2026-09-16/17" as its own tracked line. The new "September 16 Meeting — Master Action Items & Execution Order" section leads with it as item 0, repeated at its numbered position (5) to match the meeting's own numbering, so it can't be read as lower-priority than items 1–4.
+
+### C. Existing statuses corrected
+
+**The single most important correction**: the VA Schedule checklist's `[x] Refresh/sync` line (Increment 98) conflated manual refresh (real, working) with the 5-minute in-memory reuse window (not a durable automatic/background sync mechanism) under one `[x]`. Split into two lines: `[x] Manual Refresh` (unchanged, real) and `[~] Durable automatic/background update mechanism` — explicitly marked NOT YET BUILT, with the exact September 16 requirement (Sheet change → StayWhile reads latest → dashboard updates, BOTH automatic AND manual) stated so a future session can't re-claim this as done by pointing at the reuse window. Also corrected: Ecobee's status (was "pending"/"not started" in the last real update, Increment 76/83 — now "API access received," per explicit instruction not to revert this), Trane's status (added the explicit on-hold-per-Kenny directive layered on top of the pre-existing provider-terms block, `[-]` legend introduced for this), and the legend itself (added `[?]` waiting-on-client-decision and `[-]` explicitly-deferred/on-hold as first-class symbols, matching what several checklist entries already used informally).
+
+### D. Older requirements that remain active
+
+Everything not explicitly cancelled or put on hold above stays exactly as tracked: OwnerRez automatic onboarding, Poinciana's Inactive-OwnerRez-record blocker, the Cielo `pruneStaleDevices()` hard-delete risk, Cielo rich-telemetry Production verification (still local/uncommitted), Notion's remaining business-decision items (editable fields, alert destination, webhook registration), sortable dashboard columns, the Airbnb alteration-task workflow, Gmail pool-report forwarding, Google Voice's implementation-method question. None of these were touched or reprioritized below where they already sat.
+
+### E. Externally blocked
+
+Nest (Google Device Access Issue 561849351 — Kris's case already open, per the meeting instruction do not ask the team to test it, do not trust current inventory, no commands, no unnecessary destroy/recreate). Honeywell/Resideo (developer account approval — Kris already contacted, Michelle following up on that same request, no case/reference number recorded yet). Trane is provider-blocked under its own terms (ticket 356604) in addition to now being explicitly on hold per Kenny (see F).
+
+### F. Explicitly on hold
+
+Trane — ON HOLD per Kenny specifically (distinct from, and layered on top of, its pre-existing provider-terms block): stop active development, keep tracked, check occasionally, resume only on an official path or Kenny's say-so. Slack — backlog, not an immediate priority, explicitly not to be prioritized ahead of VA Schedule/August/Notion/Asana.
+
+### G. Updated execution order
+
+0/5. VA/Team Schedule (active, at local visual review) → 1. Supabase Security P0 (queued, does not preempt VA Schedule) → 2. August (high priority) → 3. Notion (high priority) → 4. General Resources/Helpful Links (new, not started) → 6. Asana (after 0–3) → 7. Ecobee (in progress, verification work remains) → 8. Nest (externally blocked, continue other work) → 9. Honeywell (externally blocked) → 10. Trane (on hold) → 11. Slack (backlog). Full detail in the new "September 16 Meeting — Master Action Items & Execution Order" checklist section.
+
+### H. Conflicts between the meeting requirements and existing HANDOFF
+
+One real conflict found and resolved in the client's favor (newer information wins, per instruction): the VA Schedule checklist's Increment 98 `[x] Refresh/sync` line implicitly claimed more than was true relative to the meeting's explicit "durable automatic + manual" requirement — corrected in C above, not just re-asserted. One near-conflict, resolved by superseding rather than deleting: the pre-meeting "Current Project / Meeting Priorities (2026-09-16)" and "Top 5 recommended next actions" blocks did not reflect VA Schedule as the active priority or several of the new items — both are now explicitly labeled PRE-MEETING/superseded, left in place as history, with the new "September 16 Meeting — Master Action Items" block as the current source of truth. No other contradiction found — the rest of the meeting's requirements were additive (new sections) or corrective in one direction only (Ecobee's status moving from blocked to received, never the reverse).
+
+### I. Local dev server / visual review confirmation
+
+`localhost:3101` confirmed still running throughout this documentation pass (`pgrep -fl "next dev -p 3101"` checked before and after editing HANDOFF.md — process present both times, PID unchanged, never restarted). Dashboard: `http://localhost:3101/`. Team Schedule: `http://localhost:3101/team`.
+
+### J. Confirmation — no implementation/Production/Sheet/integration/device change
+
+Confirmed via `git status --porcelain -uall`: the only file touched this increment is `HANDOFF.md`. No application code was edited. No Supabase/RLS/policy/grant change. No Production RBAC change. No migration run. No commit, no push, no deploy. No Google Sheet modification (nothing in this pass touched the schedule pipeline at all). No August/Nest/Ecobee/Honeywell/Cielo/Notion/OwnerRez file touched. No lock or thermostat command issued.
+
+### What did NOT happen this increment
+
+No code was written or modified. No fix was applied to anything reported during visual review (none has been reported yet — the user is still reviewing). No Supabase mutation. No Production deployment or RBAC grant. No integration (August/Notion/Asana/Ecobee/Nest/Honeywell/Trane/Slack) was started, resumed, or advanced beyond this documentation pass. The Google Sheet was not touched. The local dev server was not restarted or stopped.
+
+### Files changed this increment
+
+`HANDOFF.md` only.
+
+## Increment 100 — 2026-09-17: Durable last-known-good schedule storage built — reuses the EXISTING `IntegrationConnection`/`IntegrationSyncLog` pattern (no new table); automatic (scheduled) trigger deliberately held as a stop-and-ask per the user's own explicit process; local-only, nothing committed/pushed/deployed
+
+**Context**: after choosing to finish VA Schedule before Production, the user explicitly rejected the in-memory 5-minute reuse window as satisfying "automatic updates" (it's not durable, not a background job, not scheduler-driven, resets on restart) and asked for the smallest production-safe fix — investigate existing architecture first, prefer reuse over new systems, and stop to ask if a genuine architecture choice existed.
+
+### Identity check (per standing rule, before any ambient-account tool)
+
+`gh auth status`: active account is still `cabincollectivebb-afk` (Client B). Not used for anything. All work this increment was local code + local Postgres (`packages/database/.env` → `127.0.0.1:5432/staywhile_dev`, confirmed before every schema/DB action) + the already-verified `github-staywhile` SSH remote (read-only, `git ls-remote` only, no push).
+
+### What was found (Step 1)
+
+No scheduling/cron infrastructure exists anywhere in this app: no `vercel.json`, no `/api/cron/*` route, n8n holds zero real StayWhile workflows (unchanged fact, already tracked). But durable storage for "last successful sync / last attempted sync / last result-or-error" is NOT a gap — this codebase already has exactly that: `IntegrationConnection` (`lastSyncedAt`, `metadata: Json`) + `IntegrationSyncLog` (per-attempt `status`/`errorMessage`/`startedAt`/`finishedAt`), already battle-tested for August/Cielo/OwnerRez's "Sync Now" via `beginDeviceSync()`/`finishDeviceSync()` in `integrations.service.ts` (two-key Postgres advisory lock, stale-RUNNING self-heal, "a FAILED attempt never touches `lastSyncedAt`" — the exact "never wipe good data on failure" semantic already required here).
+
+### Architecture decision (Step 2)
+
+**Durable storage: reused the existing pattern, implemented locally without stopping** (per the user's own instruction — "one clearly established existing pattern" doesn't need a stop). Added two additive enum values only — `IntegrationProvider.GOOGLE_SHEETS`, `IntegrationAuthType.NONE` (no existing auth-type value fit a truly credential-less public fetch) — no new table. New `schedule-persistence.ts` mirrors `beginDeviceSync()`/`finishDeviceSync()`'s exact locking/logging shape, but is deliberately **actor-agnostic** (no `AuthContext`, no `assertPermission` inside it) — a scheduled job has no signed-in user; RBAC stays where it belongs, at the true entry points (`forceRefreshSchedule` already asserts `team:update` before ever reaching this layer).
+
+**Automatic (scheduled) trigger: STOPPED, per the user's own explicit process instruction.** No established pattern exists for actually running something on a schedule in this app, and there are two real candidates (Vercel Cron — the hosting platform's own native primitive, zero new dependency; or an n8n-triggered webhook), each with a real trade-off and a Production-config implication (`vercel.json` + `CRON_SECRET`). This is exactly the "meaningful architecture choice requiring your decision" the process called out — not implemented. What WAS built: `runScheduleSync()`, the actual sync logic (begin → fetch → parse → validate → durable write → finish), fully trigger-agnostic — whichever scheduler is approved needs only a thin route/handler calling this one function; no further service-layer work.
+
+### Cadence recommendation (D)
+
+Not yet decided (deliberately, since the trigger mechanism itself is unconfirmed) — but for when it is: the Sheet is a manually-edited weekly schedule, not a fast-changing feed; a 15–30 minute interval would catch same-day edits without meaningfully hammering Google's unauthenticated export endpoint (a plain `GET`, no known StayWhile-held rate limit researched yet for this specific mechanism — same caveat as Increment 97). Not implemented or hardcoded anywhere this pass.
+
+### What was built (Steps 2–3)
+
+- `packages/database/prisma/schema.prisma` — 2 additive enum values.
+- `packages/database/prisma/migrations/20260917113152_add_google_sheets_integration_provider/migration.sql` — hand-written (local DB had the same pre-existing cross-worktree migration-history drift as Increment 90's Notion migration; used `prisma db push` + `prisma migrate resolve --applied` instead of a destructive `migrate reset`, exact same precedent).
+- `apps/website/src/domains/integrations/services/integrations.service.ts` — `PROVIDER_DEFAULTS`/`PROVIDER_CLIENT_STATUS` extended for `GOOGLE_SHEETS` (mandatory for the enum addition to typecheck — these are exhaustive `Record<IntegrationProvider, ...>` maps).
+- New `apps/website/src/domains/team/services/schedule-persistence.ts` — `readDurableSnapshot()`, `writeDurableSnapshot()` (windows to ~2 days back/10 days forward before persisting — the live sheet spans 18+ months, and nothing in this app ever needs more than Today/Tomorrow/Week), `beginScheduleSync()`/`finishScheduleSync()` (advisory-locked, stale-RUNNING self-heal), `getLastSyncAttempt()`.
+- `apps/website/src/domains/team/services/schedule.service.ts` — rewritten: the old module-only `lastGoodSnapshot`/`lastFetchFailure` variables are now a thin in-memory micro-cache **in front of** the durable DB row, not the source of truth. New exported `runScheduleSync()` — the trigger-agnostic entry point. `getSnapshot()` now falls back to `readDurableSnapshot()` when the in-memory cache is cold AND a live fetch fails/is already in-flight — this is the actual restart-survival fix.
+
+### Manual Refresh behavior (G)
+
+Unchanged in effect, now durable underneath: `forceRefreshSchedule()` still asserts `team:update`, still always bypasses the reuse window, still calls the same real fetch — but now that call durably persists to the database on success (not just an in-memory variable), and a failure is durably logged too (not just held in a variable that vanishes on restart).
+
+### Automatic Refresh behavior (H)
+
+Logic exists (`runScheduleSync()`) and is provably safe to call from anywhere, including concurrently with manual refresh (advisory lock). **Not yet actually triggered on a schedule** — that's the one piece deliberately left for the user's confirmation.
+
+### Failure/last-known-good behavior (I)
+
+Verified two ways: (1) 6 new unit tests in `schedule.service.test.ts` covering exactly this (never-wipe-on-failure, durable-fallback-after-cold-cache, concurrent-refresh-protection); (2) a real, live, read-only run against the actual local database and the actual live Google Sheet — `runScheduleSync()` persisted 495 real shifts + 18 warnings; a **separate fresh process** with zero in-memory state then read the identical data back, directly proving restart-survival rather than assuming it from source code.
+
+### Tests/results (J)
+
+New: `schedule-persistence.test.ts` (12 tests — durable read/write, windowing, advisory-lock begin/finish, stale-RUNNING self-heal, last-attempt lookup). `schedule.service.test.ts` rewritten (17 tests, up from 12 — added: durable-fallback-after-restart, concurrent-refresh-protection, and a `runScheduleSync` describe block covering success/malformed-parse/no-Sheet-write). Full `apps/website/src/domains/team` + `dashboard` suite: **119/119 passing**. One real, expected regression found and fixed: `integrations.service.test.ts`'s provider-catalog test asserted an exact count of 12 providers — corrected to 13 (an intentional, additive change, not a defect). Full `apps/website` suite: **1024/1027 passing** — same 3 pre-existing, unrelated `OwnerRezConfirmLinkPanel` failures as every prior increment (confirmed: a 4th failing "suite" is a pre-existing, untracked `_tmp-cielo-production-integration.test.ts` debug script from earlier Cielo work, unrelated to anything touched here, already broken on its own `server-only` import regardless of this increment). `npx tsc --noEmit`: clean. `eslint` on every new/touched file: 0 errors (2 pre-existing-pattern `import/order` warnings on the new persistence test file, same oscillating-autofixer class already documented as tolerated elsewhere in this file).
+
+### Remaining blockers before real Production deployment (K)
+
+The automatic-trigger mechanism choice (Vercel Cron vs. n8n) — explicit user decision needed. Personnel identity mapping — unchanged, still needs real `User` accounts + human confirmation. Production RBAC grant for the `team` resource — not run, needs approval. The migration above needs to actually be applied to Production (`prisma migrate deploy` against Supabase) as part of any real deploy — not done, not attempted. `CRON_SECRET`/`vercel.json` Production env config, once the trigger choice is made.
+
+### Confirmation — no Production/Sheet/device/other-integration change (L)
+
+Confirmed via `git status --porcelain -uall`: every changed/new file is exactly the VA-schedule-related set above (plus this `HANDOFF.md` entry) — no Cielo/August/Nest/Notion/OwnerRez file touched, no `.claude/worktrees/` file touched. All schema/migration work ran only against the local dev database (`127.0.0.1:5432/staywhile_dev`), confirmed via `packages/database/.env` before every step — never `STAYWHILE_SUPABASE_DATABASE_URL`, never Production. No commit, no push (confirmed: `git log`/`git status` show no new commits). The Google Sheet was read via the same existing unauthenticated `GET` only — never written to. No lock/thermostat/device command issued. No Supabase/August/Notion/General-Resources/Asana/Ecobee work started.
+
+### Files changed this increment
+
+New: `apps/website/src/domains/team/services/{schedule-persistence.ts,schedule-persistence.test.ts}`, `packages/database/prisma/migrations/20260917113152_add_google_sheets_integration_provider/migration.sql`. Modified: `packages/database/prisma/schema.prisma`, `apps/website/src/domains/integrations/services/{integrations.service.ts,integrations.service.test.ts}`, `apps/website/src/domains/team/services/{schedule.service.ts,schedule.service.test.ts}`, `HANDOFF.md` (this entry).
+
+## Increment 101 — 2026-09-17 (same day): Vercel Cron automatic-refresh trigger implemented and tested locally, approved architecture (Vercel Cron, not n8n, every 15 minutes) — nothing committed/pushed/deployed, no Production CRON_SECRET created
+
+**Context**: the user approved the automatic-update architecture flagged as a stop-and-ask in Increment 100 — Vercel Cron (not n8n, to keep this an application-owned function with no unnecessary external workflow dependency), every 15 minutes, calling the already-built, trigger-agnostic `runScheduleSync()` directly with no duplicated logic.
+
+### A. Exact cron architecture implemented
+
+Vercel Cron → a dedicated Next.js Route Handler → `runScheduleSync()` (unchanged, the exact same function manual Refresh calls). No n8n involvement anywhere in this path. No new fetch/parse/persistence code — the route contains no schedule-domain import besides that one function.
+
+### B. Exact endpoint
+
+`GET /api/cron/schedule-refresh` — new file `apps/website/app/api/cron/schedule-refresh/route.ts`.
+
+### C. Exact Vercel schedule configuration
+
+New `apps/website/vercel.json` (sibling to `next.config.js` — this monorepo's Vercel project root is `apps/website`, confirmed by that being where the actual Next app/build config lives):
+
+```json
+{
+  "crons": [
+    { "path": "/api/cron/schedule-refresh", "schedule": "*/15 * * * *" }
+  ]
+}
+```
+
+`*/15 * * * *` = every 15 minutes, per explicit approval. **Not yet in effect anywhere** — Vercel only reads `vercel.json`'s `crons` on an actual deployment, and none has happened.
+
+### D. Authentication/security behavior
+
+Vercel's own documented Cron pattern: `Authorization: Bearer $CRON_SECRET`. The route reads `process.env.CRON_SECRET` and compares it exactly against the request's header. **Fails closed with 503** if the env var isn't set at all (mirrors the Notion webhook route's own `not_configured` convention one file over) — meaning this endpoint does literally nothing in any environment, Production included, until `CRON_SECRET` is deliberately set there. **401** for any header that doesn't match exactly (missing, wrong value). No StayWhile user/session is involved at any point — by design, matching `schedule-persistence.ts`'s actor-agnostic functions. **No secret was hardcoded anywhere**, and **no Production `CRON_SECRET` was created or set** — this pass only wrote the code that will use one.
+
+### E. Automatic refresh flow
+
+Cron tick → `GET` with the Bearer header → route verifies it → `runScheduleSync()`: advisory-locked `beginScheduleSync()` → read-only `GET` against the Sheet (`fetchScheduleSheetCsv()`, unchanged) → parse/validate → on success, `writeDurableSnapshot()` + `finishScheduleSync({status:"SUCCEEDED"})` → dashboard/`/team` read the updated durable row on their next request.
+
+### F. Failure behavior
+
+Unchanged from Increment 100's guarantee, now exercised by both triggers: a failed automatic sync calls `finishScheduleSync({status:"FAILED", errorMessage})` only — `writeDurableSnapshot()` is never called, so the existing last-known-good schedule is never cleared or replaced, and `lastSyncedAt` is never bumped as though it succeeded. If `runScheduleSync()` itself throws unexpectedly (not an ordinary Sheet-fetch failure, which it already handles internally), the route catches it and returns 500 rather than crashing.
+
+### G. Manual Refresh behavior
+
+Completely unchanged — `forceRefreshSchedule()`/`RefreshScheduleButton` still work exactly as before, still gated on `team:update`, still real. The advisory lock means an automatic Cron tick landing at the same moment as a manual click can't race: whichever acquires the lock first proceeds; the other gets `alreadyRunning` and no-ops safely.
+
+### H. Files changed
+
+New: `apps/website/app/api/cron/schedule-refresh/{route.ts,route.test.ts}`, `apps/website/vercel.json`.
+
+### I. Tests/results
+
+New: 6 route-level tests (`route.test.ts`) — 503 when `CRON_SECRET` unset, 401 missing header, 401 wrong secret, 200 + `runScheduleSync` called exactly once with the correct secret, no-session-required (proven structurally — no auth/session import anywhere in the route or its test), 500 on an unexpected thrown error. Full relevant suite re-run: `app/api/cron` + `src/domains/team` + `src/domains/dashboard` + `src/domains/integrations` — **336/336 passing**. Full `apps/website` suite: **1030/1033** — same 3 pre-existing, unrelated failures as every prior increment (confirmed unchanged in cause). `npx tsc --noEmit`: clean. `eslint` on every new/touched file: 0 errors. `vercel.json` inspected by hand: valid JSON, `path` matches the route exactly, schedule is standard 5-field cron syntax. **Not independently verified**: whether StayWhile's actual Vercel plan tier supports a sub-daily cron interval (Vercel's Hobby tier historically limits cron to once/day and 2 jobs total; Pro tier and above support minute-level schedules) — this is a real platform-config fact this session did not and could not check (would require `vercel`/`gh`-adjacent account access, deliberately avoided). Worth confirming before relying on the 15-minute cadence actually firing that often once deployed.
+
+### J–L. Exact Production configuration/migration/RBAC still required
+
+Unchanged from Increment 100, restated precisely: (J) a real `CRON_SECRET` value generated and set as a Vercel Production environment variable (not created this pass); Vercel's own dashboard needs to recognize the new `crons` config, which only happens on deployment; (K) `prisma migrate deploy` run against the real Supabase Production database for migration `20260917113152_add_google_sheets_integration_provider` (local dev DB only so far); (L) the `team` resource's RBAC grant run against Production (mirrors `grant-team-permissions.ts`, local-only so far — admin all `team:*`, ops_manager `team:read`).
+
+### M. Remaining personnel-mapping issue
+
+Unchanged: all 24 real schedule identities remain UNMAPPED to any StayWhile `User` account; typo-variant clusters (Henry/Heny, Grace/Garcey/Gracey, Catherine/Catheirne, Ken/Kenny) remain deliberately unmerged, pending real `User` accounts + explicit human confirmation of each pairing. Not blocking — exact source names render regardless.
+
+### N. Exact safe deployment sequence, once approved
+
+1. Review and explicitly approve the exact file list (this increment's + Increment 100's team-domain/persistence/cron files — see both increments' "Files changed").
+2. Stage those files individually by name (never `git add -A`/`.`/`-a`) — confirmed unrelated dirty work (Cielo, August/Nest diagnostics, `.claude/worktrees/`) stays untouched.
+3. One or a few scoped commits, pushed to `main` via the already-verified `github-staywhile` SSH remote only.
+4. Separately: run `prisma migrate deploy` against the real Supabase Production `DATABASE_URL` (confirm target via `diagnose-db-target.mjs`-style precheck first, same as every prior Production migration).
+5. Separately: generate and set a real `CRON_SECRET` value as a Vercel Production environment variable, via the Vercel dashboard (never `vercel` CLI login/link given the ambient-identity risk already documented).
+6. Separately: run the Production RBAC grant.
+7. Deploy (push already triggers Vercel's auto-deploy; confirm the new `vercel.json` cron registers in Vercel's own Cron Jobs dashboard).
+8. Verify functionally via unauthenticated HTTP checks (same constraint as every prior rollout — `gh`/`vercel` CLI unavailable due to the Client B identity issue).
+9. The user does the real authenticated click-through Production verification, same as every prior increment's sign-off, plus confirms the cron actually fires on schedule (visible in Vercel's dashboard) and updates the durable data.
+
+### O. Confirmation
+
+No commit, no push, no deploy. No Production database/migration/RBAC/config change. No real `CRON_SECRET` created anywhere. `gh`'s active identity (`cabincollectivebb-afk`, Client B) was left completely untouched — not checked again this pass since no ambient-account action was needed (only the already-verified SSH remote, used for nothing beyond what Increment 100 already confirmed). No `vercel` command run at all. The Google Sheet was never written to — the cron route's only Sheet interaction is the same unauthenticated `GET` already in place. No lock/thermostat/device command issued. No Supabase/August/Notion/General-Resources/Asana/Ecobee work started.
+
+### Files changed this increment
+
+`apps/website/app/api/cron/schedule-refresh/{route.ts,route.test.ts}`, `apps/website/vercel.json`, `HANDOFF.md` (this entry).
+
+## Increment 102 — 2026-09-17 (same day): Supabase Security P0 — READ-ONLY AUDIT against the real StayWhile Production database, confirmed target, real findings recorded; NOTHING remediated, no mutation of any kind
+
+**Context**: with VA Schedule accepted at its local-implementation boundary and Production deploy deliberately deferred, the user switched to the queued P0 Supabase security item — strict read-only audit only, no RLS/policy/grant/schema/data change, no migration, no Vercel/CRON_SECRET/RBAC change, no other integration touched.
+
+### Step 1 — exact database target verified
+
+Used the existing `packages/database/diagnose-db-target.mjs` (pre-existing, read-only, makes zero DB connections itself, prints only host/port/database-name/username — never a password) against `.env.supabase-migration.local`'s `STAYWHILE_SUPABASE_DATABASE_URL`/`STAYWHILE_SUPABASE_DIRECT_URL`. Both resolved to host `aws-0-us-east-1.pooler.supabase.com`, database `postgres`, username `postgres.bsyjuufnwjyzfchmxgiv` — **matching StayWhile's confirmed Production project ref (`bsyjuufnwjyzfchmxgiv`)**, the exact same project every prior Production migration in this file has targeted. Prisma's own `directUrl` precedence confirmed (DIRECT_URL is what `migrate deploy` would actually use). No password or full connection string was ever printed. Proceeded on this confirmed target.
+
+### Step 2 — read-only RLS audit (real `SELECT`-only queries via `psql`, no writes)
+
+- **Schemas present**: `auth`, `extensions`, `graphql`, `graphql_public`, `pgbouncer`, `public`, `realtime`, `storage`, `vault` — all Supabase-managed except `public`, which is StayWhile's own (Prisma-owned) schema. Audit focused there, per instruction ("especially public") and because Prisma defines no custom schema.
+- **RLS status — all 27 `public` tables**: `relrowsecurity = false`, `relforcerowsecurity = false`, owner `postgres`, for every single one (`_prisma_migrations`, `ai_actions`, `ai_conversations`, `ai_messages`, `audit_logs`, `cleaning_schedules`, `guests`, `integration_connections`, `integration_sync_logs`, `maintenance_requests`, `message_threads`, `messages`, `notifications`, `notion_page_events`, `permissions`, `properties`, `provider_devices`, `reservation_guests`, `reservations`, `role_permissions`, `roles`, `smart_device_events`, `smart_devices`, `tasks`, `user_roles`, `users`, `workflow_executions`). This is exactly the condition Supabase's Security Advisor flags as `rls_disabled_in_public` — computed directly from `pg_class`/`pg_namespace`, not fetched from Supabase's Advisor API (no dashboard/CLI login was used, per instruction).
+- **Policies**: `pg_policies` for schema `public` returned **0 rows** — no RLS policy has ever been created on any table.
+- **Grants**: `information_schema.role_table_grants` for `table_schema='public'` and grantee in `(anon, authenticated, service_role)` — **all 27 tables × all 3 roles** hold `DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE` (Supabase's own default grants for objects created in `public`, never explicitly revoked). `PUBLIC` (the pseudo-role) holds **zero** explicit table grants — not doubly exposed. Schema-level `USAGE` on `public` confirmed granted to `anon`, `authenticated`, and `service_role` (a PostgREST-reachability prerequisite). The roles `anon`/`authenticated`/`authenticator`/`service_role`/`postgres` were confirmed to genuinely exist in this database (this is a real, standard Supabase-provisioned project with its API layer provisioned, not just unused role names).
+- **Advisor equivalence**: the `rls_disabled_in_public` finding was reproduced directly via SQL rather than the Advisor API/dashboard, satisfying the instruction to avoid any login that could risk another client's account.
+
+### Step 3 — application access architecture (read-only code search)
+
+Searched the whole monorepo for `@supabase/supabase-js`/`@supabase/ssr` (dependency), `createClient`/`createServerClient` (Supabase JS factory calls), and any `SUPABASE`/`NEXT_PUBLIC_SUPABASE`/`ANON`/`SERVICE_ROLE`-named reference in code or `.env.example`/`.env.local` (variable names only — no values ever printed). **Zero results across all of it.** StayWhile's entire application never uses Supabase's JS client, REST API, anon key, or service-role key anywhere. The **only** database access path anywhere in this codebase is Prisma via `DATABASE_URL`/`DIRECT_URL`, exclusively server-side (Server Components/Actions/API routes — never `NEXT_PUBLIC_`-prefixed, never reaches the browser), connecting as the `postgres` role. That role is confirmed (via `pg_get_userbyid`) to be the **owner** of all 27 tables — Postgres table owners bypass RLS enforcement by default (unless `FORCE ROW LEVEL SECURITY` is separately set, which nothing here does or proposes). This is the key fact underpinning the remediation risk assessment below.
+
+### Step 4 — risk classification
+
+Uniform across all 27 tables at the SQL level (identical RLS-off + identical full-CRUD grants to `anon`/`authenticated`), so risk differs only by data sensitivity, not by access likelihood:
+
+- **Highest-impact tables**: `users` (PII, Clerk linkage), `guests` (PII), `reservations`/`reservation_guests` (booking/PII-adjacent), `messages`/`message_threads` (communications content), `audit_logs` (reveals system/actor activity).
+- **Medium-impact**: `properties` (addresses/config), `smart_devices`/`smart_device_events`/`provider_devices` (device state — includes lock/thermostat metadata), `permissions`/`roles`/`role_permissions`/`user_roles` (RBAC config — privilege-mapping recon value), `ai_conversations`/`ai_messages`/`ai_actions`, `integration_connections`/`integration_sync_logs` (the latter's `credentialsRef` field is, per its own schema doc comment, a reference into a secrets store — never a plaintext token — so exposure here is metadata/status, not a raw credential).
+- **Lower-impact**: `notifications`, `tasks`, `cleaning_schedules`, `maintenance_requests`, `notion_page_events` (change-metadata only, no raw values by design — Increment 88), `workflow_executions`, `_prisma_migrations` (schema history only).
+- **Exposure determination**: current evidence shows a real, confirmed **platform-level** capability for anonymous/authenticated _Supabase API_ access (RLS off + broad grants + schema USAGE, all independently confirmed) — **not** a confirmed active exploitation or a confirmed leaked key. No API call was made with any key (none was available/used) to prove live exploitation, per the explicit no-penetration-testing instruction. The application's own code path (Prisma/server-only) shows **zero** evidence of ever using or exposing the anon/service-role key — this is a standing Supabase-default-configuration gap, not an application-code defect.
+
+### Step 5 — remediation proposal (NOT applied)
+
+**Smallest safe fix, in order**:
+
+1. `ALTER TABLE ... ENABLE ROW LEVEL SECURITY;` on all 27 `public` tables — with **zero** policies added, this alone makes every table default-deny for any role that isn't the table owner. Given Prisma connects as `postgres`, the table owner, **this step should not affect the application at all** — owners bypass RLS by default. This is the single highest-value, lowest-app-risk fix.
+2. `REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon, authenticated;` — defense-in-depth, removes the SQL-level grants outright regardless of RLS state. Also should not affect the app, since Prisma never connects as `anon`/`authenticated`.
+3. `service_role`'s grants are left as-is — Supabase's own convention is that `service_role` is meant to bypass RLS by design (it's the platform's "admin" key); since this app doesn't use it either, no action is proposed there beyond noting it's unused.
+4. No new policies are proposed in this pass — the app never needs anon/authenticated Supabase-API access at all (Prisma is the sole path), so "add explicit policies" isn't needed unless/until a future feature deliberately wants client-side Supabase access, which nothing today does.
+5. **Per-table exceptions requiring further confirmation before including in a real change**: none identified — the ownership fact makes this a uniform, low-risk fix candidate across all 27 tables, not a table-by-table judgment call. Still, the actual change should be reviewed table-by-table by the user before approval, not applied as a blind bulk statement, per the standing "no blind RLS enablement" instruction.
+
+**Possible app-breaking consequences**: assessed as very low, specifically because of the confirmed table-ownership fact — but this exact scenario (Supabase-provisioned `anon`/`authenticated`/RLS-owner interplay) **cannot be pre-tested on local dev**, since local dev is plain Homebrew Postgres, not a Supabase project — it has no `anon`/`authenticated`/`service_role` roles to reproduce this against. **Safe test sequence once approved**: apply step 1 only first (RLS enable, no grant revocation yet) directly against Production during a low-traffic window → immediately verify via a real authenticated sign-in + dashboard load + one read + one write (e.g. a task update) → only if that's clean, apply step 2 (grant revocation) → re-verify the same way. Both steps are independently reversible (`DISABLE ROW LEVEL SECURITY`; re-`GRANT`) if anything unexpected surfaces.
+
+### Step 6 — VA Schedule Production dependencies (confirmed unchanged, not touched this pass)
+
+All still pending, exactly as reported after Increment 101: `GOOGLE_SHEETS`/`NONE` enum migration not applied to Production; Production `team` RBAC grant not run; Production `CRON_SECRET` not created; Vercel deployment/cron registration not done; Vercel plan support for a 15-minute cron interval not independently verified; personnel identity mapping still fully unresolved (24 identities, still UNMAPPED); Production verification not started. None of this was touched or advanced this increment.
+
+### Confirmation — nothing in Production was modified
+
+Every database interaction this pass was a plain `SELECT` (schema listing, `pg_class`/`pg_namespace` RLS flags, `pg_policies`, `information_schema.role_table_grants`, `has_schema_privilege`, `pg_roles`) via `psql` against the confirmed Production connection string — **zero** `ALTER`/`GRANT`/`REVOKE`/`INSERT`/`UPDATE`/`DELETE`/`CREATE`/`DROP` statement was ever issued. No migration run. No Vercel/CRON_SECRET/RBAC change. No `gh`/`vercel` command run (the ambient `gh` identity is still Client B's, untouched, not even re-checked this pass since no `gh`-adjacent action was needed). No Google Sheet interaction at all this increment. No commit, no push, no file staged. No August/Notion/Asana/Ecobee/device work started. No credential value (password, service-role key, anon key, JWT, or full connection string) was ever printed in any command output or in this report.
+
+### Files changed this increment
+
+`HANDOFF.md` only (this entry + the Supabase Security section update above). No code file touched.
+
+## Increment 103 — 2026-09-17 (same day): Supabase Security Phase 1 APPLIED to Production — RLS enabled on all 27 `public` tables, nothing else changed; Phase 2 (grant revocation) explicitly NOT done
+
+**Context**: the user reviewed Increment 102's audit and approved ONLY Phase 1 (enable RLS, no policies, no grant revocation) as a real, scoped Production mutation — the first Production database change this entire VA Schedule/security workstream has made.
+
+### Preflight (before any mutation)
+
+1. Re-ran `packages/database/diagnose-db-target.mjs` against `.env.supabase-migration.local` — confirmed unchanged: host `aws-0-us-east-1.pooler.supabase.com`, database `postgres`, username `postgres.bsyjuufnwjyzfchmxgiv`, matching StayWhile's Production project ref `bsyjuufnwjyzfchmxgiv`. No password/connection string printed.
+2. Re-queried `pg_class`/`pg_namespace` for all 27 `public` tables — confirmed identical to Increment 102's snapshot: same 27 tables exist, all still owned by `postgres`, all still `relrowsecurity=false`/`relforcerowsecurity=false`. Baseline unchanged since the audit.
+3. Re-confirmed via code search (`@supabase/supabase-js`/`createClient`/`SUPABASE`-named vars) — zero results, unchanged: the app is still Prisma-only, server-only.
+4. All preflight checks passed — proceeded.
+
+### Exact SQL prepared and applied
+
+A single transaction, exactly 27 `ALTER TABLE public.<table> ENABLE ROW LEVEL SECURITY;` statements (one per table from the approved list), wrapped in `BEGIN;`/`COMMIT;` so it's atomic — saved to `packages/database/_tmp-phase1-enable-rls.sql` (kept, untracked, no secrets — pure SQL) before execution, for inspection. No `FORCE ROW LEVEL SECURITY`, no `CREATE POLICY`, no `GRANT`/`REVOKE`, no `ALTER ... OWNER`, no column/data change, no touch to `auth`/`storage`/`realtime`/`vault`/`extensions`/`graphql`/`pgbouncer`. A matching rollback (`DISABLE ROW LEVEL SECURITY` × 27, same transaction shape) was prepared in advance as `_tmp-phase1-rollback-disable-rls.sql` — **not executed**, kept ready.
+
+Applied via `psql` against the confirmed Production `DIRECT_URL`. All 27 `ALTER TABLE` statements succeeded; `COMMIT` succeeded.
+
+### Immediate post-change verification (read-only)
+
+- **RLS state**: all 27 tables now `relrowsecurity = true`, `relforcerowsecurity = false` — exactly the intended, minimal change.
+- **Ownership**: unchanged — all 27 still owned by `postgres`.
+- **Policies**: `pg_policies` for `public` still returns 0 rows — confirmed nothing was accidentally created.
+- **Grants**: `information_schema.role_table_grants` for `public` + the 3 roles returns exactly 567 rows (27 tables × 3 roles × 7 privilege types) — identical shape/count to the pre-change baseline, confirming no grant was touched.
+
+### Production application checks performed (unauthenticated only — no localhost used as acceptance)
+
+- `GET https://stayawhilewithus-website.vercel.app/` → `HTTP 404` with the same `x-clerk-auth-reason: protect-rewrite, dev-browser-missing` signature as every prior baseline check in this file — not a 500, not a crash page. **Caveat, stated plainly**: this exact response is edge-cached (`age: 36663`, `x-vercel-cache` behavior) and never reaches a real Server Component/Prisma-backed render — it does NOT prove a DB-backed page still works post-change.
+- `GET /api/health` → `HTTP 200`. **Caveat**: this route is static (`return NextResponse.json({status:"ok",...})`) and touches no database at all — its 200 proves the app is up, not that Prisma/RLS interaction is healthy.
+- `GET /sign-in` → `HTTP 200`, normal Clerk-rendered page, no 500.
+- **What this does NOT prove, honestly stated**: no authenticated, DB-querying page (the dashboard, `/team`, `/notion`, `/properties`, etc.) was exercised — that requires a real signed-in session, which this session cannot produce. No regression was observed in anything that COULD be checked, but the meaningful verification (a real Prisma read/write through an authenticated request) has not happened yet.
+
+### What the user needs to verify manually on the REAL StayWhile Production dashboard
+
+Sign in as normal and confirm, in order: (1) the dashboard itself loads with real data (properties/reservations/tasks counts, not an error boundary); (2) at least one write path works (e.g. mark a task done, or trigger a Refresh button) to confirm both reads AND writes still succeed through Prisma; (3) no new "Application error" page anywhere navigated. If all three are clean, Phase 1 is verified working. If anything shows a database/permission-shaped error that wasn't there before, stop and report it — do not attempt to self-diagnose by disabling RLS without evidence first (per the standing instruction not to roll back merely because verification requires the user).
+
+### Regression / rollback
+
+**No regression observed** in anything checked this session (all unauthenticated signals clean). **Rollback was NOT required and was NOT executed** — the prepared `_tmp-phase1-rollback-disable-rls.sql` remains available, untouched, only for use if the user's manual verification above surfaces a real problem.
+
+### Phase 2 / scope confirmation
+
+**Phase 2 (`REVOKE ALL ... FROM anon, authenticated;`) was explicitly NOT performed** — grants confirmed unchanged (567 rows, same as baseline). `service_role` was not touched. No policy was created. This remains a separate, not-yet-approved boundary.
+
+### VA Schedule / other work — confirmed untouched
+
+`GOOGLE_SHEETS`/`NONE` Production migration, Production `team` RBAC, Production `CRON_SECRET`, Vercel deployment/cron registration, Vercel 15-minute cron plan verification, personnel identity mapping, and Production verification for VA Schedule all remain exactly as reported after Increment 101/102 — none touched this pass. No August/Notion/Asana/Ecobee work started. No device command issued. No Google Sheet interaction. `gh`'s active identity (Client B) was not used or switched. No `vercel` command run. No commit, no push, no file staged.
+
+### Files changed this increment
+
+`HANDOFF.md` (this entry + Supabase Security section update). New, untracked, non-secret SQL files kept for the record: `packages/database/_tmp-phase1-enable-rls.sql` (applied), `packages/database/_tmp-phase1-rollback-disable-rls.sql` (prepared, not executed). **Production database**: RLS enabled on 27 tables (the one approved mutation this increment).
+
+## Increment 104 — 2026-09-17 (same day): authenticated Production DB reads confirmed by the user post-Phase-1; read-only code inspection identifies the safest available Production write-verification candidate — nothing performed, no Production change this increment
+
+**Context**: the user performed real authenticated Production verification after Phase 1 (RLS enabled) — `/properties` (38 real properties), `/locks` (real August device/telemetry), and the Moonlit Cove property detail page all loaded correctly with real data. This confirms authenticated Prisma **reads** still work through RLS-enabled tables (expected, since Prisma connects as the table-owning `postgres` role, which bypasses RLS by default). A **write** has not yet been exercised, so Phase 1 is read-verified but not write-verified. This increment is a read-only code inspection only — no database interaction, no Production change.
+
+### Candidates considered
+
+- **Tasks (mark complete/reassign)** — touches real operational workflow data; a real task could be mistaken as genuinely done by the team if left in that state. Rejected as not the safest option.
+- **OwnerRez "Sync Now"** — pulls from OwnerRez and writes property/reservation-adjacent rows; broader blast radius than needed for a minimal write test, and closer to the explicitly-excluded "OwnerRez source-of-truth" territory. Rejected.
+- **AI Assistant conversation** — creates real `ai_conversations`/`ai_messages` rows tied to the account, but also triggers a real Claude API call and has no delete/cleanup path in the UI. Rejected as unnecessarily complex for a pure DB-write check.
+- **Creating a new record (task/property/etc.) labeled as a test** — would be genuinely fake Production operational data; the user explicitly required separate approval before doing this, so it was not treated as an available default option.
+- **Notifications — "Mark read"** — `markNotificationRead()` in `apps/website/src/domains/notifications/services/notifications.service.ts`: a single real `UPDATE notifications SET "readAt" = now() WHERE id = <one row>`, scoped by `WHERE userId = actor.userId` (never reaches any other user's data), plus one `audit_logs` insert. Touches no reservation, property, lock, thermostat, OwnerRez, Google Sheet, or permission/RBAC data. **Selected as the safest candidate.**
+
+### Exact UI steps for the user to perform (not yet done)
+
+1. Sign in to the real Production dashboard and go to `/notifications`.
+2. Find any notification showing a gold "New" badge (i.e. currently unread — `readAt` is null).
+3. Click its "Mark read" button.
+
+### Exactly what this changes
+
+One row in the `notifications` table: that notification's `readAt` column goes from `null` to the current timestamp. One new row in `audit_logs` recording the action (`notification.read`). Nothing else — no other table, no other user's data, no business/operational record.
+
+### Reversibility — stated precisely, not assumed
+
+**Not reversible through the application's own UI** — this codebase has a `markNotificationRead()` function but no "mark unread" counterpart anywhere (confirmed by code search: `readAt` is only ever set, never cleared, in this codebase). It **is** reversible via one direct, single-row, single-column Production SQL statement (`UPDATE notifications SET "readAt" = NULL WHERE id = '<that exact id>'`) — but that would be a separate Production mutation requiring the same explicit approval as Phase 1 did, not an automatic undo. Practically: marking one's own already-real notification as "read" is about as low-stakes and ordinary a state change as exists in this application — a reasonable outcome is simply accepting it rather than reverting it, but that's the user's call, not assumed here.
+
+### Open precondition, not verified this pass
+
+Whether the reviewing account currently has at least one unread notification to click is unknown — this pass was code-only, no Production query was run to check. If none exists, there is currently no other zero-side-effect way in this app to manufacture one without a real underlying event happening first; that would need to be figured out separately, not assumed.
+
+### Confirmation
+
+No Production database query or mutation occurred this increment (this was a code-only inspection, `grep`/`Read` against the local repository only). No Google Sheet, RBAC, VA Schedule, or other-integration change. No `gh`/`vercel` action.
+
+### Files changed this increment
+
+`HANDOFF.md` only.
+
+## Increment 105 — 2026-09-17 (same day): notification write-test candidate unavailable (0 notifications in Production); analyzed a rollback-only DB-role write test and the case for closing Phase 1 on architectural evidence — NOTHING EXECUTED, decision pending
+
+**Context**: the user reports the real Production `/notifications` page shows "No notifications yet," so Increment 104's candidate can't be exercised. Per instruction, no fake notification was created and no real property/task/reservation was suggested as a substitute. This increment is analysis only — two read-only checks were run (see below), no mutation.
+
+### A. Would `BEGIN → UPDATE → ROLLBACK` validly prove the relevant write permission?
+
+Yes, for the specific narrow claim "the database role Prisma uses can execute UPDATE against these tables now that RLS is enabled." Postgres's RLS enforcement is keyed entirely to _which role_ executes a statement and _whether that role owns the table / RLS is forced_ — it has no concept of "which client library" issued the SQL. Since a `psql` session using the exact same Production connection string authenticates as the identical role Prisma uses, a successful UPDATE there is mechanically equivalent, from Postgres's own enforcement perspective, to what Prisma's connection would experience. This is a real, valid test of that specific claim — not a proxy or approximation of it.
+
+### B. Exact table/row/column recommended
+
+`public.integration_connections`, one row: the `AIRBNB` provider row specifically (not Notion/OwnerRez/August/Nest/Cielo, which are real, actively-used integrations — Airbnb's row is a permanently-`DISCONNECTED` stub with zero real usage anywhere in this app, confirmed via `PROVIDER_CLIENT_STATUS` — the most inert row available). Target column: `updated_at` (or `metadata`), assigned to its own current value — a true no-op, not an actual value change.
+
+### C. Exact SQL (conceptual, no real IDs)
+
+```sql
+BEGIN;
+UPDATE integration_connections
+SET updated_at = updated_at
+WHERE provider = 'AIRBNB';
+ROLLBACK;
+```
+
+An even more conservative alternative that never assigns any column at all: `SELECT 1 FROM integration_connections WHERE provider = 'AIRBNB' FOR UPDATE;` inside the same `BEGIN`/`ROLLBACK` — `FOR UPDATE` requires the identical write-lock/RLS-UPDATE permission check as a real UPDATE, without ever touching a column value.
+
+### D. How the rollback would be proven
+
+Capture the target row's `xmin` system column (Postgres's internal row-version id — changes on every write, even a no-op UPDATE, and is restored to its pre-transaction value on ROLLBACK) and the column's literal value _before_ starting. Run `BEGIN`/`UPDATE`/`ROLLBACK`. Immediately re-query the same row's `xmin` and value in a fresh read-only query. Both must be byte-identical to the pre-transaction snapshot — if `xmin` differs, something committed and rollback did not fully undo it (which would itself be a serious, reportable anomaly, not something to paper over).
+
+### E. Trigger/audit-hook risk of escaping the rollback
+
+Checked read-only: **zero triggers exist on `integration_connections`** (`pg_trigger` for that table, excluding internal ones, returned 0 rows). This codebase's own audit logging (`recordAudit()`) is an **application-level** TypeScript call made explicitly by service functions like `markNotificationRead()` — it is not a database trigger, so a raw `psql` statement would never invoke it, rolled back or not. Supabase Realtime (unused by this app anyway — confirmed no `@supabase/supabase-js` dependency) only ships _committed_ transactions over logical replication, so a rolled-back transaction structurally cannot leak into it. No side-effect path was found that could survive a `ROLLBACK`.
+
+### F. Safer than a real UI write?
+
+Yes, clearly. It never commits (self-heals even on an abnormal disconnect — Postgres auto-rolls-back any open transaction on connection loss). It targets an inert stub-provider config row, not business data. It bypasses every application-level side effect (audit logging, cache revalidation, any future webhook) entirely, since raw uncommitted SQL triggers none of them. A real UI action like "Mark read" is genuinely committed and has no built-in undo at all.
+
+### G. What this test does NOT prove — stated without hedging
+
+It proves the **database role** can write post-RLS. It does **not** exercise the Next.js Server Action/API route code, the app's own `assertPermission()`/RBAC gating, Prisma's query engine or connection-pooling behavior under real concurrent application load, or any actual authenticated HTTP request path. Those remain unverified by this test, exactly as they would remain unverified even if the test were run and passed.
+
+### Alternative assessed: is the existing evidence sufficient to close Phase 1 without manufacturing a write?
+
+The full chain, restated precisely: (1) real authenticated Production reads confirmed through the actual app request path (Increment 104); (2) the app's _only_ database access path anywhere is server-only Prisma — verified by exhaustive code search, twice; (3) Prisma connects as `postgres`, directly confirmed (via `pg_get_userbyid`) to literally own all 27 tables; (4) RLS is enabled but **not forced** on all 27, confirmed both before and immediately after Phase 1; (5) PostgreSQL's own documented RLS semantics state row security is unconditionally bypassed for the owning role unless `FORCE ROW LEVEL SECURITY` is set — this is foundational, stable Postgres behavior, not a Supabase-specific or inferred detail; (6) there is no RLS mechanism in Postgres that lets an owning role read but not write, or write but not read, under identical FORCE settings — ownership bypass is command-agnostic, applying uniformly to SELECT/INSERT/UPDATE/DELETE alike.
+
+**Assessment, stated without exaggerating certainty**: given (3)+(4)+(5)+(6) together, there is no plausible mechanism by which the confirmed-working read path could succeed while a write would fail _for the RLS/ownership reason this whole exercise exists to check_. This is a structural conclusion from Postgres's own stated permission model applied to directly-confirmed facts, not an extrapolation or a hopeful pattern-match. It is **sufficient to close the RLS/ownership write-safety question specifically**. It does **not** eliminate every other conceivable category of failure (an application-code bug in a specific write path, a pooler edge case under real concurrent load, etc.) — but a rollback-only DB-role test wouldn't rule those out either, since it doesn't exercise the app layer at all (see G). Whether that residual, non-RLS-related uncertainty is acceptable to close Phase 1 on is the user's call, not something to decide here.
+
+### Nothing executed this increment
+
+Two read-only queries were run: `pg_trigger` for `integration_connections` (0 rows) and a `SELECT provider, status FROM integration_connections` (confirmed 12 provider rows exist in Production — `GOOGLE_SHEETS` is absent, consistent with that migration never having been applied to Production). No `BEGIN`/`UPDATE`/`ROLLBACK` was run. No table was touched. No fake notification, task, property, or reservation was created or suggested. No Phase 2, no policy change, no RLS disable, no VA Schedule Production action, no RBAC/CRON_SECRET change, no commit/push, no `gh`/`vercel` switch, no other integration or device action.
+
+### Files changed this increment
+
+`HANDOFF.md` only.
+
+## Increment 106 — 2026-09-17 (same day): Phase 1 CLOSED on existing evidence (user decision); Phase 2 pre-mutation audit complete — critical default-privileges finding; exact Phase-2 SQL + rollback prepared, NOTHING executed against Production
+
+**Context**: the user decided to close Phase 1 without the rollback-only write test, reasoning that it would only reconfirm the already-established database-role permission model, not the application request path. HANDOFF updated accordingly (see the Supabase Security section above). This increment is the read-only Phase-2 pre-mutation audit the user then requested — no Production mutation.
+
+### Reconfirmation (before any audit work)
+
+1. `diagnose-db-target.mjs` re-run — target unchanged: `bsyjuufnwjyzfchmxgiv`.
+2. All 27 tables re-confirmed: `relrowsecurity = true`, `relforcerowsecurity = false` (aggregate count check: 27/27 RLS-on, 0/27 forced).
+3. `pg_policies` for `public` — still 0 rows.
+4. Application architecture re-confirmed (third time this workstream) via code search: zero `@supabase/supabase-js`/`@supabase/ssr`, zero `createClient`/`createServerClient`, zero `SUPABASE`/`ANON`/`SERVICE_ROLE`-named reference anywhere.
+5. **New, stronger evidence found this pass**: `pg_roles.rolbypassrls` — `postgres` and `service_role` both have the explicit `BYPASSRLS` role attribute (`true`); `anon`/`authenticated` do not (`false`). This is a more direct confirmation than the ownership argument alone: `BYPASSRLS` is Postgres's own explicit, unambiguous RLS-exemption mechanism (bypasses RLS on any table, not conditional on ownership semantics) — it independently corroborates everything Increment 102/103's ownership-based reasoning already concluded.
+
+### Grant audit — precise, by object type
+
+- **Schema-level** (`public`): `anon`/`authenticated`/`service_role` all have `USAGE = true`, `CREATE = false`. No role can create new objects in `public` — already safe, no action needed there.
+- **Table-level**: unchanged from Increment 102/103 — all 27 tables grant `SELECT/INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER` to `anon`/`authenticated`/`service_role`.
+- **Sequences**: **zero sequences exist anywhere in `public`** (Prisma uses UUID defaults, not serial/identity columns) — nothing to revoke today.
+- **Functions**: **zero functions exist anywhere in `public`** — nothing to revoke today.
+- **Default privileges — the critical finding** (`pg_default_acl`, queried directly): TWO definer roles have default-ACL entries scoped to `public` — `postgres` (the role our own Prisma migrations run as) and `supabase_admin` (Supabase's own platform-management role, not ours to alter and not relevant to our own future tables, since default ACLs are additive-per-CREATING-role and our migrations never run as `supabase_admin`). **Both currently grant, to `anon`+`authenticated`+`service_role`, on any FUTURE object**: tables → full CRUD (`arwdDxtm`: INSERT/SELECT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER/MAINTAIN), sequences → `rwU` (SELECT/UPDATE/USAGE), functions → `X` (EXECUTE). **This confirms the user's explicit concern was correct and is a present, real fact**: revoking only today's 27 tables' grants would NOT be durable — the very next table created by a future Prisma migration would silently re-acquire the same broad access via this default-ACL template, unless Phase 2 also fixes it.
+
+### G. Application dependency on anon/authenticated — confirmed none
+
+Re-confirmed (4th time across this workstream, different method each time — dependency/package check, symbol search, env-var-name search, and now this pass's repeat of all three): zero.
+
+### H. Exact proposed Phase-2 SQL — prepared, NOT executed
+
+Saved to `packages/database/_tmp-phase2-revoke-anon-authenticated.sql` for review (one transaction):
+
+```sql
+BEGIN;
+REVOKE ALL PRIVILEGES ON TABLE <all 27, named explicitly> FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL PRIVILEGES ON TABLES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL PRIVILEGES ON SEQUENCES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL PRIVILEGES ON FUNCTIONS FROM anon, authenticated;
+COMMIT;
+```
+
+Deliberately does NOT revoke schema `USAGE` on `public` — proposed as optional further-hardening, not part of this minimal core change (see M). Deliberately scoped `FOR ROLE postgres` only — never touches `supabase_admin`'s own default-ACL entries. Does not touch `service_role`, ownership, RLS state, or any policy.
+
+### I. Future/default-privilege protection
+
+The `ALTER DEFAULT PRIVILEGES FOR ROLE postgres` statements above are exactly this protection — without them, Part 1's revocation would be undone the moment any future migration (running as `postgres`) creates a new table.
+
+### J. Rollback — prepared, NOT executed
+
+Saved to `packages/database/_tmp-phase2-rollback-restore-grants.sql`: re-`GRANT`s the exact 7 privilege types the 27 tables actually had before (`SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER` — deliberately NOT including `MAINTAIN`, which the current default-ACL template includes but which was never actually granted on these existing rows, confirmed by the original grant listing), and restores the default-ACL template via `GRANT ALL ON TABLES/SEQUENCES/FUNCTIONS` (which reproduces the exact captured original ACL strings `arwdDxtm`/`rwU`/`X` precisely, not a broader approximation).
+
+### K/L. Repository migration & ordering
+
+**Yes, this should be a real migration** — created now as a **local, unapplied draft**: `packages/database/prisma/migrations/20260917140000_enable_rls_public_tables/migration.sql` (Phase 1's `ENABLE ROW LEVEL SECURITY` statements, exactly as already manually applied to Production). This file has been written to the repo but **not run against local dev or Production** — `prisma migrate resolve --applied` still needs to be run against Production separately (a small, safe, idempotent Production action reconciling history — not re-executing the DDL) once approved. Ordering: its timestamp (`20260917140000`) sorts after the still-pending VA Schedule migration (`20260917113152_add_google_sheets_integration_provider`) — no real dependency between them (RLS is table-level, the VA Schedule migration is an unrelated enum addition), so Prisma would simply apply them in that order on a future `prisma migrate deploy`, which is harmless either way. Phase 2's migration file was deliberately **not** created yet — it will be drafted only once Phase 2 itself is approved and actually applied, keeping migration granularity aligned with real approval boundaries, matching this session's own discipline throughout.
+
+### M. Risks/possible breakage
+
+Same conclusion as Increment 105's analysis, now reinforced by the `BYPASSRLS` finding: `postgres`/`service_role` are unaffected by any grant change (their access doesn't come from these grants at all — `service_role` bypasses RLS directly via its own `BYPASSRLS` attribute, independent of table-level grants too). `anon`/`authenticated` losing grants they were never used through should have zero application impact, confirmed by the repeated architecture check. The main real risk is a Supabase-_platform_ feature silently depending on `anon`/`authenticated` schema visibility or default access for something unrelated to StayWhile's own tables (e.g., Realtime's schema introspection, though this app doesn't use Realtime; or the Supabase dashboard's own table browser, which typically uses `service_role`/`postgres`, not `anon`/`authenticated`) — this specific class of risk was not and cannot be fully ruled out via code inspection alone, which is exactly why schema-level `USAGE` revocation is proposed as optional/deferred rather than bundled into the core change.
+
+### N. Verification plan after Phase 2 (once approved)
+
+Same read-only checks as Phase 1: re-confirm target, re-confirm grant/default-ACL state changed exactly as intended and nothing else did, re-confirm RLS/policy/ownership all still unchanged, then the same unauthenticated Production HTTP checks, then the user's own authenticated read click-through (same three pages as Increment 104 is a reasonable minimum), plus ideally the deferred write-verification question revisited if a safe candidate exists by then.
+
+### O. Confirmation — nothing in Production was changed this turn
+
+Every database interaction this pass was read-only (`pg_class`/`pg_namespace`/`pg_policies`/`has_schema_privilege`/`pg_class` for sequences/`pg_proc`/`information_schema.routine_privileges`/`pg_default_acl`/`pg_roles`). Zero `REVOKE`/`GRANT`/`ALTER DEFAULT PRIVILEGES`/`CREATE POLICY`/RLS change/migration-apply against Production. The one new file applied anywhere is the local, unapplied Phase-1 migration draft (a repo file only — not run via `prisma migrate deploy`/`db push`/`migrate resolve` against local dev or Production). The two Phase-2 SQL files are prepared text only, not executed. No VA Schedule Production action, no RBAC/CRON_SECRET change, no Google Sheet interaction, no commit/push, no `gh`/`vercel` identity switch, no other integration or device action.
+
+### Files changed this increment
+
+New: `packages/database/prisma/migrations/20260917140000_enable_rls_public_tables/migration.sql` (local draft, unapplied), `packages/database/_tmp-phase2-revoke-anon-authenticated.sql` (prepared, not executed), `packages/database/_tmp-phase2-rollback-restore-grants.sql` (prepared, not executed). `HANDOFF.md` (this entry + Supabase Security section update).
+
+## Increment 107 — 2026-09-17 (same day): Supabase Security Phase 2 APPLIED to Production — anon/authenticated table grants revoked, postgres default privileges hardened for future objects; scope strictly matched the approval; nothing outside it touched
+
+**Context**: the user approved the exact core Phase 2 SQL prepared in Increment 106 — revoke `anon`/`authenticated`'s existing privileges on the 27 audited tables, and fix `postgres`'s default privileges so future tables/sequences/functions don't silently re-grant them. Schema `USAGE`, `service_role`, `postgres`, `supabase_admin`'s own defaults, RLS state, and policies were all explicitly out of scope.
+
+### Preflight (before any mutation)
+
+1. `diagnose-db-target.mjs` re-run — target unchanged: `bsyjuufnwjyzfchmxgiv`.
+2. Re-confirmed all 27 tables: `relrowsecurity=true`, `relforcerowsecurity=false` (27/27, 0 forced).
+3. Re-confirmed 0 policies.
+4. Re-confirmed the exact pre-Phase-2 baseline matched Increment 106 byte-for-byte: table-grant row count **567** (27×3×7, identical), and `pg_default_acl` for `public` returned the exact same 6 rows (postgres-defined + supabase_admin-defined entries, identical ACL strings) as captured in Increment 106. **Baseline matched exactly — no drift, proceeded per instruction.**
+
+### Exact mutations executed
+
+The exact SQL prepared and reviewed in Increment 106 (`packages/database/_tmp-phase2-revoke-anon-authenticated.sql`), applied via `psql -v ON_ERROR_STOP=1`, one transaction:
+
+```sql
+BEGIN;
+REVOKE ALL PRIVILEGES ON TABLE <27 tables, named explicitly> FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL PRIVILEGES ON TABLES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL PRIVILEGES ON SEQUENCES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL PRIVILEGES ON FUNCTIONS FROM anon, authenticated;
+COMMIT;
+```
+
+All 5 statements succeeded; `COMMIT` succeeded. No partial-retry logic was needed — nothing errored.
+
+### Immediate post-change verification (read-only)
+
+- **RLS/FORCE/policies**: unchanged — 27/27 RLS-on, 0 forced, 0 policies.
+- **anon table grants**: **zero rows** for `anon` in `information_schema.role_table_grants` for `public` — no table privileges of any kind remain.
+- **authenticated table grants**: same — **zero rows**.
+- **service_role table grants**: **189 rows** (27 tables × 7 privileges) — byte-identical to its pre-change count, completely untouched.
+- **Schema `public`**: `anon` and `authenticated` USAGE still `true` (deliberately not revoked, per explicit scope); CREATE still `false` for all three roles — unchanged.
+- **Default privileges** (`pg_default_acl`): the `postgres`-defined entries for tables/sequences/functions in `public` now list **only `postgres` and `service_role`** — `anon`/`authenticated` are completely absent from all three, confirming future `postgres`-created objects will not automatically grant them anything. The `supabase_admin`-defined entries are **byte-identical** to the pre-change baseline — untouched, exactly as required.
+- **Ownership**: all 27 tables still owned by `postgres` — unchanged.
+
+### Production application check (unauthenticated only)
+
+`GET /` → `HTTP 404` (same Clerk protect-rewrite signature as every prior baseline check, not a crash). `GET /sign-in` → `HTTP 200`, normal. No 500s or crash signatures observed in what's checkable without a real session.
+
+### What the user should verify now
+
+Sign in to the real Production dashboard and check, at minimum: the main Dashboard, `/properties`, `/locks`, one property detail page, and `/notion` (or another existing DB-backed page) — confirming each loads real data with no error, exactly as requested. **Not claimed as verified here** — this requires the user's own authenticated session.
+
+### Rollback
+
+**Not needed** — no regression observed in anything checkable, transaction committed cleanly on the first attempt. The prepared rollback (`packages/database/_tmp-phase2-rollback-restore-grants.sql`) remains available, untouched, only for use if the user's authenticated verification surfaces a real problem.
+
+### Migration history — explicitly NOT touched this increment
+
+Per instruction: no `prisma migrate deploy`, no `prisma migrate resolve`, no Phase-2 migration file created yet, the VA Schedule migration was not applied, and the local Phase-1 migration draft (`20260917140000_enable_rls_public_tables`) was left exactly as it was. Repository migration-history reconciliation (for both Phase 1 and Phase 2) remains a separate, later step once Phase 2's Production state is fully verified.
+
+### Scope confirmation — nothing outside the approved boundary changed
+
+Schema `USAGE`/`CREATE` on `public`: unchanged. `service_role` privileges and `BYPASSRLS`: untouched (not even queried for change this pass beyond the already-known state). `postgres` privileges/`BYPASSRLS`: untouched. `supabase_admin`'s own default privileges: confirmed byte-identical, untouched. RLS state, `FORCE ROW LEVEL SECURITY`, and policies: unchanged. Ownership: unchanged. No Supabase-managed schema (`auth`/`storage`/`realtime`/`vault`/`extensions`/`graphql`/`pgbouncer`) was touched. No VA Schedule action, no Production RBAC change, no `CRON_SECRET`, no application code deployed, no commit/push, no `gh`/`vercel` identity switch, no other integration or device action.
+
+### Files changed this increment
+
+`HANDOFF.md` only (this entry + Supabase Security section update). **Production database**: the one approved Phase 2 mutation (grant revocation on 27 tables + default-privilege hardening for `postgres`-created future objects).
+
+## Increment 108 — 2026-09-17 (same day): security remediation verified by the user's real Production application check; migration-history reconciliation planned and local files finalized — Production database left completely READ-ONLY this increment
+
+**Context**: the user personally verified Dashboard, Properties, Locks, a property detail page, and Notion on the real Production dashboard post-Phase-2, with no regression. HANDOFF updated to close the remediation (not the migration-history housekeeping, which remains open). This increment then did the requested migration-history reconciliation planning — inspection and local-file creation only, zero Production mutation.
+
+### A. Current Production Prisma migration state
+
+Queried `_prisma_migrations` directly (read-only): **7 migrations recorded**, most recent `20260915211143_add_notion_page_event` (finished 2026-09-16 09:10 UTC). Confirmed **absent**: the VA Schedule `20260917113152_add_google_sheets_integration_provider` migration (consistent with it never having been applied — matches every prior report), and (expected) neither security migration, since both were applied manually via raw `psql`, never through Prisma's migration mechanism.
+
+### B/C. Exact security migration files created (local only, not applied anywhere)
+
+1. **`20260917140000_enable_rls_public_tables`** (already existed as a draft since Increment 106, unchanged this pass) — 27 `ALTER TABLE public.<table> ENABLE ROW LEVEL SECURITY;` statements, one per approved table, no BEGIN/COMMIT (matches this repo's existing migration-file convention — Prisma wraps each file's execution in its own transaction).
+2. **`20260917150000_harden_anon_authenticated_grants`** — NEW this increment. Contains the exact Phase 2 SQL actually applied to Production: `REVOKE ALL PRIVILEGES ON TABLE <27 tables> FROM anon, authenticated;` followed by the three `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE ALL PRIVILEGES ON {TABLES,SEQUENCES,FUNCTIONS} FROM anon, authenticated;` statements. Both files carry a doc comment stating plainly that the SQL was already manually applied to Production and that reconciliation should happen via `migrate resolve --applied`, not a redundant re-run.
+
+### D. Separate migrations for Phase 1 and Phase 2 — and why
+
+**Yes, kept as two separate migration files**, not merged into one. Reasoning: Prisma migration history is meant to be an accurate, immutable record of what actually happened, in order — Phase 1 and Phase 2 were two genuinely separate approval events, executed at different times, with different scope and different risk profiles (RLS enablement vs. grant/default-privilege revocation are also mechanically independent Postgres features with no structural dependency on each other). Merging them into one file would misrepresent history and would also mean a future rollback of just one phase couldn't be cleanly reasoned about migration-by-migration.
+
+### E. How Production gets marked reconciled without re-running SQL
+
+Both migration files' SQL is idempotent (re-enabling already-enabled RLS is a no-op; re-revoking an already-absent privilege is a no-op) — so even a real re-run would be harmless. But the correct, minimal-footprint approach is `prisma migrate resolve --applied <name>` for each, which writes a row to `_prisma_migrations` recording the migration as already satisfied **without executing its SQL again** — this is Prisma's own documented mechanism for exactly this situation (a change made outside the normal migration flow that needs to be reconciled into history).
+
+### F. Exact `prisma migrate resolve` commands that would eventually be needed — NOT RUN
+
+```
+pnpm --filter @stayw/database exec prisma migrate resolve --applied 20260917140000_enable_rls_public_tables
+pnpm --filter @stayw/database exec prisma migrate resolve --applied 20260917150000_harden_anon_authenticated_grants
+```
+
+Run in that order (matching timestamp order), against Production's `DIRECT_URL`/`DATABASE_URL` — **not executed this increment or any prior one**.
+
+### G. VA Schedule migration ordering after the security migrations
+
+The VA Schedule migration (`20260917113152_add_google_sheets_integration_provider`) has an **earlier** timestamp than both security migrations (`20260917140000`, `20260917150000`), so by filename/timestamp order it is the _next_ migration Production is missing, before either security one. There is no real structural dependency in either direction (an unrelated enum addition vs. RLS/grants on existing tables) — Prisma will simply apply/reconcile them in timestamp order whenever each step is separately approved. Recommended eventual order once all are approved: resolve/apply GOOGLE_SHEETS first (matches its earlier timestamp and keeps history monotonic), then resolve the two security migrations. Nothing about this ordering was executed this increment.
+
+### H. Migration conflict/drift risk
+
+Low, for the security migrations specifically — both are simple, idempotent DDL/ACL statements. **One known, pre-existing, unrelated drift risk carried forward from Increment 90/100 and re-confirmed present**: this repo's local dev database has migration history drift from an unmerged branch/worktree (`20260824050940_add_ownerrez_property_sync_fields` applied locally but absent from `main`'s migrations directory) — this is why `prisma migrate dev` couldn't be used directly for either the Notion migration or the GOOGLE_SHEETS migration, and would likely block a plain `prisma migrate dev` for these two security migrations locally as well; the same `db push` + `migrate resolve --applied` workaround already used twice in this repo would apply again if/when reconciling local dev. This drift is local-only and does not affect Production's own migration history, which has no such extra entries (confirmed by the 7-row query above).
+
+### I. Exact files created/changed locally
+
+New: `packages/database/prisma/migrations/20260917150000_harden_anon_authenticated_grants/migration.sql`. Unchanged: `20260917140000_enable_rls_public_tables/migration.sql` (already existed, left exactly as-is). `HANDOFF.md` (this entry + Supabase Security section closure).
+
+### J. Confirmation — Production was completely untouched this increment
+
+The only Production interaction this pass was the single read-only `SELECT migration_name, finished_at, applied_steps_count FROM _prisma_migrations` query. No `migrate deploy`, no `migrate resolve`, no SQL of any kind executed against Production. No RLS/grant/policy change. No VA Schedule migration applied. No RBAC/CRON_SECRET change. No application deployed. No commit, no push, no `gh`/`vercel` identity switch. No other integration or device action.
+
+### K. Exact next step to resume VA Schedule Production preparation
+
+VA Schedule is the active workstream again. The next real step is the user's explicit approval on: (1) which exact migrations to resolve/apply against Production and in what order (per G/F above), (2) the scoped VA Schedule file commit (per the file list already reported in Increments 100/101), (3) the Production `team` RBAC grant, (4) the Production `CRON_SECRET` value and Vercel Cron registration, (5) confirming Vercel's plan supports the approved 15-minute cron interval, and (6) the actual push/deploy sequence — none of which happened this increment. Not sending the user to localhost; the target remains the real Production dashboard once each of those is separately approved.
+
+### Files changed this increment
+
+New: `packages/database/prisma/migrations/20260917150000_harden_anon_authenticated_grants/migration.sql`. `HANDOFF.md` (this entry + Supabase Security section closure). **Production database**: none — read-only this increment.
+
+## Increment 109 — 2026-09-17 (same day): narrowed the Production `team` RBAC grant script (admin loses `create`/`delete`), corrected and finalized the Production execution order — LOCAL CODE CHANGE ONLY, nothing touched Production
+
+**Context**: reviewing the prior pre-deployment report, the user rejected the five-permission admin grant and required exactly `team:read`/`team:update`/`team:manage` for admin, plus accepted the Prisma sequencing correction and issued the final, renumbered 22-step execution order.
+
+### A. Exact RBAC script change
+
+`packages/database/scripts/grant-team-permissions.ts`: `GRANTS.admin` changed from `TEAM_ACTIONS.map((a) => \`team:${a.toLowerCase()}\`)`(all 5) to the explicit array`["team:read", "team:update", "team:manage"]`. `ops_manager` unchanged (`["team:read"]`). The permission-catalog upsert loop (still upserting all 5 `team:*`rows via`TEAM_ACTIONS`) is untouched — see B for why. Doc comment updated to state the correction and its reasoning explicitly. Still fully idempotent (same `upsert`/`update: {}` shape as before) and still touches no Property/Reservation/Task/User/SmartDevice row. **Not re-run against local dev or Production this pass** — local dev's actual granted state still reflects the original (pre-correction) Increment 98 run until the script is explicitly re-run.
+
+### B. Whether `team:create`/`team:delete` remain in the permission catalog, and why
+
+**Yes, deliberately left in the catalog** (the `Permission` rows still get upserted for all 5 actions). Reason, kept narrow per instruction not to turn this into a broader refactor: `packages/auth/src/permissions.ts` generates the entire permission catalog as a uniform `RESOURCES × ACTIONS` cross product — every resource in this app automatically gets `create/read/update/delete/manage`, whether or not application code actually checks all five (many existing resources already have unused create/delete keys sitting in the catalog the same way). Removing `team:create`/`team:delete` from the catalog specifically would mean special-casing "team" against that established, uniform pattern — a separate, broader permission-system decision, not something this narrow RBAC-grant fix should do unilaterally. Confirmed via code search: no application code anywhere asserts `team:create` or `team:delete` — the schedule domain has no create/delete-shaped action (it's a read-only Sheet mirror; the only writes are the actor-agnostic durable sync, never RBAC-gated by these two keys). They are unused but structurally inert, not unnecessary to keep present.
+
+### C. Tests/typecheck/lint after narrowing
+
+`packages/database`'s own `tsc --noEmit`: clean. `eslint scripts/grant-team-permissions.ts` (run from within `packages/database`, where its own flat-config `eslint.config.js` resolves): 0 errors, 0 warnings. No test file exists for this script (consistent with `grant-notion-permissions.ts`, which also has none — neither one-off bootstrap script is covered by the automated suite). No other file was touched, so nothing else needed re-running.
+
+### D. Final corrected Production execution sequence (recorded for permanence — none of it executed)
+
+1. Exact scoped code/files finalized (file list per Increments 100/101/106/108, minus the four `_tmp-phase*.sql` scratch files, which are never committed).
+2. Local tests/typecheck/lint.
+3. **[DATABASE, read-only]** Production DB target preflight (`diagnose-db-target.mjs`).
+4. **[DATABASE]** `prisma migrate resolve --applied 20260917140000_enable_rls_public_tables`, then `20260917150000_harden_anon_authenticated_grants` — marks history without re-executing the already-applied SQL.
+5. **[DATABASE, read-only]** Verify `_prisma_migrations` shows both.
+6. **[DATABASE]** `prisma migrate deploy` — at this point the only pending migration is `20260917113152_add_google_sheets_integration_provider`, so only its 2-statement enum-addition SQL actually runs.
+7. **[DATABASE, read-only]** Verify the migration recorded and both enum values (`GOOGLE_SHEETS`, `NONE`) exist.
+8. **[DATABASE]** Run the corrected, narrowed `grant-team-permissions.ts` against Production.
+9. **[DATABASE, read-only]** Verify the RBAC grant matches exactly: admin = read/update/manage only, ops_manager = read only, no other role touched.
+10. **[VERCEL]** Configure `CRON_SECRET` directly in the existing StayWhile Vercel project's Production environment — generated/set through a secure method, never pasted into chat/terminal/git/HANDOFF/source/screenshots.
+11. **[none — user]** Confirm the actual StayWhile Vercel plan supports `*/15 * * * *` before relying on it.
+12. **[GIT]** Stage only the approved scoped files, individually, never `-A`/`.`/`-a`.
+13. **[GIT/GITHUB]** Push via the verified `github-staywhile` SSH remote only.
+14. **[VERCEL]** Existing StayWhile Vercel project builds and deploys.
+15. **STOP gate**: if the Vercel build fails, report and stop — do not modify unrelated N8N configuration just to force it through.
+16. **[VERCEL, read-only]** Verify the cron job registered in Vercel's own Cron Jobs dashboard.
+17. **[none — user]** Real Production dashboard verification.
+18. **[none — user]** `/team` verification.
+19. **[none — user]** First manual Refresh, performed by the user.
+20. **[DATABASE, read-only]** Verify the durable schedule snapshot updated.
+21. **[none — user, read-only]** Wait for a real cron tick; verify `lastSyncedAt` advances with nobody clicking anything.
+22. **[none — user, read-only, conditional]** Verify stale/failure behavior only if it occurs safely and naturally — never by deliberately modifying the Google Sheet or breaking Production on purpose.
+
+### E. Remaining gates
+
+`[?]` StayWhile Vercel plan's `*/15 * * * *` support — awaiting the user's own manual check, cadence not being downgraded to dodge this. `[!]` Full local `next build` — still not verified, still blocked by the same pre-existing, unrelated local `N8N_*` env misconfiguration; not worked around by inventing values; the real Vercel build (step 14/15 above) is the definitive gate. `CRON_SECRET` — not yet configured anywhere. Production DB migration/RBAC — not yet run. Personnel identity mapping — confirmed explicitly, again, as a post-deployment cleanup item, not a deployment blocker.
+
+### F. Confirmation — Production untouched this increment
+
+Zero Production database interaction this pass (no `SELECT`, no mutation — the preflight/RLS/grant checks from prior increments were not re-run since nothing about Production's own state was in question this turn). No `migrate resolve`/`migrate deploy`. No Production RBAC run. No `CRON_SECRET` configured. No stage/commit/push. No Vercel change. No Google Sheet interaction. No `gh`/`vercel` identity switch. No other integration or device action. The only changes this increment were: one local TypeScript file (`grant-team-permissions.ts`) and `HANDOFF.md`.
+
+### Files changed this increment
+
+`packages/database/scripts/grant-team-permissions.ts` (narrowed admin grant). `HANDOFF.md` (this entry + VA/Team RBAC checklist-line correction).
+
+## Increment 110 — 2026-09-17 (same day): Vercel Hobby plan confirmed (no sub-daily cron) — automatic-refresh architecture switched from Vercel Cron to StayWhile's own n8n; `vercel.json` removed, route doc comment corrected, n8n workflow designed but NOT created — LOCAL CODE CHANGE ONLY, nothing touched Production or n8n
+
+**Context**: the user personally checked the real StayWhile Vercel account — confirmed **Hobby plan**, which does not support the approved `*/15 * * * *` cadence. Rather than downgrade the cadence or upgrade the plan (both explicitly ruled out), the user directed switching the trigger to StayWhile's own dedicated n8n instance (`adminstay.app.n8n.cloud`), calling the exact same existing endpoint.
+
+### A. Whether the existing endpoint safely supports n8n
+
+**Yes, with zero code change needed.** The route's authorization check (`request.headers.get("authorization") !== \`Bearer ${secret}\``) validates a header VALUE, not the caller's identity, origin, IP, or user-agent — it has no dependency on Vercel-specific request metadata anywhere. Any HTTP client capable of sending a custom header — including n8n's HTTP Request node — satisfies it identically to how Vercel Cron would have.
+
+### B. Authentication behavior — confirmed precisely
+
+1. n8n can call it with a plain `Authorization: Bearer <secret>` header, with zero dependency on Vercel's own cron infrastructure. Confirmed.
+2. The route does exactly one check: the header must equal `Bearer ${process.env.CRON_SECRET}` — nothing else. Confirmed.
+3. `CRON_SECRET` can be reused as the shared secret between n8n and Vercel Production — the route doesn't distinguish sources, so the same value stored in both places (Vercel's env var, n8n's own encrypted credential store) works. Confirmed.
+4. The endpoint remains server-only — this is a Next.js Route Handler; that's inherent to Next.js's App Router architecture regardless of caller, not something that changes based on the trigger mechanism. Confirmed.
+5. An unauthenticated or wrong-secret request fails closed — 503 if `CRON_SECRET` isn't configured at all, 401 for any header mismatch, `runScheduleSync()` never called in either case. Confirmed (unchanged, still covered by the existing 6 route tests, all still passing).
+
+### C. Exact local Vercel Cron code/config removed or retained
+
+**Removed entirely**: `apps/website/vercel.json` — confirmed it existed solely for this one cron entry (created this session specifically for it; nothing else was ever added to it) and was never committed (confirmed untracked via `git status` before deletion), so removing it is a clean local file deletion, not a revert of shared work.
+
+**Retained, updated in place**: `app/api/cron/schedule-refresh/route.ts` — the actual `GET` handler logic is **byte-identical**; only its doc comment changed, to describe n8n (not Vercel Cron) as the real trigger and explain why Vercel Cron was ruled out, while still correctly noting the auth check itself is trigger-agnostic. The API route itself was NOT removed — it remains the secure target for n8n, exactly as instructed.
+
+### D. Tests after adjustment
+
+`tsc --noEmit`: clean. `eslint` on the route file: 0 errors/warnings. All 6 existing route-level tests: still passing, unchanged (the auth-boundary tests never depended on Vercel-specific behavior in the first place, so no test needed to change). Broader check: `team`+`dashboard`+`cron` suite — **125/125 passing**.
+
+### E. Exact proposed n8n workflow — designed, NOT created
+
+- **Workflow name**: "StayWhile VA Schedule Auto-Refresh" (Client-C-specific naming, even though the instance is already dedicated to StayWhile).
+- **Node 1 — Schedule Trigger**: interval mode, every 15 minutes (n8n's native "Minutes" interval, functionally equivalent to `*/15 * * * *`).
+- **Node 2 — HTTP Request**:
+  - Method: `GET`
+  - URL: the real Production URL, `https://stayawhilewithus-website.vercel.app/api/cron/schedule-refresh`
+  - Authentication: n8n's built-in **Header Auth credential type** (`Name: Authorization`, `Value: Bearer <secret>`) — stored in n8n's own encrypted credential store, referenced by the node, never inlined into the node's own visible parameters or the exported workflow JSON.
+  - Expected success: HTTP `200`, body `{"ok": true}`.
+  - Failure handling: leave the node's default error behavior (throw on non-2xx) so a failed run shows as a **failed execution** in n8n's own Executions list — a free, already-existing monitoring signal, no extra node needed. Not adding a Slack/email notification node — not requested, would be speculative scope beyond what's asked.
+  - Retry: recommend enabling a **light** retry (1–2 attempts, short backoff) on the HTTP Request node, matching this codebase's own established "modest retry, not aggressive" convention elsewhere (`packages/integrations/src/core/http-client.ts`). Not essential — the next scheduled tick is only 15 minutes away regardless — but cheap insurance against a transient network blip.
+  - Concurrency/overlap with the advisory lock: real sync runs complete in single-digit seconds (measured directly against the live Sheet in Increment 100 — ~3–6s), so a 15-minute interval leaves enormous headroom; even in the unlikely case of overlap (e.g. a manual Refresh coinciding with a scheduled tick), `beginScheduleSync()`'s advisory lock already makes the second caller a safe no-op — it still returns `200 {ok:true}` (the route doesn't distinguish "did real work" from "skipped, already running" in its response), which is intentional and matches the "don't duplicate logic" principle, though worth noting as a minor observability nuance: n8n's execution log would show that run as a plain success even though no sync actually occurred.
+
+### F. Secret storage plan
+
+Generate one sufficiently random value (not done this turn). Set as `CRON_SECRET` in Vercel's Production environment via Vercel's own dashboard (not done this turn). Store the identical value in n8n as a Header Auth credential (not done this turn). Never printed in chat, git, source, HANDOFF, screenshots, or any committed/exported workflow JSON, at any point.
+
+### G. Revised Production execution sequence
+
+Steps 1–9 unchanged from Increment 109 (finalize files → tests → DB preflight → resolve 2 security migrations → verify → `migrate deploy` GOOGLE_SHEETS/NONE → verify → narrowed RBAC → verify). From there: 10. **[VERCEL]** configure `CRON_SECRET` in Vercel Production. 11. **[GIT]** scoped commit. 12. **[GIT/GITHUB]** push via `github-staywhile` SSH. 13. **[VERCEL]** existing StayWhile Vercel build/deploy. 14. **STOP gate** if build fails. 15. **[none — user]** verify real Production dashboard + `/team`. 16. **[none — user]** first manual Refresh. 17. **[DATABASE, read-only]** verify durable snapshot. 18. **[N8N]** create/activate the dedicated StayWhile n8n 15-minute scheduler workflow designed in E. 19. **[none — user, read-only]** wait for a real n8n scheduled run. 20. **[DATABASE, read-only]** verify `lastSyncedAt` advances automatically. 21. **[N8N, read-only]** verify the n8n execution itself succeeded (green in n8n's Executions list). 22. **[none — user, conditional]** stale/failure behavior only if naturally/safely observable — never manufactured.
+
+### H. Exact files changed
+
+Removed: `apps/website/vercel.json`. Modified: `apps/website/app/api/cron/schedule-refresh/route.ts` (doc comment only — logic byte-identical). `HANDOFF.md` (this entry + checklist-line update).
+
+### I. Confirmation — Production and n8n both untouched
+
+No Production database interaction this increment (nothing needed re-checking). No `migrate resolve`/`deploy`, no RBAC run, no `CRON_SECRET` configured. No n8n MCP tool was invoked at all — its connected identity could not be independently confirmed as unquestionably the StayWhile instance without first authenticating it (a chicken-and-egg risk this session has consistently avoided for ambient cross-client tooling), and this turn's work didn't actually require any live n8n access — the workflow was designed purely conceptually. No workflow created or activated. No stage/commit/push/deploy. No Vercel env change. No Google Sheet interaction. No `gh`/`vercel` identity switch. No other integration or device action.
+
+### Files changed this increment
+
+Removed: `apps/website/vercel.json`. Modified: `apps/website/app/api/cron/schedule-refresh/route.ts`, `HANDOFF.md`.
