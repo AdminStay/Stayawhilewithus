@@ -5,6 +5,7 @@ import {
   refreshAugustAction,
   refreshAugustTelemetryBatchAction,
   refreshAugustTelemetrySpotAction,
+  sendAugustLockCommandAction,
 } from "@/domains/smart-devices/actions";
 import { LockBulkRefreshPanel } from "@/domains/smart-devices/components/LockBulkRefreshPanel";
 import { LocksList } from "@/domains/smart-devices/components/LocksList";
@@ -43,6 +44,10 @@ export default async function LocksPage() {
   // relax or replace the real server-side enforcement. Same pattern as
   // /thermostats' canRefresh.
   const canRefresh = await hasPermission(actor, "smart_devices:update");
+  // Deliberately separate from canRefresh above — see LocksList's own doc
+  // comment on canControlLocks for why. sendAugustLockCommand itself
+  // re-checks locks:manage server-side regardless of what this decides.
+  const canControlLocks = await hasPermission(actor, "locks:manage");
 
   return (
     <div>
@@ -71,6 +76,8 @@ export default async function LocksPage() {
         locks={locks}
         canRefresh={canRefresh}
         spotRefreshAction={refreshAugustTelemetrySpotAction}
+        canControlLocks={canControlLocks}
+        lockCommandAction={sendAugustLockCommandAction}
       />
     </div>
   );

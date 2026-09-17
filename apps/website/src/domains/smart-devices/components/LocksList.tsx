@@ -14,7 +14,10 @@ import {
 } from "@stayw/ui";
 import { BatteryLow, HelpCircle, Lock, WifiOff } from "lucide-react";
 
-import type { RefreshAugustSpotActionState } from "../actions";
+import type {
+  AugustLockCommandActionState,
+  RefreshAugustSpotActionState,
+} from "../actions";
 import {
   getBatteryLevel,
   getLockState,
@@ -25,6 +28,7 @@ import {
   type SmartDevice,
 } from "../services/smart-devices.service";
 
+import { AugustLockControlButton } from "./AugustLockControlButton";
 import { LockSpotRefreshButton } from "./LockSpotRefreshButton";
 
 type LockWithProperty = SmartDevice & { property: { name: string } };
@@ -56,6 +60,8 @@ export function LocksList({
   locks,
   canRefresh = false,
   spotRefreshAction,
+  canControlLocks = false,
+  lockCommandAction,
 }: {
   locks: LockWithProperty[];
   /** UX-only gate, matching every other write-capable button in this domain — assertPermission inside the server action remains the real enforcement. */
@@ -64,6 +70,19 @@ export function LocksList({
     prevState: RefreshAugustSpotActionState,
     formData: FormData,
   ) => Promise<RefreshAugustSpotActionState>;
+  /**
+   * UX-only gate for the physical Lock/Unlock controls — deliberately
+   * separate from `canRefresh` (`smart_devices:update`, monitoring/mapping)
+   * since this one is scoped to `locks:manage`. The real enforcement,
+   * including the Production test allowlist, lives entirely in
+   * sendAugustLockCommand — this flag only decides whether the button
+   * renders at all for an operator who could never succeed anyway.
+   */
+  canControlLocks?: boolean;
+  lockCommandAction?: (
+    prevState: AugustLockCommandActionState,
+    formData: FormData,
+  ) => Promise<AugustLockCommandActionState>;
 }) {
   const total = locks.length;
   const online = locks.filter((l) => l.status === "ONLINE").length;
@@ -117,7 +136,8 @@ export function LocksList({
           <TableHeaderCell>Provider</TableHeaderCell>
           <TableHeaderCell>Last synced</TableHeaderCell>
           <TableHeaderCell>Last telemetry</TableHeaderCell>
-          {canRefresh && spotRefreshAction && (
+          {((canRefresh && spotRefreshAction) ||
+            (canControlLocks && lockCommandAction)) && (
             <TableHeaderCell>Actions</TableHeaderCell>
           )}
         </TableHead>
@@ -215,13 +235,36 @@ export function LocksList({
                 <TableCell className="text-ink-muted">
                   {formatTimestamp(telemetryUpdatedAt)}
                 </TableCell>
-                {canRefresh && spotRefreshAction && (
+                {((canRefresh && spotRefreshAction) ||
+                  (canControlLocks && lockCommandAction)) && (
                   <TableCell>
                     {lock.provider === "AUGUST" ? (
-                      <LockSpotRefreshButton
-                        smartDeviceId={lock.id}
-                        action={spotRefreshAction}
-                      />
+                      <div className="flex flex-col items-start gap-2">
+                        {canRefresh && spotRefreshAction && (
+                          <LockSpotRefreshButton
+                            smartDeviceId={lock.id}
+                            action={spotRefreshAction}
+                          />
+                        )}
+                        {canControlLocks && lockCommandAction && (
+                          <div className="flex gap-2">
+                            <AugustLockControlButton
+                              smartDeviceId={lock.id}
+                              operation="LOCK"
+                              lockName={lock.name}
+                              propertyName={lock.property.name}
+                              action={lockCommandAction}
+                            />
+                            <AugustLockControlButton
+                              smartDeviceId={lock.id}
+                              operation="UNLOCK"
+                              lockName={lock.name}
+                              propertyName={lock.property.name}
+                              action={lockCommandAction}
+                            />
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <span className="text-ink-muted">—</span>
                     )}

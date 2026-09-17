@@ -18,6 +18,9 @@ const RESOURCES = [
   // See packages/auth/src/permissions.ts for why this is a separate
   // resource from "smart_devices" (read/mapping) rather than folded in.
   "thermostats",
+  // Same reasoning, for August/Yale physical lock commands (2026-09-18) —
+  // see packages/auth/src/permissions.ts.
+  "locks",
   "integrations",
   // See packages/auth/src/permissions.ts for why this is separate from
   // "integrations" — read/manage/update are three distinct Notion gates

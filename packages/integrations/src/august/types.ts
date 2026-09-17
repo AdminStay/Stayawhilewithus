@@ -160,4 +160,43 @@ export interface AugustLockDetail {
   lockState: string | null;
   telemetryUpdatedAt: string | null;
   seenAt: string | null;
+  /**
+   * `SerialNumber` from the raw `GET /locks/{lockId}` response — verified
+   * present in that same response yalexs already parses this from
+   * (`LockDetail.__init__`: `data["SerialNumber"]`), so capturing it here
+   * needs no new API call. Required to call `getLockCapabilities()` below
+   * (`GET /devices/capabilities?serialNumber=...`) — without it, capability
+   * (and therefore command) can never be safely determined for a lock.
+   * `null`, never guessed, when the provider doesn't report one.
+   */
+  serialNumber: string | null;
+}
+
+/**
+ * `PUT /remoteoperate/{lockId}/{lock|unlock|unlatch}` — verified against
+ * yalexs's actual source (api_async.py, 2026-09-18): the synchronous variant
+ * of each (no `?type=async` query param) blocks until the physical
+ * operation completes and returns a result the library parses into a lock
+ * status — the async variant exists too but requires a separate follow-up
+ * status poll, deliberately not used here. "Unlatch" is a distinct
+ * device-dependent partial-open operation, not merely a slower unlock.
+ */
+export type AugustLockOperation = "LOCK" | "UNLOCK" | "UNLATCH";
+
+/**
+ * `GET /devices/capabilities?serialNumber=...&topLevelHost=true` — verified
+ * against yalexs's actual capabilities.py (2026-09-18): the response wraps
+ * per-device-model flags under a `lock` key. `unlatch` is the one flag that
+ * genuinely varies by lock model (confirmed in yalexs's own `LockCapabilities`
+ * TypedDict) — some hardware doesn't support the partial-open operation at
+ * all. Lock/unlock aren't separately flagged in that structure; this client
+ * treats their support as tied to the `lock` key being present at all (i.e.
+ * this is a real, remotely-operable lock model), which is the most
+ * conservative reading available without inventing a flag August's API
+ * doesn't expose — see computeAugustLockCapabilities() in client.ts.
+ */
+export interface AugustLockCapabilities {
+  lock: boolean;
+  unlock: boolean;
+  unlatch: boolean;
 }

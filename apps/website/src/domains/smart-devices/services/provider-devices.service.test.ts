@@ -77,6 +77,7 @@ import {
   mapProviderDeviceToProperty,
   setProviderDeviceEnabled,
   toAugustSmartDeviceMetadata,
+  toCieloSmartDeviceMetadata,
   unmapProviderDevice,
 } from "./provider-devices.service";
 
@@ -497,6 +498,7 @@ describe("toAugustSmartDeviceMetadata", () => {
         lockState: "locked",
         telemetryUpdatedAt: "2026-08-20T00:00:00.000Z",
         seenAt: "2026-08-20T00:00:00.000Z",
+        serialNumber: "M0123456",
       },
       observedAt,
     );
@@ -520,6 +522,7 @@ describe("toAugustSmartDeviceMetadata", () => {
         lockState: null,
         telemetryUpdatedAt: null,
         seenAt: null,
+        serialNumber: null,
       },
       observedAt,
     );
@@ -527,6 +530,65 @@ describe("toAugustSmartDeviceMetadata", () => {
     expect(metadata).toEqual({
       telemetryUpdatedAt: "2026-08-26T12:00:00.000Z",
     });
+  });
+});
+
+describe("toCieloSmartDeviceMetadata", () => {
+  it("includes every field the provider actually reported — already parsed/unit-gated upstream by parseCieloDevice()", () => {
+    const metadata = toCieloSmartDeviceMetadata({
+      id: "aa:bb:cc",
+      name: "Island Tides - Man cave",
+      online: true,
+      currentTemperature: 69,
+      targetTemperature: 72,
+      mode: "cool",
+      fanSpeed: "auto",
+      humidity: 42,
+      power: "on",
+      telemetryUpdatedAt: "2026-09-07T00:00:00.000Z",
+    });
+
+    expect(metadata).toEqual({
+      currentTemperature: 69,
+      targetTemperature: 72,
+      mode: "cool",
+      fanSpeed: "auto",
+      humidity: 42,
+      power: "on",
+      telemetryUpdatedAt: "2026-09-07T00:00:00.000Z",
+    });
+  });
+
+  it("never fabricates a field the provider didn't report (e.g. isFaren not confirmed upstream)", () => {
+    const metadata = toCieloSmartDeviceMetadata({
+      id: "aa:bb:cc",
+      name: "Bahamas - Living Room",
+      online: false,
+    });
+
+    expect(metadata).toEqual({});
+  });
+
+  it("preserves a legitimate humidity of 0 — uses != null, never a truthiness check", () => {
+    const metadata = toCieloSmartDeviceMetadata({
+      id: "aa:bb:cc",
+      name: "Sandy Nudes - Garage",
+      online: true,
+      humidity: 0,
+    });
+
+    expect(metadata).toEqual({ humidity: 0 });
+  });
+
+  it("preserves a legitimate currentTemperature of 0 — uses != null, never a truthiness check", () => {
+    const metadata = toCieloSmartDeviceMetadata({
+      id: "aa:bb:cc",
+      name: "Sandy Nudes - Garage",
+      online: true,
+      currentTemperature: 0,
+    });
+
+    expect(metadata).toEqual({ currentTemperature: 0 });
   });
 });
 

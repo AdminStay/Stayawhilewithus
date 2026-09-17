@@ -74,8 +74,17 @@ export function logLockRefresh(
  * execution time. A device August reports no telemetry timestamp for
  * simply keeps whatever telemetryUpdatedAt (or absence of one) it already
  * had, exactly like every other field this function doesn't touch.
+ *
+ * Exported (2026-09-18) so august-commands.service.ts's post-command
+ * confirmation read reuses this exact same semantic — a real physical
+ * command's own confirmation read is the same kind of fact as a refresh's
+ * read (proves StayWhile reached August just now, not that August itself
+ * has fresh telemetry), so it needs this function, not
+ * toAugustSmartDeviceMetadata()'s always-stamp variant.
  */
-function toAugustLockMetadata(lock: AugustLockDetail): Record<string, unknown> {
+export function toAugustLockMetadata(
+  lock: AugustLockDetail,
+): Record<string, unknown> {
   return {
     ...(lock.batteryLevel != null && { batteryLevel: lock.batteryLevel }),
     ...(lock.lockState != null && { lockState: lock.lockState }),

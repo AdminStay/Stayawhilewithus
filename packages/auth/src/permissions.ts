@@ -21,6 +21,14 @@ export const RESOURCES = [
   // their own resource too rather than a shared "smart_devices:manage"
   // bucket. See nest-commands.service.ts.
   "thermostats",
+  // Same reasoning as "thermostats" above, for August/Yale physical lock
+  // commands (2026-09-18) — deliberately separate from "smart_devices"
+  // (read/mapping) so granting mapping/monitoring access never implicitly
+  // grants lock/unlock control. PIN/access-code management is explicitly
+  // out of scope for this resource — it would get its own resource if/when
+  // built, per this file's own long-standing convention, not folded in
+  // here. See august-commands.service.ts.
+  "locks",
   "integrations",
   // Deliberately separate from "integrations" — that resource covers the
   // existing generic read (Search/Property Listings, already live). This

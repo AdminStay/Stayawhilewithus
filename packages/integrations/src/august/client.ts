@@ -13,6 +13,7 @@ import {
   type AugustConnectivity,
   type AugustCredentials,
   type AugustLock,
+  type AugustLockCapabilities,
   type AugustLockDetail,
 } from "./types";
 
@@ -20,7 +21,9 @@ export type {
   AugustBrand,
   AugustConnectivity,
   AugustLock,
+  AugustLockCapabilities,
   AugustLockDetail,
+  AugustLockOperation,
 } from "./types";
 export { isAugustBrand } from "./types";
 
@@ -80,6 +83,19 @@ interface RawAugustLockDetail {
   Bridge?: RawAugustBridge;
   LockStatus?: RawAugustLockStatus;
   batteryInfo?: RawAugustBatteryInfo;
+  SerialNumber?: string;
+}
+
+/**
+ * `GET /devices/capabilities?serialNumber=...&topLevelHost=true` response
+ * shape — verified against yalexs's capabilities.py. Only the fields this
+ * client actually reads are typed; the real response has 20+ more `lock.*`
+ * flags this integration has no use for yet.
+ */
+interface RawAugustLockCapabilities {
+  lock?: {
+    unlatch?: boolean;
+  };
 }
 
 /**
@@ -122,8 +138,20 @@ function parseBatteryLevel(battery: number | undefined): number | null {
  * See this package's README for the one-time interactive login step this
  * client deliberately does NOT perform (see august/scripts/login.ts) —
  * `AugustCredentials.accessToken` must already exist before this client can
- * do anything. Read-only: does not implement lock/unlock (StayWhile's need
- * is status visibility, not remote control).
+ * do anything.
+ *
+ * `lock()`/`unlock()`/`unlatch()`/`getLockCapabilities()` (2026-09-18) are
+ * this client's only write/command methods — verified against yalexs's
+ * actual source, not guessed (see AugustLockOperation/AugustLockCapabilities
+ * in ./types.ts for the endpoint/response detail). This class itself never
+ * decides whether a command is *allowed* — capability gating, RBAC,
+ * mapping/enable checks, the Production test allowlist, and audit logging
+ * all live one layer up, in
+ * apps/website/src/domains/smart-devices/services/august-commands.service.ts
+ * — the only caller of these methods anywhere in this app. PIN/access-code
+ * operations remain entirely unimplemented (out of scope, and per the
+ * existing capability audit, PIN create/edit/delete isn't even available in
+ * August's own API).
  */
 export class AugustClient
   implements BaseIntegrationClient, SyncCapable, WebhookReceivable
@@ -233,7 +261,77 @@ export class AugustClient
       lockState: validLockStatus ? (lockStatus?.status ?? null) : null,
       telemetryUpdatedAt: raw.batteryInfo?.infoUpdatedDate ?? null,
       seenAt: validLockStatus ? (lockStatus?.dateTime ?? null) : null,
+      serialNumber: raw.SerialNumber ?? null,
     };
+  }
+
+  /**
+   * `GET /devices/capabilities?serialNumber=...&topLevelHost=true` —
+   * verified against yalexs's capabilities.py. `unlatch` is the one flag
+   * that genuinely varies by lock model; lock/unlock support is treated as
+   * tied to the `lock` key being present at all (i.e. this is a real,
+   * remotely-operable lock model) — see AugustLockCapabilities's own doc
+   * comment (./types.ts) for why. Callers MUST call this with a fresh
+   * `serialNumber` immediately before every command — never cache or reuse
+   * a prior result, since a device's capabilities are provider-owned state
+   * this client has no way to know is still current.
+   */
+  async getLockCapabilities(
+    serialNumber: string,
+  ): Promise<AugustLockCapabilities> {
+    const raw = await this.http.request<RawAugustLockCapabilities>(
+      `/devices/capabilities?serialNumber=${encodeURIComponent(serialNumber)}&topLevelHost=true`,
+    );
+    const hasLockCapabilities = raw.lock !== undefined;
+    return {
+      lock: hasLockCapabilities,
+      unlock: hasLockCapabilities,
+      unlatch: raw.lock?.unlatch === true,
+    };
+  }
+
+  /**
+   * Shared implementation for lock()/unlock()/unlatch() below — the
+   * synchronous variant of each (no `?type=async`), which blocks until the
+   * physical operation completes or the provider reports a failure (see
+   * AugustLockOperation's doc comment in ./types.ts). Deliberately does NOT
+   * trust this response's own `status` field as proof of the resulting lock
+   * state — the caller (august-commands.service.ts) always follows this
+   * with an independent getLockDetail() read, exactly like this codebase's
+   * existing Nest-command pattern never trusts a command response alone
+   * either. This method only proves the HTTP round trip succeeded (a 4xx/
+   * 5xx throws, same as every other method on this client) — the *meaning*
+   * of success is established by that follow-up read, not here.
+   */
+  private async operate(
+    lockId: string,
+    segment: "lock" | "unlock" | "unlatch",
+  ): Promise<void> {
+    await this.http.request<unknown>(
+      `/remoteoperate/${encodeURIComponent(lockId)}/${segment}`,
+      { method: "PUT" },
+    );
+  }
+
+  /** `PUT /remoteoperate/{lockId}/lock` — see operate()'s doc comment. */
+  async lock(lockId: string): Promise<void> {
+    await this.operate(lockId, "lock");
+  }
+
+  /** `PUT /remoteoperate/{lockId}/unlock` — see operate()'s doc comment. */
+  async unlock(lockId: string): Promise<void> {
+    await this.operate(lockId, "unlock");
+  }
+
+  /**
+   * `PUT /remoteoperate/{lockId}/unlatch` — see operate()'s doc comment.
+   * Callers MUST confirm `AugustLockCapabilities.unlatch` via a fresh
+   * getLockCapabilities() call before ever calling this — this method
+   * itself performs no capability check, matching every other method on
+   * this client (capability/authorization gating lives one layer up).
+   */
+  async unlatch(lockId: string): Promise<void> {
+    await this.operate(lockId, "unlatch");
   }
 
   /**

@@ -340,3 +340,99 @@ describe("LocksList — per-row spot-refresh action gating", () => {
     ).toBeNull();
   });
 });
+
+describe("LocksList — per-row physical lock-control gating", () => {
+  it("renders no Lock/Unlock buttons when canControlLocks is omitted (default false) — existing behavior unchanged", () => {
+    renderLocks([makeLock({ name: "Ungated Lock" })]);
+    expect(screen.queryByRole("button", { name: "Lock" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unlock" })).toBeNull();
+  });
+
+  it("renders no Lock/Unlock buttons when canControlLocks is true but no action is supplied", () => {
+    render(
+      <LocksList
+        locks={[makeLock({ name: "No Command Action Lock" })] as never}
+        canControlLocks={true}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Lock" })).toBeNull();
+  });
+
+  it("renders both Lock and Unlock buttons for an August lock when canControlLocks + action are both supplied", () => {
+    const action = vi.fn();
+    render(
+      <LocksList
+        locks={
+          [makeLock({ id: "lock-abc", name: "Controllable Lock" })] as never
+        }
+        canControlLocks={true}
+        lockCommandAction={action}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Lock" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Unlock" })).toBeTruthy();
+  });
+
+  it("each row's controls target that exact row's own SmartDevice.id, never another row's — no fuzzy/derived targeting", () => {
+    const action = vi.fn();
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({ id: "lock-aaa", name: "Row A" }),
+            makeLock({ id: "lock-bbb", name: "Row B" }),
+          ] as never
+        }
+        canControlLocks={true}
+        lockCommandAction={action}
+      />,
+    );
+
+    const rowA = screen.getByText("Row A").closest("tr");
+    const rowB = screen.getByText("Row B").closest("tr");
+    if (!rowA || !rowB) throw new Error("Expected rows not found");
+
+    expect(within(rowA).getAllByDisplayValue("lock-aaa")).toHaveLength(2); // one hidden input per control (Lock + Unlock)
+    expect(within(rowB).getAllByDisplayValue("lock-bbb")).toHaveLength(2);
+  });
+
+  it("Lock/Unlock buttons are never shown for a non-August row even when gated on", () => {
+    const action = vi.fn();
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              id: "lock-nest",
+              name: "Not August",
+              provider: "CIELO" as never,
+            }),
+          ] as never
+        }
+        canControlLocks={true}
+        lockCommandAction={action}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Lock" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unlock" })).toBeNull();
+  });
+
+  it("Refresh and Lock/Unlock controls can both be gated on at once, independently", () => {
+    const refreshAction = vi.fn();
+    const commandAction = vi.fn();
+    render(
+      <LocksList
+        locks={[makeLock({ name: "Fully Gated Lock" })] as never}
+        canRefresh={true}
+        spotRefreshAction={refreshAction}
+        canControlLocks={true}
+        lockCommandAction={commandAction}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Refresh telemetry" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Lock" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Unlock" })).toBeTruthy();
+  });
+});

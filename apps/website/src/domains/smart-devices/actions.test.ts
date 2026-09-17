@@ -12,6 +12,7 @@ const {
   mockSetProviderDeviceEnabled,
   mockUnmapProviderDevice,
   mockSendNestThermostatCommand,
+  mockSendAugustLockCommand,
   mockRefreshThermostats,
   mockLogThermostatRefresh,
   mockRefreshAugustTelemetry,
@@ -26,6 +27,7 @@ const {
   mockSetProviderDeviceEnabled: vi.fn(),
   mockUnmapProviderDevice: vi.fn(),
   mockSendNestThermostatCommand: vi.fn(),
+  mockSendAugustLockCommand: vi.fn(),
   mockRefreshThermostats: vi.fn(),
   mockLogThermostatRefresh: vi.fn(),
   mockRefreshAugustTelemetry: vi.fn(),
@@ -54,6 +56,10 @@ vi.mock("./services/nest-commands.service", () => ({
   sendNestThermostatCommand: mockSendNestThermostatCommand,
 }));
 
+vi.mock("./services/august-commands.service", () => ({
+  sendAugustLockCommand: mockSendAugustLockCommand,
+}));
+
 vi.mock("./services/thermostat-refresh.service", () => ({
   refreshThermostats: mockRefreshThermostats,
   logThermostatRefresh: mockLogThermostatRefresh,
@@ -77,6 +83,7 @@ import {
   refreshAugustTelemetryBatchAction,
   refreshAugustTelemetrySpotAction,
   refreshThermostatsAction,
+  sendAugustLockCommandAction,
 } from "./actions";
 
 const IDLE = { status: "idle" as const };
@@ -158,6 +165,56 @@ describe("discoverAugustDevicesAction", () => {
       status: "failure",
       error: "raw string rejection",
     });
+  });
+});
+
+describe("sendAugustLockCommandAction", () => {
+  const IDLE_COMMAND = { status: "idle" as const };
+  const SMART_DEVICE_ID = "11111111-1111-1111-1111-111111111111";
+
+  it("parses smartDeviceId/operation from FormData and delegates to sendAugustLockCommand, revalidating /locks on success", async () => {
+    mockSendAugustLockCommand.mockResolvedValueOnce({
+      status: "success",
+      lockState: "locked",
+    });
+    const formData = new FormData();
+    formData.set("smartDeviceId", SMART_DEVICE_ID);
+    formData.set("operation", "LOCK");
+
+    const result = await sendAugustLockCommandAction(IDLE_COMMAND, formData);
+
+    expect(mockSendAugustLockCommand).toHaveBeenCalledWith(
+      { userId: "user-1" },
+      { smartDeviceId: SMART_DEVICE_ID, operation: "LOCK" },
+    );
+    expect(result).toEqual({ status: "success", lockState: "locked" });
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+  });
+
+  it("does not revalidate on a rejected/failed result — never implies success", async () => {
+    mockSendAugustLockCommand.mockResolvedValueOnce({
+      status: "rejected",
+      reason: "This device is not enabled for control.",
+    });
+    const formData = new FormData();
+    formData.set("smartDeviceId", SMART_DEVICE_ID);
+    formData.set("operation", "UNLOCK");
+
+    const result = await sendAugustLockCommandAction(IDLE_COMMAND, formData);
+
+    expect(result.status).toBe("rejected");
+    expect(mockRevalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("rejects an operation value outside LOCK/UNLOCK/UNLATCH before ever calling the service — no fuzzy/derived targeting", async () => {
+    const formData = new FormData();
+    formData.set("smartDeviceId", SMART_DEVICE_ID);
+    formData.set("operation", "OPEN_SESAME");
+
+    await expect(
+      sendAugustLockCommandAction(IDLE_COMMAND, formData),
+    ).rejects.toThrow();
+    expect(mockSendAugustLockCommand).not.toHaveBeenCalled();
   });
 });
 

@@ -96,7 +96,24 @@ describe("AugustClient", () => {
       lockState: null,
       telemetryUpdatedAt: null,
       seenAt: null,
+      serialNumber: null,
     });
+  });
+
+  it("getLockDetail() captures SerialNumber when the provider reports one", async () => {
+    mockRequest.mockResolvedValueOnce({
+      LockID: "lock-1",
+      LockName: "Front Door",
+      HouseID: "house-1",
+      battery: 0.85,
+      Bridge: { operative: true },
+      SerialNumber: "M0123456",
+    });
+    const client = new AugustClient(credentials);
+
+    const detail = await client.getLockDetail("lock-1");
+
+    expect(detail.serialNumber).toBe("M0123456");
   });
 
   it("getLockDetail() normalizes a negative battery fraction (August's 'no reading' sentinel, observed as -1 -> -100%) to null instead of rendering it literally", async () => {
@@ -223,5 +240,90 @@ describe("AugustClient", () => {
     await expect(client.receiveWebhook("{}", {})).rejects.toThrow(
       /not implemented yet/,
     );
+  });
+
+  describe("getLockCapabilities()", () => {
+    it("reports lock+unlock supported and unlatch supported when the provider's lock key includes unlatch: true", async () => {
+      mockRequest.mockResolvedValueOnce({ lock: { unlatch: true } });
+      const client = new AugustClient(credentials);
+
+      const capabilities = await client.getLockCapabilities("M0123456");
+
+      expect(mockRequest).toHaveBeenCalledWith(
+        "/devices/capabilities?serialNumber=M0123456&topLevelHost=true",
+      );
+      expect(capabilities).toEqual({
+        lock: true,
+        unlock: true,
+        unlatch: true,
+      });
+    });
+
+    it("reports unlatch NOT supported when the provider's lock key omits it or sets it false — never assumed true", async () => {
+      mockRequest.mockResolvedValueOnce({ lock: {} });
+      const client = new AugustClient(credentials);
+
+      const capabilities = await client.getLockCapabilities("M0123456");
+
+      expect(capabilities.unlatch).toBe(false);
+    });
+
+    it("reports lock+unlock NOT supported when the response has no lock key at all — this serial number isn't a remotely-operable lock model", async () => {
+      mockRequest.mockResolvedValueOnce({});
+      const client = new AugustClient(credentials);
+
+      const capabilities = await client.getLockCapabilities("M0123456");
+
+      expect(capabilities).toEqual({
+        lock: false,
+        unlock: false,
+        unlatch: false,
+      });
+    });
+  });
+
+  describe("lock() / unlock() / unlatch()", () => {
+    it("lock() sends PUT /remoteoperate/{lockId}/lock", async () => {
+      mockRequest.mockResolvedValueOnce({});
+      const client = new AugustClient(credentials);
+
+      await client.lock("lock-1");
+
+      expect(mockRequest).toHaveBeenCalledWith("/remoteoperate/lock-1/lock", {
+        method: "PUT",
+      });
+    });
+
+    it("unlock() sends PUT /remoteoperate/{lockId}/unlock", async () => {
+      mockRequest.mockResolvedValueOnce({});
+      const client = new AugustClient(credentials);
+
+      await client.unlock("lock-1");
+
+      expect(mockRequest).toHaveBeenCalledWith("/remoteoperate/lock-1/unlock", {
+        method: "PUT",
+      });
+    });
+
+    it("unlatch() sends PUT /remoteoperate/{lockId}/unlatch", async () => {
+      mockRequest.mockResolvedValueOnce({});
+      const client = new AugustClient(credentials);
+
+      await client.unlatch("lock-1");
+
+      expect(mockRequest).toHaveBeenCalledWith(
+        "/remoteoperate/lock-1/unlatch",
+        { method: "PUT" },
+      );
+    });
+
+    it("propagates a provider failure (e.g. bridge offline) as a thrown error rather than swallowing it", async () => {
+      mockRequest.mockRejectedValueOnce(
+        new Error("Request to /remoteoperate/lock-1/lock failed with 422"),
+      );
+      const client = new AugustClient(credentials);
+
+      await expect(client.lock("lock-1")).rejects.toThrow("422");
+    });
   });
 });

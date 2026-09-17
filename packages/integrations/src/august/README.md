@@ -34,12 +34,14 @@ pnpm --filter @stayw/integrations exec tsx src/august/scripts/check.ts
 
 ## What `AugustClient` does with those values
 
-Once `AUGUST_ACCESS_TOKEN` is set, `AugustClient` is a normal read-only REST client:
+Once `AUGUST_ACCESS_TOKEN` is set, `AugustClient` exposes:
 
 - `listLocks()` — `GET /users/locks/mine`, every lock the account can see.
-- `getLockDetail(lockId)` — `GET /locks/{lockId}` — battery (`battery`, a 0–1 fraction in the raw response, converted to 0–100 here) and connectivity. Connectivity comes from the lock's WiFi **Bridge/Connect hub** status (py-august's `bridge_is_online`), _not_ locked/unlocked state — StayWhile only needs "is this lock reachable," not remote lock control, so lock/unlock endpoints are deliberately not implemented here.
+- `getLockDetail(lockId)` — `GET /locks/{lockId}` — battery (`battery`, a 0–1 fraction in the raw response, converted to 0–100 here), connectivity, and (2026-09-18) `serialNumber`. Connectivity comes from the lock's WiFi **Bridge/Connect hub** status (py-august's `bridge_is_online`), _not_ locked/unlocked state.
+- `getLockCapabilities(serialNumber)` — `GET /devices/capabilities?serialNumber=...` (2026-09-18) — whether this specific lock model supports lock/unlock/unlatch. Callers must call this fresh before every command, never cache it.
+- `lock(lockId)` / `unlock(lockId)` / `unlatch(lockId)` — `PUT /remoteoperate/{lockId}/{lock|unlock|unlatch}` (2026-09-18) — the synchronous variant of each. This class performs no capability/authorization gating itself; see `apps/website/src/domains/smart-devices/services/august-commands.service.ts` for the sole caller and every safety check.
 
-`apps/website/src/domains/smart-devices/services/smart-devices.service.ts`'s `syncAugustDevices()` calls these directly (not `sync()`, which only reports a count — same split as `OwnerrezClient`) and upserts into `SmartDevice`.
+`apps/website/src/domains/smart-devices/services/smart-devices.service.ts`'s `syncAugustDevices()` calls the read methods directly (not `sync()`, which only reports a count — same split as `OwnerrezClient`) and upserts into `SmartDevice`. PIN/access-code operations remain entirely unimplemented — out of scope, and per the existing capability audit, PIN create/edit/delete isn't even available in August's own API.
 
 ## Property assignment
 

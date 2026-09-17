@@ -4,6 +4,7 @@ import type { AuthContext } from "@stayw/auth";
 import { revalidatePath } from "next/cache";
 
 import { fahrenheitToCelsius } from "./lib/temperature";
+import { sendAugustLockCommandSchema } from "./schemas/august-lock-command.schema";
 import {
   refreshAugustBatchSchema,
   refreshAugustSpotSchema,
@@ -20,6 +21,10 @@ import {
   setProviderDeviceEnabledSchema,
   unmapProviderDeviceSchema,
 } from "./schemas/provider-devices.schema";
+import {
+  sendAugustLockCommand,
+  type AugustLockCommandResult,
+} from "./services/august-commands.service";
 import {
   logLockRefresh,
   refreshAugustTelemetry,
@@ -262,6 +267,35 @@ export async function setNestFanAction(
     },
   });
   if (result.status === "success") revalidatePath(THERMOSTATS_PAGE_PATH);
+  return result;
+}
+
+/**
+ * Sole action wiring /locks' Lock/Unlock/Unlatch controls to the real
+ * enforcement point (sendAugustLockCommand) — same "thin action, real
+ * checks live one layer down" boundary as the setNest*Action functions
+ * above. `operation` comes straight from the confirmation dialog's own
+ * submit value (LOCK/UNLOCK/UNLATCH), never inferred from a device/property
+ * name. Never throws for an expected rejection (unmapped/disabled/
+ * unsupported-capability/not-yet-allowlisted/duplicate/provider-error) —
+ * those return a discriminated AugustLockCommandActionState the UI renders
+ * inline; an RBAC failure still throws, same as every other permission
+ * check in this app.
+ */
+export type AugustLockCommandActionState =
+  { status: "idle" } | AugustLockCommandResult;
+
+export async function sendAugustLockCommandAction(
+  _prevState: AugustLockCommandActionState,
+  formData: FormData,
+): Promise<AugustLockCommandActionState> {
+  const actor = await getCurrentUser();
+  const input = sendAugustLockCommandSchema.parse({
+    smartDeviceId: formData.get("smartDeviceId"),
+    operation: formData.get("operation"),
+  });
+  const result = await sendAugustLockCommand(actor, input);
+  if (result.status === "success") revalidatePath(LOCKS_PAGE_PATH);
   return result;
 }
 
