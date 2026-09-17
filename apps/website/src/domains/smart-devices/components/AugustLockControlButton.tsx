@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, Dialog } from "@stayw/ui";
+import { Lock, Unlock } from "lucide-react";
 import { useActionState, useState } from "react";
 
 import type { AugustLockCommandActionState } from "../actions";
@@ -8,6 +9,7 @@ import type { AugustLockCommandActionState } from "../actions";
 const INITIAL_STATE: AugustLockCommandActionState = { status: "idle" };
 
 const OPERATION_LABEL = { LOCK: "Lock", UNLOCK: "Unlock" } as const;
+const OPERATION_ICON = { LOCK: Lock, UNLOCK: Unlock } as const;
 
 function resultMessage(state: AugustLockCommandActionState): string | null {
   switch (state.status) {
@@ -49,6 +51,18 @@ function resultTone(state: AugustLockCommandActionState): string {
  * could edit; targeting is entirely server-side from `smartDeviceId`
  * onward (see august-commands.service.ts), so there's no path here that
  * could substitute a different lock.
+ *
+ * `emphasis` (2026-09-18, /locks UI cleanup) is purely visual — "subdued"
+ * renders the trigger as a quieter ghost button instead of the normal
+ * secondary one, used when the currently-known lock state already matches
+ * this action's outcome (e.g. de-emphasizing "Lock" when already reporting
+ * locked). It deliberately never disables the button: the known lock state
+ * comes from the last telemetry read, which can itself be stale, and a
+ * disabled control could block a legitimate command for a door that's
+ * actually in the opposite state right now. The real safety boundary stays
+ * entirely server-side (capability check, allowlist, confirmation dialog
+ * below) — this prop only changes which button looks like the "expected"
+ * one to reach for.
  */
 export function AugustLockControlButton({
   smartDeviceId,
@@ -56,6 +70,7 @@ export function AugustLockControlButton({
   lockName,
   propertyName,
   action,
+  emphasis = "primary",
 }: {
   smartDeviceId: string;
   operation: "LOCK" | "UNLOCK";
@@ -65,10 +80,12 @@ export function AugustLockControlButton({
     prevState: AugustLockCommandActionState,
     formData: FormData,
   ) => Promise<AugustLockCommandActionState>;
+  emphasis?: "primary" | "subdued";
 }) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_STATE);
   const [open, setOpen] = useState(false);
   const label = OPERATION_LABEL[operation];
+  const Icon = OPERATION_ICON[operation];
 
   function handleClose() {
     if (isPending) return;
@@ -80,9 +97,10 @@ export function AugustLockControlButton({
       <Button
         type="button"
         size="sm"
-        variant="secondary"
+        variant={emphasis === "subdued" ? "ghost" : "secondary"}
         onClick={() => setOpen(true)}
       >
+        <Icon className="h-3.5 w-3.5" />
         {label}
       </Button>
 
@@ -121,6 +139,7 @@ export function AugustLockControlButton({
                 variant={operation === "UNLOCK" ? "danger" : "primary"}
                 disabled={isPending}
               >
+                <Icon className="h-3.5 w-3.5" />
                 {isPending ? `${label}ing…` : `Confirm ${label}`}
               </Button>
             )}

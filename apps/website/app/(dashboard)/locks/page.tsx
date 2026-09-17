@@ -7,7 +7,7 @@ import {
   refreshAugustTelemetrySpotAction,
   sendAugustLockCommandAction,
 } from "@/domains/smart-devices/actions";
-import { LockBulkRefreshPanel } from "@/domains/smart-devices/components/LockBulkRefreshPanel";
+import { BulkRefreshDialog } from "@/domains/smart-devices/components/BulkRefreshDialog";
 import { LocksList } from "@/domains/smart-devices/components/LocksList";
 import { RefreshLocksButton } from "@/domains/smart-devices/components/RefreshLocksButton";
 import {
@@ -51,27 +51,26 @@ export default async function LocksPage() {
 
   return (
     <div>
+      {/* 2026-09-18 UI cleanup: Refresh all / Bulk refresh now live in the
+          header's actions slot instead of the page body — the bulk-refresh
+          checklist (up to 42 rows) no longer permanently occupies page
+          space; it only appears inside BulkRefreshDialog's modal, opened on
+          demand. No functional change to either refresh path. */}
       <PageHeader
         title="Locks"
-        subtitle="Every August lock across all properties — status, battery, and sync detail."
+        subtitle="Monitor and manage connected property locks."
+        actions={
+          <>
+            {canRefresh && <RefreshLocksButton action={refreshAugustAction} />}
+            {canRefresh && eligibleAugustLocks.length > 0 && (
+              <BulkRefreshDialog
+                rows={eligibleAugustLocks}
+                action={refreshAugustTelemetryBatchAction}
+              />
+            )}
+          </>
+        }
       />
-      {/* Rendered directly in the page body, matching /thermostats'
-          RefreshThermostatsButton placement exactly — a real,
-          Production-proven position for an immediate-submit refresh form in
-          this app. */}
-      {canRefresh && (
-        <div className="mb-6 flex justify-end">
-          <RefreshLocksButton action={refreshAugustAction} />
-        </div>
-      )}
-      {canRefresh && eligibleAugustLocks.length > 0 && (
-        <div className="mb-6">
-          <LockBulkRefreshPanel
-            rows={eligibleAugustLocks}
-            action={refreshAugustTelemetryBatchAction}
-          />
-        </div>
-      )}
       <LocksList
         locks={locks}
         canRefresh={canRefresh}

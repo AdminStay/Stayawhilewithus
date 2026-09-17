@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Card } from "@stayw/ui";
+import { Button } from "@stayw/ui";
 import { useState } from "react";
 
 import type { RefreshAugustBatchActionState } from "../actions";
@@ -98,6 +98,12 @@ function resultTone(result: SpotRefreshOutcome["result"]): string {
  * (from the page's existing SmartDevice load, no extra query) purely as a
  * reference for the operator — it is never read by this component's own
  * selection, filtering, or submission logic.
+ *
+ * No longer renders its own outer Card (2026-09-18 /locks UI cleanup) —
+ * this panel is now always mounted inside BulkRefreshDialog's Dialog,
+ * which already provides the bordered surface; a second nested Card here
+ * would just double the border/padding. All functional behavior
+ * (batching, confirmation-per-group, selection) is unchanged.
  */
 export function LockBulkRefreshPanel({
   rows,
@@ -200,12 +206,9 @@ export function LockBulkRefreshPanel({
     groups !== null && runningIndex === null && startedCount === groups.length;
 
   return (
-    <Card>
+    <div>
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-sm font-semibold text-ink">
-            Bulk refresh telemetry
-          </h3>
           <p className="text-xs text-ink-muted">
             Select locks, then refresh in groups of at most {MAX_IDS_PER_BATCH}.
             Each group must finish — and you must confirm — before the next one
@@ -328,6 +331,6 @@ export function LockBulkRefreshPanel({
           </div>
         </div>
       )}
-    </Card>
+    </div>
   );
 }

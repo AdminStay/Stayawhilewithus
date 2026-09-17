@@ -102,19 +102,24 @@ function renderLocks(locks: LockFixture[]) {
   return render(<LocksList locks={locks as never} />);
 }
 
-function warningsCellFor(rowName: string) {
+function rowFor(rowName: string): HTMLElement {
   const row = screen.getByText(rowName).closest("tr");
   if (!row) throw new Error(`Row for "${rowName}" not found`);
-  // Warnings is the 6th column: Property, Lock, Connectivity, Lock state, Battery, Warnings
-  const cells = within(row).getAllByRole("cell");
-  const warningsCell = cells[5];
-  if (!warningsCell)
-    throw new Error(`Warnings cell not found for "${rowName}"`);
-  return warningsCell;
+  return row;
 }
 
-describe("LocksList — connectivity/telemetry Warnings wording", () => {
-  it("ONLINE + fresh telemetry renders Healthy", () => {
+// Status is the 2nd cell: Property/Lock, Status, Lock state, Battery, Last
+// update — scoped by index because "Unknown" legitimately appears in BOTH
+// the Status label and the Lock State badge when neither is reported.
+function statusCellFor(rowName: string): HTMLElement {
+  const cells = within(rowFor(rowName)).getAllByRole("cell");
+  const statusCell = cells[1];
+  if (!statusCell) throw new Error(`Status cell for "${rowName}" not found`);
+  return statusCell;
+}
+
+describe("LocksList — consolidated Status column", () => {
+  it("ONLINE + fresh telemetry: dot+label 'Online', no secondary badges", () => {
     renderLocks([
       makeLock({
         name: "Aqua Palm Lock",
@@ -122,12 +127,13 @@ describe("LocksList — connectivity/telemetry Warnings wording", () => {
         metadata: { telemetryUpdatedAt: FRESH_TELEMETRY },
       }),
     ]);
-    expect(
-      within(warningsCellFor("Aqua Palm Lock")).getByText("Healthy"),
-    ).toBeTruthy();
+    const row = rowFor("Aqua Palm Lock");
+    expect(within(row).getByText("Online")).toBeTruthy();
+    expect(within(row).queryByText("Stale telemetry")).toBeNull();
+    expect(within(row).queryByText("Low battery")).toBeNull();
   });
 
-  it("UNKNOWN + fresh telemetry + normal battery renders 'Connectivity not reported' (unchanged)", () => {
+  it("UNKNOWN renders the short 'Unknown' label — never implies offline", () => {
     renderLocks([
       makeLock({
         name: "Casa Del Mar Lock",
@@ -135,59 +141,14 @@ describe("LocksList — connectivity/telemetry Warnings wording", () => {
         metadata: { telemetryUpdatedAt: FRESH_TELEMETRY },
       }),
     ]);
+    const statusCell = statusCellFor("Casa Del Mar Lock");
+    expect(within(statusCell).getByText("Unknown")).toBeTruthy();
     expect(
-      within(warningsCellFor("Casa Del Mar Lock")).getByText(
-        "Connectivity not reported",
-      ),
-    ).toBeTruthy();
+      within(rowFor("Casa Del Mar Lock")).queryByText(/offline/i),
+    ).toBeNull();
   });
 
-  it("UNKNOWN + fresh telemetry + low battery renders the combined connectivity+battery message (regression: previously hid the low battery entirely)", () => {
-    renderLocks([
-      makeLock({
-        name: "Las Sirenas - Front Door",
-        status: "UNKNOWN",
-        metadata: { telemetryUpdatedAt: FRESH_TELEMETRY, batteryLevel: 19 },
-      }),
-    ]);
-    expect(
-      within(warningsCellFor("Las Sirenas - Front Door")).getByText(
-        "Connectivity not reported + low battery (19%)",
-      ),
-    ).toBeTruthy();
-  });
-
-  it("UNKNOWN + stale telemetry renders the new precise combined message", () => {
-    renderLocks([
-      makeLock({
-        name: "Dolphin - Front Door",
-        status: "UNKNOWN",
-        metadata: { telemetryUpdatedAt: STALE_TELEMETRY },
-      }),
-    ]);
-    expect(
-      within(warningsCellFor("Dolphin - Front Door")).getByText(
-        "Connectivity not reported — no telemetry in 24h+",
-      ),
-    ).toBeTruthy();
-  });
-
-  it("ONLINE + stale telemetry still renders the original 'Attention needed' message", () => {
-    renderLocks([
-      makeLock({
-        name: "Online Stale Lock",
-        status: "ONLINE",
-        metadata: { telemetryUpdatedAt: STALE_TELEMETRY },
-      }),
-    ]);
-    expect(
-      within(warningsCellFor("Online Stale Lock")).getByText(
-        "Attention needed — telemetry stale",
-      ),
-    ).toBeTruthy();
-  });
-
-  it("OFFLINE renders 'Offline', unaffected by telemetry staleness or connectivity wording changes", () => {
+  it("OFFLINE renders the 'Offline' label", () => {
     renderLocks([
       makeLock({
         name: "Offline Lock",
@@ -195,42 +156,36 @@ describe("LocksList — connectivity/telemetry Warnings wording", () => {
         metadata: { telemetryUpdatedAt: STALE_TELEMETRY },
       }),
     ]);
-    expect(
-      within(warningsCellFor("Offline Lock")).getByText("Offline"),
-    ).toBeTruthy();
+    expect(within(rowFor("Offline Lock")).getByText("Offline")).toBeTruthy();
   });
 
-  it("OFFLINE + low battery renders 'Offline + low battery', unchanged", () => {
+  it("stale telemetry adds a small 'Stale telemetry' secondary badge, regardless of connectivity", () => {
     renderLocks([
       makeLock({
-        name: "Offline Low Battery Lock",
-        status: "OFFLINE",
-        metadata: { batteryLevel: 10, telemetryUpdatedAt: STALE_TELEMETRY },
-      }),
-    ]);
-    expect(
-      within(warningsCellFor("Offline Low Battery Lock")).getByText(
-        "Offline + low battery",
-      ),
-    ).toBeTruthy();
-  });
-
-  it("low battery alone (ONLINE, fresh telemetry) renders 'Low battery (X%)', unchanged", () => {
-    renderLocks([
-      makeLock({
-        name: "Low Battery Lock",
+        name: "Online Stale Lock",
         status: "ONLINE",
-        metadata: { batteryLevel: 15, telemetryUpdatedAt: FRESH_TELEMETRY },
+        metadata: { telemetryUpdatedAt: STALE_TELEMETRY },
       }),
     ]);
-    expect(
-      within(warningsCellFor("Low Battery Lock")).getByText(
-        "Low battery (15%)",
-      ),
-    ).toBeTruthy();
+    const row = rowFor("Online Stale Lock");
+    expect(within(row).getByText("Online")).toBeTruthy();
+    expect(within(row).getByText("Stale telemetry")).toBeTruthy();
   });
 
-  it("stale + low battery renders the combined stale+battery message regardless of connectivity (UNKNOWN case), unchanged", () => {
+  it("low battery adds a small 'Low battery' secondary badge, regardless of connectivity", () => {
+    renderLocks([
+      makeLock({
+        name: "Las Sirenas - Front Door",
+        status: "UNKNOWN",
+        metadata: { telemetryUpdatedAt: FRESH_TELEMETRY, batteryLevel: 19 },
+      }),
+    ]);
+    const statusCell = statusCellFor("Las Sirenas - Front Door");
+    expect(within(statusCell).getByText("Unknown")).toBeTruthy();
+    expect(within(statusCell).getByText("Low battery")).toBeTruthy();
+  });
+
+  it("stale + low battery together render both secondary badges at once, never hiding one for the other", () => {
     renderLocks([
       makeLock({
         name: "Unknown Stale Low Battery Lock",
@@ -238,26 +193,125 @@ describe("LocksList — connectivity/telemetry Warnings wording", () => {
         metadata: { batteryLevel: 12, telemetryUpdatedAt: STALE_TELEMETRY },
       }),
     ]);
-    expect(
-      within(warningsCellFor("Unknown Stale Low Battery Lock")).getByText(
-        "Telemetry stale + low battery (12%)",
-      ),
-    ).toBeTruthy();
+    const row = rowFor("Unknown Stale Low Battery Lock");
+    expect(within(row).getByText("Stale telemetry")).toBeTruthy();
+    expect(within(row).getByText("Low battery")).toBeTruthy();
   });
 
-  it("stale + low battery renders the combined message for ONLINE too, unchanged", () => {
+  it("demo data still shows its own badge alongside the others", () => {
     renderLocks([
       makeLock({
-        name: "Online Stale Low Battery Lock",
+        name: "Demo Lock",
+        externalDeviceId: "demo-1",
         status: "ONLINE",
-        metadata: { batteryLevel: 12, telemetryUpdatedAt: STALE_TELEMETRY },
+      }),
+    ]);
+    expect(within(rowFor("Demo Lock")).getByText("Demo data")).toBeTruthy();
+  });
+});
+
+describe("LocksList — Lock state column", () => {
+  it("renders a Locked badge for lockState 'locked'", () => {
+    renderLocks([
+      makeLock({ name: "Locked Door", metadata: { lockState: "locked" } }),
+    ]);
+    expect(within(rowFor("Locked Door")).getByText("Locked")).toBeTruthy();
+  });
+
+  it("renders an Unlocked badge for lockState 'unlocked'", () => {
+    renderLocks([
+      makeLock({ name: "Unlocked Door", metadata: { lockState: "unlocked" } }),
+    ]);
+    expect(within(rowFor("Unlocked Door")).getByText("Unlocked")).toBeTruthy();
+  });
+
+  it("renders an Unknown badge when lockState is not reported — never guessed", () => {
+    renderLocks([makeLock({ name: "No State Door", metadata: {} })]);
+    expect(within(rowFor("No State Door")).getByText("Unknown")).toBeTruthy();
+  });
+});
+
+describe("LocksList — Battery column", () => {
+  it("shows a quiet percentage for healthy battery", () => {
+    renderLocks([
+      makeLock({
+        name: "Healthy Battery Lock",
+        metadata: { batteryLevel: 82 },
       }),
     ]);
     expect(
-      within(warningsCellFor("Online Stale Low Battery Lock")).getByText(
-        "Telemetry stale + low battery (12%)",
-      ),
+      within(rowFor("Healthy Battery Lock")).getByText("82%"),
     ).toBeTruthy();
+  });
+
+  it("shows the percentage for low battery too (same compact indicator, different styling)", () => {
+    renderLocks([
+      makeLock({ name: "Low Battery Lock", metadata: { batteryLevel: 13 } }),
+    ]);
+    expect(within(rowFor("Low Battery Lock")).getByText("13%")).toBeTruthy();
+  });
+
+  it("shows a placeholder, never a fabricated value, when no battery data exists", () => {
+    renderLocks([makeLock({ name: "No Battery Lock", metadata: {} })]);
+    // Battery is the 4th cell: Property/Lock, Status, Lock state, Battery,
+    // Last update — scoped by index since "—" also legitimately appears in
+    // the Last update cell when there's no telemetry timestamp either.
+    const cells = within(rowFor("No Battery Lock")).getAllByRole("cell");
+    const batteryCell = cells[3];
+    if (!batteryCell) throw new Error("Battery cell not found");
+    expect(within(batteryCell).getByText("—")).toBeTruthy();
+  });
+});
+
+// Metric labels can collide with a row's own Status label text (e.g. both
+// a metric and a row can say "Offline") — scope to the one instance that's
+// NOT inside a table row, since only the summary metrics live outside the
+// <table>.
+function metricValue(label: string): string {
+  const labelNode = screen.getAllByText(label).find((el) => !el.closest("tr"));
+  if (!labelNode) throw new Error(`Metric label "${label}" not found`);
+  const card = labelNode.closest("div.bg-surface");
+  if (!card) throw new Error(`Metric card for "${label}" not found`);
+  const valueNode = card.querySelector(
+    "div.font-display",
+  ) as HTMLElement | null;
+  if (!valueNode) throw new Error(`Metric value for "${label}" not found`);
+  return valueNode.textContent ?? "";
+}
+
+describe("LocksList — summary metrics (derived, never hard-coded)", () => {
+  it("computes Locks/Online/Offline/Unknown/Low battery/Needs attention from the real rows", () => {
+    renderLocks([
+      makeLock({ id: "a", name: "A", status: "ONLINE" }),
+      makeLock({ id: "b", name: "B", status: "OFFLINE" }),
+      makeLock({ id: "c", name: "C", status: "UNKNOWN" }),
+      makeLock({
+        id: "d",
+        name: "D",
+        status: "UNKNOWN",
+        metadata: { batteryLevel: 5 },
+      }),
+    ]);
+    expect(metricValue("Locks")).toBe("4");
+    expect(metricValue("Online")).toBe("1");
+    expect(metricValue("Offline")).toBe("1");
+    expect(metricValue("Unknown")).toBe("2");
+    expect(metricValue("Low battery")).toBe("1");
+    // Offline(1) + low battery(1, distinct row) = 2 needing attention
+    expect(metricValue("Needs attention")).toBe("2");
+  });
+
+  it("UNKNOWN connectivity alone does NOT count toward 'Needs attention'", () => {
+    renderLocks([
+      makeLock({
+        name: "Just Unknown",
+        status: "UNKNOWN",
+        metadata: { telemetryUpdatedAt: FRESH_TELEMETRY },
+      }),
+    ]);
+    // Only this one row, purely UNKNOWN/fresh/healthy-battery — "Needs
+    // attention" must read 0.
+    expect(metricValue("Needs attention")).toBe("0");
   });
 });
 
@@ -310,9 +364,8 @@ describe("LocksList — per-row spot-refresh action gating", () => {
       />,
     );
 
-    const rowA = screen.getByText("Row A").closest("tr");
-    const rowB = screen.getByText("Row B").closest("tr");
-    if (!rowA || !rowB) throw new Error("Expected rows not found");
+    const rowA = rowFor("Row A");
+    const rowB = rowFor("Row B");
 
     expect(within(rowA).getByDisplayValue("lock-aaa")).toBeTruthy();
     expect(within(rowB).getByDisplayValue("lock-bbb")).toBeTruthy();
@@ -344,7 +397,7 @@ describe("LocksList — per-row spot-refresh action gating", () => {
 describe("LocksList — per-row physical lock-control gating", () => {
   it("renders no Lock/Unlock buttons when canControlLocks is omitted (default false) — existing behavior unchanged", () => {
     renderLocks([makeLock({ name: "Ungated Lock" })]);
-    expect(screen.queryByRole("button", { name: "Lock" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Lock/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Unlock" })).toBeNull();
   });
 
@@ -355,7 +408,7 @@ describe("LocksList — per-row physical lock-control gating", () => {
         canControlLocks={true}
       />,
     );
-    expect(screen.queryByRole("button", { name: "Lock" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unlock" })).toBeNull();
   });
 
   it("renders both Lock and Unlock buttons for an August lock when canControlLocks + action are both supplied", () => {
@@ -388,9 +441,8 @@ describe("LocksList — per-row physical lock-control gating", () => {
       />,
     );
 
-    const rowA = screen.getByText("Row A").closest("tr");
-    const rowB = screen.getByText("Row B").closest("tr");
-    if (!rowA || !rowB) throw new Error("Expected rows not found");
+    const rowA = rowFor("Row A");
+    const rowB = rowFor("Row B");
 
     expect(within(rowA).getAllByDisplayValue("lock-aaa")).toHaveLength(2); // one hidden input per control (Lock + Unlock)
     expect(within(rowB).getAllByDisplayValue("lock-bbb")).toHaveLength(2);

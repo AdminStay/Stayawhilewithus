@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@stayw/ui";
+import { RefreshCw } from "lucide-react";
 import { useActionState } from "react";
 
 import type { RefreshAugustSpotActionState } from "../actions";
@@ -46,11 +47,19 @@ function summaryTone(outcome: RefreshAugustSpotActionState): string {
  * never changes a physical lock's state, never touches a mapping, and is
  * completely separate from both the whole-fleet "Refresh telemetry" button
  * above the table and /integrations' legacy "Sync Now." isPending both
- * disables this row's own button and swaps its label, preventing a
+ * disables this row's own button and swaps its icon, preventing a
  * duplicate click on the same row from starting a second refresh while one
  * is already running — same mechanism RefreshLocksButton/
  * RefreshThermostatsButton already use, just scoped to one row instead of
  * the whole page.
+ *
+ * Rendered as a compact icon-only button (2026-09-18 /locks UI cleanup) —
+ * telemetry refresh is a secondary, low-stakes action next to Lock/Unlock,
+ * so it no longer competes visually with them. `aria-label`/`title` keep
+ * the accessible name stable as "Refresh telemetry" regardless of pending
+ * state, so this remains findable the same way whether or not a refresh is
+ * in flight; the spin animation communicates "pending" visually instead of
+ * changing the label.
  */
 export function LockSpotRefreshButton({
   smartDeviceId,
@@ -67,8 +76,17 @@ export function LockSpotRefreshButton({
   return (
     <form action={formAction} className="flex flex-col items-start gap-1">
       <input type="hidden" name="smartDeviceId" value={smartDeviceId} />
-      <Button type="submit" size="sm" variant="secondary" disabled={isPending}>
-        {isPending ? "Refreshing…" : "Refresh telemetry"}
+      <Button
+        type="submit"
+        size="sm"
+        variant="ghost"
+        disabled={isPending}
+        aria-label="Refresh telemetry"
+        title="Refresh telemetry"
+      >
+        <RefreshCw
+          className={`h-3.5 w-3.5 ${isPending ? "animate-spin" : ""}`}
+        />
       </Button>
 
       {!isPending && state.status !== "idle" && (

@@ -75,4 +75,37 @@ describe("AugustLockControlButton", () => {
     expect(submittedFormData.get("smartDeviceId")).toBe("lock-xyz");
     expect(submittedFormData.get("operation")).toBe("LOCK");
   });
+
+  describe("emphasis (2026-09-18 /locks UI cleanup)", () => {
+    it("defaults to the normal secondary-button treatment when emphasis is omitted", () => {
+      renderButton({ emphasis: undefined });
+
+      const button = screen.getByRole("button", { name: "Unlock" });
+      // Secondary variant's own distinguishing class (Button.tsx) — never a
+      // disabled attribute either way; see the "still clickable" test below.
+      expect(button.className).toMatch(/border-border/);
+    });
+
+    it("'subdued' renders the trigger as a quieter ghost button, not the normal one", () => {
+      renderButton({ emphasis: "subdued" });
+
+      const button = screen.getByRole("button", { name: "Unlock" });
+      expect(button.className).not.toMatch(/border-border/);
+    });
+
+    it("'subdued' never disables the trigger — a stale known state must not block a legitimate command", () => {
+      const action = renderButton({ emphasis: "subdued" });
+
+      const button = screen.getByRole("button", { name: "Unlock" });
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+
+      fireEvent.click(button);
+      expect(
+        screen.getByRole("button", { name: "Confirm Unlock" }),
+      ).toBeTruthy();
+      // Still requires explicit confirmation, exactly like the primary case —
+      // subdued styling never skips the safety dialog.
+      expect(action).not.toHaveBeenCalled();
+    });
+  });
 });

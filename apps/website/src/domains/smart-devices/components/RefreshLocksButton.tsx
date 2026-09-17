@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@stayw/ui";
+import { RefreshCw } from "lucide-react";
 import { useActionState } from "react";
 
 import type { RefreshAugustActionState } from "../actions";
@@ -75,13 +76,18 @@ export function RefreshLocksButton({
 
   return (
     <form action={formAction} className="flex flex-col items-end gap-1">
-      <Button type="submit" variant="primary" size="sm" disabled={isPending}>
-        {isPending ? "Refreshing…" : "Refresh telemetry"}
+      <Button
+        type="submit"
+        variant="secondary"
+        size="sm"
+        disabled={isPending}
+        title="Reads current status/battery/lock state for already-enabled August locks — not the same as August Sync Now."
+      >
+        <RefreshCw
+          className={`h-3.5 w-3.5 ${isPending ? "animate-spin" : ""}`}
+        />
+        {isPending ? "Refreshing…" : "Refresh all"}
       </Button>
-      <p className="text-xs text-ink-muted">
-        Reads current status/battery/lock state for already-enabled August locks
-        — not the same as August Sync Now.
-      </p>
 
       {!isPending && state.status === "success" && (
         <div className={`text-right text-xs ${summaryTone(state)}`}>

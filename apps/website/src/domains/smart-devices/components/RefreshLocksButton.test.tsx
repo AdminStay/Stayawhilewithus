@@ -27,7 +27,7 @@ function isDisabled(button: HTMLElement): boolean {
 }
 
 describe("RefreshLocksButton", () => {
-  it("renders enabled with no status message in the idle state, and always shows the 'not Sync Now' clarification", () => {
+  it("renders enabled with no status message in the idle state, and always carries the 'not Sync Now' clarification as a tooltip", () => {
     mockUseActionState.mockReturnValue([
       { status: "idle" },
       noopFormAction,
@@ -36,10 +36,12 @@ describe("RefreshLocksButton", () => {
 
     render(<RefreshLocksButton action={vi.fn()} />);
 
-    const button = screen.getByRole("button", { name: "Refresh telemetry" });
+    const button = screen.getByRole("button", { name: "Refresh all" });
     expect(isDisabled(button)).toBe(false);
     expect(screen.queryByText(/refreshed/)).toBeNull();
-    expect(screen.getByText(/not the same as August Sync Now/)).toBeTruthy();
+    expect(button.getAttribute("title")).toMatch(
+      /not the same as August Sync Now/,
+    );
   });
 
   it("shows 'Refreshing…' and disables the button while isPending is true — this is what prevents a duplicate click from starting a second refresh", () => {
@@ -53,9 +55,7 @@ describe("RefreshLocksButton", () => {
 
     const button = screen.getByRole("button", { name: "Refreshing…" });
     expect(isDisabled(button)).toBe(true);
-    expect(
-      screen.queryByRole("button", { name: "Refresh telemetry" }),
-    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Refresh all" })).toBeNull();
   });
 
   it("shows the exact refreshed count and the last-refreshed timestamp on full success", () => {
