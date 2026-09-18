@@ -12,7 +12,7 @@ vi.mock("../core", async (importOriginal) => {
   };
 });
 
-import { CieloClient } from "./client";
+import { CieloClient, parseCieloDevice } from "./client";
 
 const credentials = { username: "test@example.com", password: "hunter2" };
 
@@ -138,6 +138,303 @@ describe("CieloClient", () => {
 
     await expect(client.receiveWebhook("{}", {})).rejects.toThrow(
       /not implemented yet/,
+    );
+  });
+
+  it("never exposes any HVAC command/control method — read-only by construction", () => {
+    const client = new CieloClient(credentials);
+    for (const forbidden of [
+      "setTemperature",
+      "setMode",
+      "setFan",
+      "setPower",
+      "setFanspeed",
+      "sendCommand",
+      "control",
+    ]) {
+      expect(
+        (client as unknown as Record<string, unknown>)[forbidden],
+      ).toBeUndefined();
+    }
+  });
+});
+
+describe("parseCieloDevice", () => {
+  const baseRaw = {
+    deviceName: "Island Tides - Man cave",
+    macAddress: "aa:bb:cc",
+    deviceStatus: 1,
+  };
+
+  it("parses realistic rich /web/devices fields when isFaren=1 (real observed Island Tides shape)", () => {
+    const device = parseCieloDevice({
+      ...baseRaw,
+      isFaren: 1,
+      latEnv: { temp: 69, humidity: 42 },
+      latestAction: {
+        temp: "72",
+        mode: "cool",
+        fanspeed: "auto",
+        power: "on",
+        timestamp: 1799000000, // seconds-epoch shape
+      },
+    });
+
+    expect(device).toEqual({
+      id: "aa:bb:cc",
+      name: "Island Tides - Man cave",
+      online: true,
+      currentTemperature: 69,
+      targetTemperature: 72,
+      mode: "cool",
+      fanSpeed: "auto",
+      humidity: 42,
+      power: "on",
+      telemetryUpdatedAt: new Date(1799000000 * 1000).toISOString(),
+    });
+  });
+
+  it('accepts a numeric-string target temperature (observed live as "72", a string) identically to a real number', () => {
+    const withString = parseCieloDevice({
+      ...baseRaw,
+      isFaren: 1,
+      latestAction: { temp: "72" },
+    });
+    const withNumber = parseCieloDevice({
+      ...baseRaw,
+      isFaren: 1,
+      latestAction: { temp: 72 },
+    });
+
+    expect(withString.targetTemperature).toBe(72);
+    expect(withNumber.targetTemperature).toBe(72);
+  });
+
+  it("FAIL-SAFE: omits both temperature fields entirely when isFaren is not confirmed (0)", () => {
+    const device = parseCieloDevice({
+      ...baseRaw,
+      isFaren: 0,
+      latEnv: { temp: 21 },
+      latestAction: { temp: 24 },
+    });
+
+    expect(device).not.toHaveProperty("currentTemperature");
+    expect(device).not.toHaveProperty("targetTemperature");
+  });
+
+  it("FAIL-SAFE: omits both temperature fields entirely when isFaren is missing — never assumes a unit", () => {
+    const device = parseCieloDevice({
+      ...baseRaw,
+      latEnv: { temp: 69 },
+      latestAction: { temp: 72 },
+    });
+
+    expect(device).not.toHaveProperty("currentTemperature");
+    expect(device).not.toHaveProperty("targetTemperature");
+  });
+
+  it("still parses humidity/mode/fanSpeed/power/telemetryUpdatedAt even when isFaren is not confirmed — only temperature is unit-gated", () => {
+    const device = parseCieloDevice({
+      ...baseRaw,
+      latEnv: { humidity: 55 },
+      latestAction: {
+        mode: "heat",
+        fanspeed: "high",
+        power: "off",
+        timestamp: 1799000000,
+      },
+    });
+
+    expect(device.humidity).toBe(55);
+    expect(device.mode).toBe("heat");
+    expect(device.fanSpeed).toBe("high");
+    expect(device.power).toBe("off");
+    expect(device.telemetryUpdatedAt).toBe(
+      new Date(1799000000 * 1000).toISOString(),
+    );
+  });
+
+  it("preserves a legitimate humidity of 0 — never treated as absent", () => {
+    const device = parseCieloDevice({ ...baseRaw, latEnv: { humidity: 0 } });
+
+    expect(device.humidity).toBe(0);
+  });
+
+  it("preserves a legitimate currentTemperature of 0°F — never treated as absent", () => {
+    const device = parseCieloDevice({
+      ...baseRaw,
+      isFaren: 1,
+      latEnv: { temp: 0 },
+    });
+
+    expect(device.currentTemperature).toBe(0);
+  });
+
+  it("omits each field individually when missing, never fabricating a value", () => {
+    const device = parseCieloDevice(baseRaw);
+
+    expect(device).toEqual({
+      id: "aa:bb:cc",
+      name: "Island Tides - Man cave",
+      online: true,
+    });
+    expect(device).not.toHaveProperty("currentTemperature");
+    expect(device).not.toHaveProperty("targetTemperature");
+    expect(device).not.toHaveProperty("mode");
+    expect(device).not.toHaveProperty("fanSpeed");
+    expect(device).not.toHaveProperty("humidity");
+    expect(device).not.toHaveProperty("power");
+    expect(device).not.toHaveProperty("telemetryUpdatedAt");
+  });
+
+  it("MALFORMED VALUES: a non-numeric temperature/humidity string is treated as absent, never crashes", () => {
+    const device = parseCieloDevice({
+      ...baseRaw,
+      isFaren: 1,
+      latEnv: { temp: "not-a-number", humidity: "also-not-a-number" },
+      latestAction: { temp: "also-nan" },
+    });
+
+    expect(device).not.toHaveProperty("currentTemperature");
+    expect(device).not.toHaveProperty("targetTemperature");
+    expect(device).not.toHaveProperty("humidity");
+  });
+
+  it('REGRESSION: an empty string never becomes a fabricated 0 — Number("") is 0 in JavaScript, this must not leak through', () => {
+    const device = parseCieloDevice({
+      ...baseRaw,
+      isFaren: 1,
+      latEnv: { temp: "", humidity: "" },
+      latestAction: { temp: "" },
+    });
+
+    expect(device).not.toHaveProperty("currentTemperature");
+    expect(device).not.toHaveProperty("targetTemperature");
+    expect(device).not.toHaveProperty("humidity");
+  });
+
+  it("REGRESSION: a whitespace-only string never becomes a fabricated 0", () => {
+    const device = parseCieloDevice({
+      ...baseRaw,
+      isFaren: 1,
+      latEnv: { temp: "   ", humidity: "\t" },
+      latestAction: { temp: "  " },
+    });
+
+    expect(device).not.toHaveProperty("currentTemperature");
+    expect(device).not.toHaveProperty("targetTemperature");
+    expect(device).not.toHaveProperty("humidity");
+  });
+
+  it("REGRESSION: an empty-string timestamp never becomes a fabricated 'now' or epoch-0 date", () => {
+    const device = parseCieloDevice({
+      ...baseRaw,
+      latestAction: { timestamp: "" },
+    });
+
+    expect(device).not.toHaveProperty("telemetryUpdatedAt");
+  });
+
+  it("MALFORMED VALUES: a non-string mode/fanspeed is treated as absent, never crashes", () => {
+    const device = parseCieloDevice({
+      ...baseRaw,
+      latestAction: {
+        mode: 12345 as unknown as string,
+        fanspeed: null as unknown as string,
+      },
+    });
+
+    expect(device).not.toHaveProperty("mode");
+    expect(device).not.toHaveProperty("fanSpeed");
+  });
+
+  it("TIMESTAMP: parses a milliseconds-epoch value correctly (magnitude > 1e12)", () => {
+    const millis = Date.now();
+    const device = parseCieloDevice({
+      ...baseRaw,
+      latestAction: { timestamp: millis },
+    });
+
+    expect(device.telemetryUpdatedAt).toBe(new Date(millis).toISOString());
+  });
+
+  it("TIMESTAMP: parses a seconds-epoch value correctly (magnitude <= 1e12)", () => {
+    const seconds = Math.floor(Date.now() / 1000);
+    const device = parseCieloDevice({
+      ...baseRaw,
+      latestAction: { timestamp: seconds },
+    });
+
+    expect(device.telemetryUpdatedAt).toBe(
+      new Date(seconds * 1000).toISOString(),
+    );
+  });
+
+  it("TIMESTAMP: accepts a numeric-string timestamp", () => {
+    const seconds = Math.floor(Date.now() / 1000);
+    const device = parseCieloDevice({
+      ...baseRaw,
+      latestAction: { timestamp: String(seconds) },
+    });
+
+    expect(device.telemetryUpdatedAt).toBe(
+      new Date(seconds * 1000).toISOString(),
+    );
+  });
+
+  it("TIMESTAMP: missing/malformed timestamp results in the key being omitted, never fabricated as 'now'", () => {
+    const missing = parseCieloDevice({ ...baseRaw, latestAction: {} });
+    const malformed = parseCieloDevice({
+      ...baseRaw,
+      latestAction: { timestamp: "not-a-timestamp" },
+    });
+    const zero = parseCieloDevice({
+      ...baseRaw,
+      latestAction: { timestamp: 0 },
+    });
+
+    expect(missing).not.toHaveProperty("telemetryUpdatedAt");
+    expect(malformed).not.toHaveProperty("telemetryUpdatedAt");
+    expect(zero).not.toHaveProperty("telemetryUpdatedAt");
+  });
+
+  it("never uses ontimestamp or statustimestamp for telemetryUpdatedAt, even when present", () => {
+    const device = parseCieloDevice({
+      ...baseRaw,
+      latestAction: {
+        ontimestamp: 1111111111,
+        statustimestamp: 2222222222,
+      } as unknown as { timestamp?: number },
+    });
+
+    expect(device).not.toHaveProperty("telemetryUpdatedAt");
+  });
+
+  it("OFFLINE + rich telemetry: an offline device still gets its reported temperature/mode/etc. parsed — connectivity and telemetry are independent", () => {
+    const device = parseCieloDevice({
+      ...baseRaw,
+      deviceStatus: 0,
+      isFaren: 1,
+      latEnv: { temp: 69, humidity: 40 },
+      latestAction: { temp: "72", mode: "cool" },
+    });
+
+    expect(device.online).toBe(false);
+    expect(device.currentTemperature).toBe(69);
+    expect(device.targetTemperature).toBe(72);
+    expect(device.mode).toBe("cool");
+  });
+
+  it('existing ONLINE/OFFLINE derivation from deviceStatus is unchanged (1/"on" = online, else offline)', () => {
+    expect(parseCieloDevice({ ...baseRaw, deviceStatus: 1 }).online).toBe(true);
+    expect(parseCieloDevice({ ...baseRaw, deviceStatus: "on" }).online).toBe(
+      true,
+    );
+    expect(parseCieloDevice({ ...baseRaw, deviceStatus: 0 }).online).toBe(
+      false,
+    );
+    expect(parseCieloDevice({ ...baseRaw, deviceStatus: "off" }).online).toBe(
+      false,
     );
   });
 });

@@ -395,7 +395,7 @@ describe("refreshCieloTelemetry", () => {
     expect(mockListCieloDevices).toHaveBeenCalledTimes(1);
   });
 
-  it("updates only status/lastSeenAt on an existing SmartDevice row for a matched device — by its own id, never an upsert", async () => {
+  it("updates status/lastSeenAt/metadata on an existing SmartDevice row for a matched device — by its own id, never an upsert", async () => {
     vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
       existingCieloSmartDevice("sd-1", "mac-1"),
     ]);
@@ -407,28 +407,73 @@ describe("refreshCieloTelemetry", () => {
 
     expect(prisma.smartDevice.update).toHaveBeenCalledWith({
       where: { id: "sd-1" },
-      data: { status: "ONLINE", lastSeenAt: expect.any(Date) },
+      data: { status: "ONLINE", lastSeenAt: expect.any(Date), metadata: {} },
     });
     expect(result).toEqual({ refreshed: 1, notReturnedByProvider: 0 });
   });
 
-  it("writes OFFLINE status and a null lastSeenAt for a device Cielo reports as offline", async () => {
+  it("writes rich telemetry into metadata when the provider reports it (real observed Island Tides shape)", async () => {
     vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
       existingCieloSmartDevice("sd-1", "mac-1"),
     ]);
     mockListCieloDevices.mockResolvedValueOnce([
-      cieloDevice("mac-1", { online: false }),
+      cieloDevice("mac-1", {
+        online: true,
+        currentTemperature: 69,
+        targetTemperature: 72,
+        mode: "cool",
+        fanSpeed: "auto",
+        humidity: 42,
+        power: "on",
+        telemetryUpdatedAt: "2026-09-07T00:00:00.000Z",
+      }),
     ]);
 
     await refreshCieloTelemetry(actor);
 
     expect(prisma.smartDevice.update).toHaveBeenCalledWith({
       where: { id: "sd-1" },
-      data: { status: "OFFLINE", lastSeenAt: null },
+      data: {
+        status: "ONLINE",
+        lastSeenAt: expect.any(Date),
+        metadata: {
+          currentTemperature: 69,
+          targetTemperature: 72,
+          mode: "cool",
+          fanSpeed: "auto",
+          humidity: 42,
+          power: "on",
+          telemetryUpdatedAt: "2026-09-07T00:00:00.000Z",
+        },
+      },
     });
   });
 
-  it("never writes metadata or name — this provider has no telemetry beyond online/offline status to honestly report", async () => {
+  it("writes OFFLINE status, a null lastSeenAt, but still persists rich telemetry when the provider reports it — connectivity and telemetry are independent", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
+      existingCieloSmartDevice("sd-1", "mac-1"),
+    ]);
+    mockListCieloDevices.mockResolvedValueOnce([
+      cieloDevice("mac-1", {
+        online: false,
+        currentTemperature: 78,
+        mode: "off",
+      }),
+    ]);
+
+    await refreshCieloTelemetry(actor);
+
+    expect(prisma.smartDevice.update).toHaveBeenCalledWith({
+      where: { id: "sd-1" },
+      data: {
+        status: "OFFLINE",
+        lastSeenAt: null,
+        metadata: { currentTemperature: 78, mode: "off" },
+      },
+    });
+  });
+
+  it("never writes name — a display-name change is a discovery/sync concern, not a telemetry-refresh one", async () => {
     vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
       existingCieloSmartDevice("sd-1", "mac-1"),
     ]);
@@ -439,8 +484,21 @@ describe("refreshCieloTelemetry", () => {
     const call = vi.mocked(prisma.smartDevice.update).mock.calls[0]?.[0] as {
       data: Record<string, unknown>;
     };
-    expect(call.data).not.toHaveProperty("metadata");
     expect(call.data).not.toHaveProperty("name");
+  });
+
+  it("writes an empty metadata object (never fabricated) when the provider reports no rich telemetry fields at all", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
+      existingCieloSmartDevice("sd-1", "mac-1"),
+    ]);
+    mockListCieloDevices.mockResolvedValueOnce([cieloDevice("mac-1")]);
+
+    await refreshCieloTelemetry(actor);
+
+    const call = vi.mocked(prisma.smartDevice.update).mock.calls[0]?.[0] as {
+      data: { metadata: Record<string, unknown> };
+    };
+    expect(call.data.metadata).toEqual({});
   });
 
   it("never calls create/upsert — only update, on rows that already exist", () => {

@@ -269,11 +269,23 @@ export async function syncCieloDevices(
       continue;
     }
 
-    const data = {
+    // Sync owns identity/property-mapping/connectivity only — never
+    // `metadata`. refreshCieloTelemetry() (thermostat-refresh.service.ts)
+    // is the sole owner of telemetry (temperature/humidity/mode/fan/power/
+    // telemetryUpdatedAt) written there. `metadata` is deliberately absent
+    // from `update` below: an omitted field in a Prisma `update` leaves the
+    // existing column untouched, so a device this function has seen before
+    // keeps whatever telemetry Refresh already wrote, regardless of
+    // whether this sync's own provider response carries rich fields at all
+    // (Cielo's device-list endpoint has historically only reported
+    // name/online — see history — so this sync path should never be
+    // trusted to know about telemetry one way or the other). `metadata: {}`
+    // still applies to `create` only, for a genuinely new device with no
+    // prior telemetry to preserve — never fabricated, just empty.
+    const identity = {
       propertyId,
       name: device.name,
       status: device.online ? ("ONLINE" as const) : ("OFFLINE" as const),
-      metadata: {},
       lastSeenAt: device.online ? new Date() : null,
     };
     await prisma.smartDevice.upsert({
@@ -283,9 +295,10 @@ export async function syncCieloDevices(
           externalDeviceId: device.id,
         },
       },
-      update: data,
+      update: identity,
       create: {
-        ...data,
+        ...identity,
+        metadata: {},
         provider: "CIELO",
         deviceType: "THERMOSTAT",
         externalDeviceId: device.id,

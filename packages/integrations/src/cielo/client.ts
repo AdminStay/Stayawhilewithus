@@ -38,10 +38,33 @@ interface RawCieloLoginResponse {
   };
 }
 
+interface RawCieloLatEnv {
+  temp?: number | string;
+  humidity?: number | string;
+}
+
+interface RawCieloLatestAction {
+  temp?: number | string;
+  mode?: string;
+  fanspeed?: string;
+  power?: string | number;
+  timestamp?: number | string;
+}
+
 interface RawCieloDevice {
   deviceName: string;
   macAddress: string;
   deviceStatus: number | string;
+  /**
+   * Confirmed live (Island Tides, 2026-09-07): isFaren=1 alongside
+   * latEnv.temp=69 / latestAction.temp="72" — plausible Fahrenheit indoor
+   * readings. Only this exact confirmed value is ever treated as "safe to
+   * read temperature fields" — see isConfirmedFahrenheit() below for why
+   * every other value fails closed instead of guessing a conversion.
+   */
+  isFaren?: number | string;
+  latEnv?: RawCieloLatEnv;
+  latestAction?: RawCieloLatestAction;
 }
 
 interface RawCieloDevicesResponse {
@@ -54,6 +77,104 @@ interface RawCieloDevicesResponse {
 
 function deviceIsOnline(status: number | string): boolean {
   return status === 1 || String(status) === "on";
+}
+
+/**
+ * Accepts both a real number and a numeric string (Cielo's API mixes both
+ * — e.g. latestAction.temp was observed as the string "72") — never NaN,
+ * never a fabricated 0. Empty/whitespace-only strings are explicitly
+ * rejected before ever reaching `Number()` — `Number("")` and
+ * `Number("   ")` both evaluate to `0` in JavaScript (a real language
+ * quirk, not a `NaN`), which would otherwise silently turn a genuinely
+ * blank/absent provider value into a fabricated `0` reading indistinguishable
+ * from a real 0°F or 0% humidity.
+ */
+function parseNumeric(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") {
+    if (value.trim() === "") return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+/**
+ * Cielo reports per-device whether its temperature fields are Fahrenheit
+ * via `isFaren` — confirmed live only for isFaren === 1 (see RawCieloDevice
+ * above). Any other value (0, missing, anything else) has no observed
+ * reference behavior in this codebase — there is no confirmed evidence of
+ * what a non-Fahrenheit response even looks like from this API, so
+ * temperature fields are omitted entirely for those devices rather than
+ * guessing a conversion. This fails safe, not silently wrong; extend it
+ * only when a real non-Fahrenheit account/device is actually observed.
+ */
+function isConfirmedFahrenheit(raw: RawCieloDevice): boolean {
+  return raw.isFaren === 1 || raw.isFaren === "1";
+}
+
+/**
+ * Cielo's timestamp fields are Unix epoch values, sometimes as strings —
+ * defensively distinguishes seconds vs milliseconds by magnitude (a
+ * millisecond epoch for any date after 2001 exceeds 1e12; a plausible
+ * current-era second epoch does not) and converts to an ISO string, since
+ * the existing generic getTelemetryUpdatedAt() reader
+ * (apps/website/.../lib/thermostat-metadata.ts) requires a string, not a
+ * raw number. Returns null on anything that doesn't parse to a valid
+ * date — never fabricated.
+ */
+function parseCieloTimestamp(value: unknown): string | null {
+  const numeric = parseNumeric(value);
+  if (numeric === null || numeric <= 0) return null;
+  const millis = numeric > 1e12 ? numeric : numeric * 1000;
+  const date = new Date(millis);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/**
+ * Parses one raw `/web/devices` entry into the safe, normalized
+ * `CieloDevice` shape — same "only ever set a key the provider actually
+ * reported" discipline as parseNestDevice()/AugustClient.getLockDetail().
+ * Exported so client.test.ts can unit-test every field combination
+ * directly, without needing to mock a full HTTP response per case.
+ *
+ * Deliberately uses `latestAction.timestamp` for telemetryUpdatedAt, never
+ * `ontimestamp` (represents when the unit last powered on, not telemetry
+ * freshness) or `statustimestamp` (appears status-specific, not general
+ * action-state freshness) — confirmed by direct instruction after live
+ * field observation, not guessed.
+ */
+export function parseCieloDevice(raw: RawCieloDevice): CieloDevice {
+  const fahrenheitConfirmed = isConfirmedFahrenheit(raw);
+  const currentTemperature = fahrenheitConfirmed
+    ? parseNumeric(raw.latEnv?.temp)
+    : null;
+  const targetTemperature = fahrenheitConfirmed
+    ? parseNumeric(raw.latestAction?.temp)
+    : null;
+  const humidity = parseNumeric(raw.latEnv?.humidity);
+  const mode =
+    typeof raw.latestAction?.mode === "string" ? raw.latestAction.mode : null;
+  const fanSpeed =
+    typeof raw.latestAction?.fanspeed === "string"
+      ? raw.latestAction.fanspeed
+      : null;
+  const power =
+    raw.latestAction?.power != null ? String(raw.latestAction.power) : null;
+  const telemetryUpdatedAt = parseCieloTimestamp(raw.latestAction?.timestamp);
+
+  return {
+    id: raw.macAddress,
+    name: raw.deviceName,
+    online: deviceIsOnline(raw.deviceStatus),
+    ...(currentTemperature !== null && { currentTemperature }),
+    ...(targetTemperature !== null && { targetTemperature }),
+    ...(mode !== null && { mode }),
+    ...(fanSpeed !== null && { fanSpeed }),
+    ...(humidity !== null && { humidity }),
+    ...(power !== null && { power }),
+    ...(telemetryUpdatedAt !== null && { telemetryUpdatedAt }),
+  };
 }
 
 /**
@@ -171,7 +292,14 @@ export class CieloClient
     }
   }
 
-  /** `GET /web/devices` — every thermostat/AC controller on the account, with online/offline status. */
+  /**
+   * `GET /web/devices` — every thermostat/AC controller on the account,
+   * with online/offline status plus (when the device confirms Fahrenheit
+   * via `isFaren`) current/target temperature, mode, fan speed, humidity,
+   * power state, and a telemetry timestamp — see parseCieloDevice() for
+   * the exact per-field extraction/fail-safe rules. Still one plain GET,
+   * no WebSocket, no `/web/sync/db/6` capability-metadata call.
+   */
   async listDevices(): Promise<CieloDevice[]> {
     const { accessToken } = await this.login();
 
@@ -191,11 +319,7 @@ export class CieloClient
       );
     }
 
-    return response.data.listDevices.map((d) => ({
-      id: d.macAddress,
-      name: d.deviceName,
-      online: deviceIsOnline(d.deviceStatus),
-    }));
+    return response.data.listDevices.map(parseCieloDevice);
   }
 
   /**

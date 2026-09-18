@@ -550,6 +550,32 @@ describe("syncCieloDevices", () => {
     );
   });
 
+  it("REGRESSION (2026-09-18/19): update never includes `metadata` — sync must never erase telemetry refreshCieloTelemetry() already wrote, regardless of what this run's own provider response contains", async () => {
+    process.env.CIELO_USERNAME = "user@example.com";
+    process.env.CIELO_PASSWORD = "hunter2";
+    process.env.CIELO_PROPERTY_MAP = JSON.stringify({
+      "aa:bb:cc": "property-2",
+    });
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    // This run's own response reports no rich telemetry at all — exactly
+    // what would previously have wiped any existing metadata to `{}`.
+    mockListDevices.mockResolvedValueOnce([
+      { id: "aa:bb:cc", name: "Living Room", online: true },
+    ]);
+
+    await syncCieloDevices(actor);
+
+    const call = vi.mocked(prisma.smartDevice.upsert).mock.calls[0]?.[0];
+    expect(call?.update).toBeDefined();
+    expect(call?.update).not.toHaveProperty("metadata");
+    // Sync still owns and updates its own fields.
+    expect(call?.update).toMatchObject({
+      propertyId: "property-2",
+      name: "Living Room",
+      status: "ONLINE",
+    });
+  });
+
   it("never deletes a mapped device that the provider stops returning (regression: this exact case deleted the real Ocean Pearl/Miramar Bliss SmartDevice rows in production)", async () => {
     process.env.CIELO_USERNAME = "user@example.com";
     process.env.CIELO_PASSWORD = "hunter2";

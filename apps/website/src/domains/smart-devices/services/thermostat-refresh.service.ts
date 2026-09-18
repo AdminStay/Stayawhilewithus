@@ -5,7 +5,10 @@ import { prisma, type Prisma } from "@stayw/database";
 import { CieloClient } from "@stayw/integrations/cielo";
 import { NestClient, NestOAuthRefreshError } from "@stayw/integrations/nest";
 
-import { toSmartDeviceMetadata } from "./provider-devices.service";
+import {
+  toCieloSmartDeviceMetadata,
+  toSmartDeviceMetadata,
+} from "./provider-devices.service";
 
 /**
  * Manual "Refresh" for /thermostats — a pure read-from-provider,
@@ -219,13 +222,15 @@ export interface CieloRefreshResult {
  *
  * Exactly one real Cielo API call: CieloClient.listDevices() (the same
  * bulk read syncCieloDevices() already uses) — never a per-device call.
- * CieloClient.listDevices() only ever reports {id, name, online} — no
- * temperature/mode/humidity exists to refresh for this provider, so only
- * status/lastSeenAt are written; metadata is deliberately left untouched
- * (never overwritten with a value this provider didn't actually report).
- * `name` is also deliberately left untouched — a display-name change is a
- * sync concern, not a telemetry-refresh one; syncCieloDevices() still owns
- * that.
+ * CieloClient.listDevices() now also reports current/target temperature,
+ * mode, fan speed, humidity, power, and a telemetry timestamp when the
+ * device confirms Fahrenheit units (see parseCieloDevice(),
+ * packages/integrations/src/cielo/client.ts, for the exact fail-safe
+ * extraction) — written into `metadata` via the same
+ * toCieloSmartDeviceMetadata() "only set what's present" mapper every
+ * other provider already uses. `name` is deliberately left untouched — a
+ * display-name change is a sync concern, not a telemetry-refresh one;
+ * syncCieloDevices() still owns that.
  */
 export async function refreshCieloTelemetry(
   actor: AuthContext,
@@ -281,13 +286,18 @@ export async function refreshCieloTelemetry(
     }
 
     // Existing row only, by its own real id — never an upsert, so this can
-    // never create a SmartDevice row.
+    // never create a SmartDevice row. metadata is written unconditionally
+    // (even when `fresh.online` is false) — connectivity and telemetry are
+    // independent facts Cielo reports independently, same discipline as
+    // August's refresh never withholding battery/lock-state based on
+    // connectivity.
     writes.push(
       prisma.smartDevice.update({
         where: { id: existing.id },
         data: {
           status: fresh.online ? "ONLINE" : "OFFLINE",
           lastSeenAt: fresh.online ? now : null,
+          metadata: toCieloSmartDeviceMetadata(fresh) as Prisma.InputJsonValue,
         },
       }),
     );

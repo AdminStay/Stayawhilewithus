@@ -11,6 +11,7 @@ import {
   isAugustBrand,
   type AugustLockDetail,
 } from "@stayw/integrations/august";
+import type { CieloDevice } from "@stayw/integrations/cielo";
 import { NestClient, type NestDevice } from "@stayw/integrations/nest";
 
 export type { ProviderDevice };
@@ -134,6 +135,39 @@ export function toAugustSmartDeviceMetadata(
     ...(lock.batteryLevel != null && { batteryLevel: lock.batteryLevel }),
     ...(lock.lockState != null && { lockState: lock.lockState }),
     telemetryUpdatedAt: observedAt.toISOString(),
+  };
+}
+
+/**
+ * Cielo equivalent of toSmartDeviceMetadata()/toAugustSmartDeviceMetadata()
+ * above — same "only ever set a key the provider actually reported"
+ * discipline. Every field on `device` is already null-normalized and
+ * unit-gated by parseCieloDevice() (packages/integrations/src/cielo/client.ts)
+ * — temperature fields are only ever present when the device confirmed
+ * Fahrenheit via `isFaren`, and `telemetryUpdatedAt` is already an ISO
+ * string converted from Cielo's raw Unix timestamp there — so this
+ * function does no further parsing/conversion, only the same
+ * `!= null` presence check every other provider's metadata mapper uses
+ * (never a truthiness check, so a genuine humidity/temperature of 0 is
+ * preserved, not dropped).
+ */
+export function toCieloSmartDeviceMetadata(
+  device: CieloDevice,
+): Record<string, unknown> {
+  return {
+    ...(device.currentTemperature != null && {
+      currentTemperature: device.currentTemperature,
+    }),
+    ...(device.targetTemperature != null && {
+      targetTemperature: device.targetTemperature,
+    }),
+    ...(device.mode != null && { mode: device.mode }),
+    ...(device.fanSpeed != null && { fanSpeed: device.fanSpeed }),
+    ...(device.humidity != null && { humidity: device.humidity }),
+    ...(device.power != null && { power: device.power }),
+    ...(device.telemetryUpdatedAt != null && {
+      telemetryUpdatedAt: device.telemetryUpdatedAt,
+    }),
   };
 }
 
