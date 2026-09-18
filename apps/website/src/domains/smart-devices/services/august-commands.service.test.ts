@@ -56,6 +56,7 @@ vi.mock("@/platform/audit/record-audit", () => ({
 
 import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
+import { HttpRequestError } from "@stayw/integrations/core";
 
 import { sendAugustLockCommand } from "./august-commands.service";
 
@@ -539,6 +540,131 @@ describe("sendAugustLockCommand", () => {
     expect(result.status).toBe("failure");
     if (result.status === "failure") {
       expect(result.reason).toMatch(/bridge is currently offline/);
+    }
+  });
+
+  it("provider error handling (account auth): a 401 is always translated to the re-authorize message", async () => {
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+      EXTERNAL_ID,
+    ]);
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      mappedEnabledDevice() as never,
+    );
+    allowTransaction();
+    mockGetLockDetail.mockResolvedValueOnce(freshDetail());
+    mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+    mockLock.mockRejectedValueOnce(
+      new HttpRequestError("/remoteoperate/august-lock-1/lock", 401),
+    );
+
+    const result = await sendAugustLockCommand(actor, {
+      smartDeviceId: SMART_DEVICE_ID,
+      operation: "LOCK",
+    });
+
+    expect(result.status).toBe("failure");
+    if (result.status === "failure") {
+      expect(result.reason).toMatch(/re-authorized/);
+    }
+  });
+
+  it("provider error handling (403, no account-auth signal): reports a device-specific refusal, NOT the account-wide re-authorize message — this is the 2026-09-18 MJ - Front Door incident this fix targets", async () => {
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+      EXTERNAL_ID,
+    ]);
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      mappedEnabledDevice() as never,
+    );
+    allowTransaction();
+    mockGetLockDetail.mockResolvedValueOnce(freshDetail());
+    mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+    mockLock.mockRejectedValueOnce(
+      new HttpRequestError("/remoteoperate/august-lock-1/lock", 403, {
+        providerErrorCode: "device_not_authorized",
+        providerMessage: "no bridge registered for this lock",
+      }),
+    );
+
+    const result = await sendAugustLockCommand(actor, {
+      smartDeviceId: SMART_DEVICE_ID,
+      operation: "LOCK",
+    });
+
+    expect(result.status).toBe("failure");
+    if (result.status === "failure") {
+      // The account-wide branch's own instruction ("...may need to be
+      // re-authorized.") must not appear — this message may still
+      // reference re-authorization in passing (to say it's NOT what's
+      // needed), so match on the actual instructive phrase, not the bare
+      // word.
+      expect(result.reason).not.toMatch(/may need to be re-authorized/);
+      expect(result.reason).toMatch(/this specific lock/);
+      // This device-specific message must stay strictly neutral about WHY
+      // August refused the command — we have never actually confirmed a
+      // cause, only that reads keep working while this one write doesn't.
+      // Guards against reintroducing an unproven claim (a missing bridge,
+      // incomplete setup, insufficient account tier, etc.) into
+      // user-facing text.
+      expect(result.reason).not.toMatch(/set up|bridge|superuser|activat/i);
+    }
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          errorDetail: expect.stringContaining("403"),
+        }),
+      }),
+    );
+  });
+
+  it("provider error handling (403, with an account-auth signal in the provider's own message): escalates to the account-wide re-authorize message", async () => {
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+      EXTERNAL_ID,
+    ]);
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      mappedEnabledDevice() as never,
+    );
+    allowTransaction();
+    mockGetLockDetail.mockResolvedValueOnce(freshDetail());
+    mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+    mockLock.mockRejectedValueOnce(
+      new HttpRequestError("/remoteoperate/august-lock-1/lock", 403, {
+        providerMessage: "session token expired, please re-authenticate",
+      }),
+    );
+
+    const result = await sendAugustLockCommand(actor, {
+      smartDeviceId: SMART_DEVICE_ID,
+      operation: "LOCK",
+    });
+
+    expect(result.status).toBe("failure");
+    if (result.status === "failure") {
+      expect(result.reason).toMatch(/re-authorized/);
+    }
+  });
+
+  it("provider error handling (403 as a plain Error, no HttpRequestError instance): still falls back to the pre-existing generic message rather than throwing", async () => {
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+      EXTERNAL_ID,
+    ]);
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      mappedEnabledDevice() as never,
+    );
+    allowTransaction();
+    mockGetLockDetail.mockResolvedValueOnce(freshDetail());
+    mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+    mockLock.mockRejectedValueOnce(
+      new Error("Request to /remoteoperate/august-lock-1/lock failed with 403"),
+    );
+
+    const result = await sendAugustLockCommand(actor, {
+      smartDeviceId: SMART_DEVICE_ID,
+      operation: "LOCK",
+    });
+
+    expect(result.status).toBe("failure");
+    if (result.status === "failure") {
+      expect(result.reason).toMatch(/re-authorized/);
     }
   });
 

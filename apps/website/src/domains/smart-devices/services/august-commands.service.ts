@@ -7,6 +7,7 @@ import {
   isAugustBrand,
   type AugustLockOperation,
 } from "@stayw/integrations/august";
+import { HttpRequestError } from "@stayw/integrations/core";
 
 import { toAugustLockMetadata } from "./lock-refresh.service";
 
@@ -56,15 +57,60 @@ function parseTestDeviceAllowlist(raw: string | undefined): Set<string> {
 }
 
 /**
+ * A 403 alone is ambiguous: August returns it both for a genuinely
+ * unauthorized/expired connection AND for a specific device/operation it
+ * refuses for other reasons (2026-09-18 incident: MJ - Front Door's
+ * remote-operate LOCK returned 403 while the account's other locks and
+ * MJ's own read-only status/capability calls kept working fine on the same
+ * credential — see august-commands investigation notes). Collapsing every
+ * 403 into "re-authorize the connection" is actively misleading in that
+ * case: there is nothing to re-authorize account-wide, and telling an
+ * operator to do so sends them chasing the wrong fix. Only escalate to the
+ * account-wide message when the provider's own error body says something
+ * that actually sounds like a credential/session problem; otherwise report
+ * this as a device-specific refusal.
+ */
+const ACCOUNT_AUTH_HINT_PATTERN = /token|credential|unauthor|session|re.?auth/i;
+
+/**
  * Translates a raw provider/HTTP error into a message safe to show a user —
- * never the raw error. Full detail still reaches the audit log's metadata
- * field (server-side only), same discipline as
- * translateNestCommandError() in nest-commands.service.ts. Status codes
- * verified against yalexs's actual exception handling (2026-09-18): 422 =
- * bridge offline, 423 = bridge busy with another operation, 408 = bridge
- * didn't respond in time.
+ * never the raw error (nor the provider's raw error body — only its two
+ * extracted, already-sanitized fields, see HttpRequestError). Full detail
+ * still reaches the audit log's metadata field (server-side only), same
+ * discipline as translateNestCommandError() in nest-commands.service.ts.
+ * Status codes verified against yalexs's actual exception handling
+ * (2026-09-18): 422 = bridge offline, 423 = bridge busy with another
+ * operation, 408 = bridge didn't respond in time.
  */
 function translateAugustCommandError(err: unknown): string {
+  if (err instanceof HttpRequestError) {
+    switch (err.status) {
+      case 401:
+        return "August authorization failed — the connection may need to be re-authorized.";
+      case 403: {
+        const hint = `${err.providerErrorCode ?? ""} ${err.providerMessage ?? ""}`;
+        if (ACCOUNT_AUTH_HINT_PATTERN.test(hint)) {
+          return "August authorization failed — the connection may need to be re-authorized.";
+        }
+        return "August refused the command for this specific lock. The August connection is still working for read access, so this does not necessarily mean the account needs to be re-authorized.";
+      }
+      case 404:
+        return "This device is no longer visible to the connected August account.";
+      case 422:
+        return "This lock's bridge is currently offline — the command could not be delivered.";
+      case 423:
+        return "This lock's bridge is busy with another operation right now — try again shortly.";
+      case 408:
+        return "This lock's bridge did not respond in time — try again shortly.";
+      default:
+        return "The lock command could not be completed. Try again, and contact support if this persists.";
+    }
+  }
+
+  // Fallback for anything that isn't an HttpRequestError (e.g. a network
+  // failure that never reached HttpClient's response handling at all, or a
+  // plain Error in a test double) — same string-matching this function
+  // always used before HttpRequestError existed.
   const message = err instanceof Error ? err.message : String(err);
 
   if (message.includes("401") || message.includes("403")) {
