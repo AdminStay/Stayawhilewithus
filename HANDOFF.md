@@ -6628,3 +6628,109 @@ Removed: `apps/website/vercel.json`. Modified: `apps/website/app/api/cron/schedu
 ### Files changed this increment
 
 Application code (committed, pushed, deployed — see D/E above): `packages/integrations/src/cielo/{client.ts,types.ts,client.test.ts}`, `apps/website/src/domains/smart-devices/services/{provider-devices.service.ts,thermostat-refresh.service.ts,thermostat-refresh.service.test.ts,smart-devices.service.ts,smart-devices.service.test.ts,cielo-sync-refresh-interaction.test.ts}` (Cielo commit), `packages/integrations/src/core/{http-client.ts,index.ts,http-client.test.ts}`, `apps/website/src/domains/smart-devices/services/{august-commands.service.ts,august-commands.service.test.ts}` (August error-handling commit). `HANDOFF.md` (this entry) — documentation only, not staged/committed this pass.
+
+## Increment 114 — 2026-09-19: Ecobee SmartBuildings auth built, reviewed, and real-verified (Gate 1 + Gate 2) — tenant confirmed EMPTY, blocked on Michelle for property/device identification; MJ - Front Door investigation advanced by Michelle's physical evidence, still blocked on the access/authorization question — DOCUMENTATION ONLY this increment, no code/provider/database change
+
+### A. Ecobee — status: API VERIFIED / SMARTBUILDINGS EMPTY / WAITING FOR MICHELLE PROPERTY + DEVICE IDENTIFICATION
+
+**Phase 1A — authentication foundation, built and reviewed this session** (not yet committed/pushed as of this entry): the stale consumer/PIN-based `EcobeeCredentials { apiKey }` shape was replaced with the real SmartBuildings `{ clientId, clientSecret }` machine-to-machine model, verified against ecobee's own authoritative docs (`docs.sb.ecobee.com/docs/authentication-guide`, `docs.sb.ecobee.com/reference/gettoken`) rather than guessed. `EcobeeClient.authenticate()` performs the real `POST https://api.sb.ecobee.com/api/v2/token` (`client_credentials` grant) and caches the token in memory only — reused for its full documented `expires_in` lifetime, no proactive early-refresh skew (deliberately different from `NestClient`'s Google-specific pattern, per ecobee's own "reuse until it expires" guidance). `getGrantedScopes()` exposes the real `scope` ecobee's token response returned, kept explicitly separate from StayWhile's application policy — see next paragraph. Every other capability (device inventory, telemetry, sync, webhooks, and all physical-control surface) remains a `NotImplementedError` stub; no write/control method exists anywhere in the client, verified by a dedicated structural test. Full test suite (33 Ecobee-specific tests across two review passes) and `tsc --noEmit` both clean. Confirmed `apps/website/.env.local` already held real, non-empty `ECOBEE_CLIENT_ID`/`ECOBEE_CLIENT_SECRET` values (under a different name than the stale `.env.example` placeholder expected) — `.env.example` updated to the real variable names (empty placeholders only); `.env.local` itself was never touched.
+
+**Gate 1 — real authentication, human-authorized, executed exactly once**: `POST /api/v2/token` → **HTTP 200**, `token_type: Bearer`, `expires_in: 7200`. **Provider granted a broad scope** — `read:thermostat(s)`, `create:thermostat`, `write:thermostat(s)`, `delete:thermostat`, `read:building(s)`, `write:building`, `create:building`, `delete:building`, `write:tenantmode` — far beyond the read-only access originally requested from ecobee's SmartBuildings team. **This does not change StayWhile's application policy**: read-only remains absolute regardless of what the provider grants; no write/create/delete capability is implemented or authorized. The one-off verification script was deleted immediately after use, per this session's standing convention; the access token was never logged, stored, or written anywhere.
+
+**Gate 2 — real read-only discovery, human-authorized, executed exactly once**: verified the official read contract first (ecobee's own docs — `GET /buildingIds` and `GET /thermostatIds` each return `{id, contentLocation}` pairs; `contentLocation` is the documented URI to follow for full resource detail; no bulk-detail endpoint exists). Called `GET /api/v2/buildingIds` → **0 buildings**; `GET /api/v2/thermostatIds` → **0 thermostats**. No detail calls were needed since both lists were empty. Total real provider requests this Gate: 1 token + 2 reads. **The user independently confirmed the same empty state by manually checking the Ecobee SmartBuildings web portal directly — "0 buildings," "Add your first building."** Two independent sources (API, portal) agree: this SmartBuildings tenant has never had a building or thermostat registered into it, despite the credential being real, valid, and broadly authorized.
+
+**Conclusion, stated precisely**: authentication is NOT the blocker. API access is NOT the blocker. The blocker is that nothing has been onboarded into this SmartBuildings tenant yet, and — separately — StayWhile doesn't yet know which of its own properties are even supposed to have an Ecobee thermostat.
+
+**Existing-evidence investigation (read-only, this increment)**: exhaustively searched HANDOFF.md and every other real (non-worktree) markdown doc in the repo — zero property-specific Ecobee mentions anywhere; every reference is architectural/status-level only. Explicit non-match recorded: **Ocean Pearl's thermostat is Trane, not Ecobee** — do not infer otherwise. Production database, read-only: `smart_devices` with `provider = 'ECOBEE'` → 0 rows; `provider_devices` joined to an `ECOBEE` `integration_connection` → 0 rows; `smart_devices.metadata` containing the text "ecobee" → 0 rows; the one existing `integration_connections` row for `ECOBEE` is `status: DISCONNECTED`, empty `metadata`, no `connectedByUserId`/`lastSyncedAt` — the standard seeded catalog placeholder, not evidence of any real connection. **Verdict: the first Ecobee property cannot be identified from any existing code, documentation, or database evidence. This has to come from Michelle or Kenny directly.**
+
+**Human blocker, as it now stands**: Michelle has been asked to confirm (1) which StayWhile property/properties currently have Ecobee thermostats, and (2) the thermostat/device name(s), if known. Until she answers: do not add a building in SmartBuildings, do not register a thermostat, do not make any further Ecobee provider request, do not create any `ProviderDevice`/`SmartDevice` record, do not guess or fuzzy-map a property, do not implement any control capability.
+
+**Future architecture, once real inventory is identified (not yet built)**: Ecobee discovery → `ProviderDevice` staging → explicit dashboard-managed property mapping (admin-confirmed, never inferred) → explicit enable/approval → `SmartDevice` linkage → read-only telemetry verification. Same standing rule as every other provider this session: do **not** repeat Cielo's legacy `CIELO_PROPERTY_MAP`-style hardcoded env-var mapping pattern for Ecobee.
+
+### B. MJ - Front Door (August) — status: PAUSED / ACCESS-AUTHORIZATION INVESTIGATION
+
+Michelle provided physical evidence for the replacement front-door lock at Majestic Isla: the serial number matches the already-identified replacement lock (`LRIPA0017Y`), and the lock is reporting a **good Wi-Fi connection**. The user's reply to Michelle, recorded verbatim for continuity: _"Thank you! Yes, this is exactly what I needed. The serial number matches and the lock is reporting a good Wi-Fi connection, so please don't change or disconnect anything. I'm going to check the access/authorization side next since the Wi-Fi itself looks good."_
+
+**Status interpretation**: physical/device identity evidence matches; Wi-Fi evidence looks good; **Wi-Fi is confirmed NOT the current blocker** (this closes out the earlier "absent Bridge object" hypothesis explored in the prior investigation — that line of inquiry is resolved, not open). The investigation remains focused specifically on the **access/authorization** side. The existing hypothesis — that the authenticated StayWhile August identity is `"user"`-tier on MJ versus `"superuser"`-tier on the already-working Aqua Palm — remains the leading explanation for the original 403, but is **not** being presented as confirmed at the provider's server-enforcement level; it's the working theory pending Michelle's continued investigation on the access/authorization side.
+
+**MJ remains PAUSED.** Physical state remains **UNLOCKED**, per the last independently-verified evidence — unchanged unless new human evidence establishes otherwise. Do not retry LOCK, do not send UNLOCK, do not send any physical command, do not touch PIN/access codes, do not reauthenticate, do not change mappings/RBAC/allowlist, do not touch the lock's Wi-Fi/device configuration, do not disconnect/reconnect it, and do not make any access change on Michelle's behalf. Wait for the access/authorization investigation to conclude before any next MJ action.
+
+### C. Other workstream states — preserved, unchanged this increment
+
+- **Cielo**: CLOSED / PRODUCTION VERIFIED (Increment 113).
+- **Nest**: BLOCKED — provider/OAuth escalation (Google Device Access Issue 561849351). Do not retry.
+- **August fleet expansion (Gate 2, the 42-device eligibility list)**: PAUSED, unrelated to MJ specifically — still awaiting a separate approval to activate.
+- **Ecobee**: API VERIFIED / SMARTBUILDINGS EMPTY / WAITING FOR MICHELLE.
+- **MJ**: PAUSED / ACCESS-AUTHORIZATION INVESTIGATION.
+
+### D. Confirmation — documentation only this increment
+
+No provider request, database mutation, device command, account change, or integration/code change occurred. The Ecobee Phase 1A code (client.ts/types.ts/README.md/client.test.ts/.env.example changes) described in section A above was built and reviewed in this same session but is **not yet committed** — it remains local, uncommitted working-tree state, separate from this HANDOFF entry.
+
+### Files changed this increment
+
+`HANDOFF.md` only (this entry).
+
+## Increment 115 — 2026-09-22: Michelle's Ecobee scope + portal clarification recorded (human-confirmed, do not re-ask); August legacy Sync Now message fix built, tested, reviewed, still uncommitted; 43-lock production mapping census remains pending real DB access — DOCUMENTATION ONLY this increment for Ecobee, no code/provider/database change
+
+### A. Ecobee — human-confirmed intended device scope (Michelle) — record verbatim, do not re-ask
+
+Michelle explicitly confirmed the following StayWhile-intended Ecobee thermostat scope:
+
+1. **Casa Del Mar** — 2 thermostats: **HALLWAY** and **ENTRY**.
+2. **Robinson 2** — 1 thermostat, display name **"My ecobee"**. **Michelle has since confirmed "Robinson 2" is the thermostat for the StayWhile "Robinson Recluse" property** — this was the one open identification question from this file's prior entry; it is now resolved, do not ask Michelle again. (The separate, deviceless "Robinson" location she also mentioned remains explicitly disregarded — no devices under it.)
+3. **Camingo** — 1 thermostat, named **"Camingo - 2012 37th St W"** — plausible match to the existing StayWhile "Camingo" property (OwnerRez ID 480307), pending the address-field verification already noted below; not yet confirmed against the authoritative record.
+4. **Explicit exclusion, standing**: a second thermostat also display-named "My ecobee," marked with a red X by Michelle, is the **owner's/Kenny's personal residence** and must **never** be connected, mapped, or onboarded — this exclusion holds even if a future discovery run surfaces it.
+
+Expected intended thermostat count once onboarded: **4** (Casa Del Mar ×2, Robinson 2 ×1, Camingo ×1).
+
+### B. Ecobee — portal clarification (Michelle) — resolves the "which Ecobee system is this" open question
+
+**Michelle has confirmed her screenshots (the device list in section A) are from the regular consumer ecobee.com app — NOT the SmartBuildings portal.** This directly explains, and fully reconciles, what previously looked like a contradiction: Gate 2's real API discovery against the SmartBuildings tenant tied to this integration's `ECOBEE_CLIENT_ID`/`ECOBEE_CLIENT_SECRET` (Increment 114) found **0 buildings / 0 thermostats**, while Michelle's screenshots showed real, named, existing devices. Both are correct simultaneously: the 4 confirmed thermostats are real and currently live in ecobee's **consumer** product, a separate system from the **SmartBuildings** commercial/API product this integration authenticates against. The SmartBuildings tenant's empty state stands as accurately verified — it is not stale, and does not need to be re-checked via another provider call on this basis alone. See §C below for what this means for next steps.
+
+### C. Ecobee — correct next step given A + B (determination only, nothing executed)
+
+**No code, provider request, database write, or thermostat action was taken this increment.** Based on A and B together, getting these 4 confirmed thermostats into the SmartBuildings/API integration is **not a StayWhile code or mapping task at this stage — it is an ecobee-provider-side provisioning question**, because:
+
+- The SmartBuildings tenant and the consumer ecobee.com account are separate ecobee products/ecosystems (consistent with Increment 114's own finding that SmartBuildings credentials are "provisioned directly by ecobee's SmartBuildings team, not self-serve" — a business/enterprise product, not a consumer login).
+- A consumer-registered thermostat is not automatically visible to, or migratable into, a SmartBuildings tenant through this integration's API — there is no discovery/sync/mapping code path that could make that happen from StayWhile's side, and building one would be guessing at a mechanism ecobee itself controls.
+- The precise mechanism for getting an existing consumer-app thermostat into a SmartBuildings tenant (e.g., a migration/enrollment ecobee's SmartBuildings team performs by serial number, versus a physical re-pairing Michelle/Kenny would need to do directly with the hardware) is **not established by anything in this codebase or HANDOFF's history** — it must come from ecobee directly, not be assumed or guessed.
+
+**Recommended next step (requires Kenny/Michelle, not code)**: contact ecobee's SmartBuildings team — the same contact/channel that originally provisioned `ECOBEE_CLIENT_ID`/`ECOBEE_CLIENT_SECRET` — and ask specifically how to get these 4 already-identified, already-owned thermostats (Casa Del Mar ×2, Robinson 2 ×1, Camingo ×1) enrolled into the SmartBuildings tenant this integration authenticates against. Once ecobee confirms/executes that migration on their end (or confirms a re-pairing step for Michelle to perform), Gate 2's discovery calls should start returning non-zero buildings/thermostats, and the **already-documented** Increment 114 future architecture applies unchanged (Ecobee discovery → `ProviderDevice` staging → explicit dashboard-managed mapping → explicit enable → `SmartDevice` linkage → read-only telemetry) — nothing about that plan changes.
+
+**Standing exclusion carried forward unconditionally**: the red-X owner's-residence thermostat (§A.4) must never be included in any request to ecobee, any migration ask, any mapping, or any future discovery-derived list, regardless of what ecobee's own tenant eventually contains.
+
+**Do not**, as of this entry: create a SmartBuildings building, register a thermostat, contact ecobee without Kenny/Michelle's involvement, create any `ProviderDevice`/`SmartDevice` row, change any env var, or make any further Ecobee provider request beyond what Increment 114 already made (no re-verification call is warranted by this new information alone — the emptiness finding is explained, not called into question).
+
+### D. August — legacy Sync Now message fix (separate workstream, unchanged status: built + tested, still uncommitted)
+
+Not part of this entry's Ecobee documentation, recorded here only for continuity: the `syncAugustDevices()` "skipped — no property mapping" miscategorization Kenny flagged (7 synced / 36 skipped) was root-caused and fixed in the local working tree this session (`smart-devices.service.ts`, `apps/website/src/domains/integrations/actions.ts`, `SyncNowButton.tsx`, plus test updates) — skipped locks that already have a real mapping via the `ProviderDevice` architecture are now reported separately (`alreadyMappedExternalIds`) instead of being called unmapped. Read-only additional lookup only; no change to what this function writes, no change to `lock-refresh.service.ts`/`lock-spot-refresh.service.ts` (the dedicated fleet-refresh path), no lock/unlock/PIN capability touched (none exists in this code path). Full test suite passes (1101/1104; the 3 remaining failures are pre-existing and unrelated — `OwnerRezConfirmLinkPanel.test.tsx` and an untracked `_tmp-cielo-production-integration.test.ts`). **Still not committed, pushed, or deployed** — awaiting the user's go-ahead.
+
+### E. Standing item, unchanged — 43-lock August production mapping census
+
+`packages/database/diagnose-august-mapping-census.mjs` (read-only, no writes) was written this session to classify the real August fleet into MAPPED+ENABLED / MAPPED-NOT-ENABLED / DISCOVERED-UNMAPPED / LEGACY, but **has not been run** — no Production `DIRECT_URL` is available in this environment (confirmed: `apps/website/.env.local` only holds local dev DB credentials). Remains pending until the user supplies real Production read credentials for this session, or runs it independently.
+
+### Files changed this increment
+
+`HANDOFF.md` only (this entry). The August code described in §D was written and tested in an earlier part of this same session, not this specific edit.
+
+## Increment 116 — 2026-09-22 (same day): August Sync Now "no property mapping" messaging bug — COMMITTED, DEPLOYED, PRODUCTION-VERIFIED, CLOSED. Ecobee and the 43-lock census remain pending, unchanged.
+
+### A. August — Sync Now messaging fix — STATUS: RESOLVED / CLOSED
+
+The fix designed and tested earlier this session (Increment 115 §D) was **committed** (`9580011`, `fix(august): report ProviderDevice-mapped locks separately from truly unmapped ones in Sync Now`) with an explicit file list — never `git add -A`/`.`/`-a` — covering exactly `smart-devices.service.ts`, `apps/website/src/domains/integrations/actions.ts`, `SyncNowButton.tsx` (+its new test file), `august-sync.e2e.test.ts`, `smart-devices.service.test.ts`. Pushed to `main` via the verified `github-staywhile` SSH remote (`39d4d96..9580011`). No Vercel CLI was used at any point, per the standing permanent ban — deployment was left to Vercel's own GitHub integration.
+
+**Production verification, performed by the user directly on the live dashboard** (the Claude in Chrome extension was unavailable this session, so this check was done by the user, not the assistant — consistent with this project's established verification convention): clicked August's "Sync Now" once. Exact real result: **"Synced 7 devices (36 already mapped via device mapping — kept up to date separately)."** Integration card shows **CONNECTED**; latest inbound sync log shows **SUCCEEDED — 7 records**. No genuinely-unmapped locks were reported this run (no "no property mapping" clause appeared), consistent with the fix's design.
+
+**Kenny's originally reported issue — "Synced 7 (36 more discovered but skipped — no property mapping)" reading as a bug — is RESOLVED in Production.** The 36 are now correctly reported as already mapped via the ProviderDevice architecture (kept current by the separate lock-refresh path) rather than being mischaracterized as unmapped. Root cause and fix are fully documented in Increment 115 §D/D and the commit message; not repeated here.
+
+**No further August code changes were made this increment** — this entry is verification/documentation only, per explicit instruction. `lock-refresh.service.ts`, `lock-spot-refresh.service.ts`, `provider-devices.service.ts`, `AUGUST_PROPERTY_MAP`, and all physical lock/unlock/PIN capability (none of which exists in this codebase) remain completely untouched, both by the original fix and by this verification.
+
+### B. Standing items — unchanged, reaffirmed pending
+
+- **43-lock August production mapping census** (`packages/database/diagnose-august-mapping-census.mjs`, read-only, written Increment 115): still not run — no Production `DIRECT_URL` available in this environment. Remains pending, tracked separately from the now-closed messaging fix, until real Production read access is supplied.
+- **Ecobee**: remains pending, externally blocked — waiting on Michelle/Kenny working directly with ecobee's SmartBuildings team to get the 4 confirmed thermostats (Casa Del Mar ×2, Robinson 2, Camingo) enrolled into the SmartBuildings tenant (see Increment 115 §A–C for the full confirmed device list, the resolved "Robinson 2"/"Robinson Recluse" identification, and the consumer-app-vs-SmartBuildings-portal clarification). No new Ecobee action taken this increment.
+
+### Files changed this increment
+
+`HANDOFF.md` only (this entry). The August fix itself was committed separately (`9580011`) in this same session, before this documentation pass.
