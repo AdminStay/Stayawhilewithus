@@ -56,6 +56,13 @@ export const RESOURCES = [
   "audit_logs",
   "users",
   "roles",
+  // General Resources / Helpful Links (SOPs, vendor info, general ops
+  // links) — a simple dashboard-managed catalog, not a device/property
+  // integration. V1 read access is deliberately narrow (admin + ops_manager
+  // only, see seed.ts) pending Kenny/Michelle's decision on which other
+  // roles should see it; create/update/delete stay admin-only via the
+  // wildcard grant, same as every other resource here.
+  "resource_links",
 ] as const;
 
 export type Resource = (typeof RESOURCES)[number];

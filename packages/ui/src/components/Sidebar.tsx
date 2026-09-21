@@ -6,6 +6,7 @@ import {
   Building2,
   CalendarRange,
   Clock,
+  Link2,
   ListChecks,
   Lock,
   Menu,
@@ -54,6 +55,7 @@ const NAV_ICONS = {
   shield: ShieldCheck,
   userCog: UserCog,
   clock: Clock,
+  link: Link2,
 } as const;
 
 export type NavIconKey = keyof typeof NAV_ICONS;

@@ -33,6 +33,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: "/tasks", label: "Tasks", icon: "checklist" },
       { href: "/cleaning", label: "Cleaning", icon: "sparkles" },
       { href: "/maintenance", label: "Maintenance", icon: "wrench" },
+      { href: "/resources", label: "Resources", icon: "link" },
     ],
   },
   {

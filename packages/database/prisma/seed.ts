@@ -31,6 +31,10 @@ const RESOURCES = [
   "audit_logs",
   "users",
   "roles",
+  // See packages/auth/src/permissions.ts for why V1 read access is
+  // deliberately narrow (admin + ops_manager only) — kept OUT of
+  // read_only's blanket grant below for the same reason, not an oversight.
+  "resource_links",
 ] as const;
 
 const ACTIONS: PermissionAction[] = [
@@ -82,6 +86,11 @@ const SYSTEM_ROLES: Array<{
       // here — both remain ungranted to every role until Kenny/Michelle
       // confirm which fields/roles qualify.
       "notion:read",
+      // General Resources / Helpful Links — V1 read access, admin +
+      // ops_manager only (explicit instruction). cleaner/maintenance_tech/
+      // front_desk deliberately do NOT get this yet, pending Kenny/
+      // Michelle's decision on which other roles should see it.
+      "resource_links:read",
     ],
   },
   {
@@ -118,7 +127,11 @@ const SYSTEM_ROLES: Array<{
   {
     name: "read_only",
     description: "Read-only access across ops data",
-    permissionKeys: RESOURCES.map((r) => `${r}:read`),
+    // Excludes "resource_links" deliberately — see its own comment in the
+    // RESOURCES list above; V1 read access is admin + ops_manager only.
+    permissionKeys: RESOURCES.filter((r) => r !== "resource_links").map(
+      (r) => `${r}:read`,
+    ),
   },
 ];
 
