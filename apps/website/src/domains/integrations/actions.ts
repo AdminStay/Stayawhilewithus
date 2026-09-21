@@ -46,7 +46,12 @@ export async function disconnectIntegrationAction(formData: FormData) {
 export type SyncActionState =
   | { status: "idle" }
   | { status: "already_running" }
-  | { status: "success"; synced: number; skipped: number }
+  | {
+      status: "success";
+      synced: number;
+      skipped: number;
+      alreadyMapped: number;
+    }
   | { status: "failure"; error: string };
 
 /**
@@ -114,6 +119,7 @@ async function runDeviceSync(
       status: "success",
       synced: result.synced,
       skipped: result.skippedExternalIds.length,
+      alreadyMapped: result.alreadyMappedExternalIds?.length ?? 0,
     };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

@@ -7,6 +7,12 @@ vi.mock("@stayw/database", () => ({
       upsert: vi.fn().mockResolvedValue({}),
       deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
+    // Defaults to "nothing already mapped via ProviderDevice" so every
+    // existing test's skip behavior is unchanged unless a test explicitly
+    // overrides this with mockResolvedValueOnce.
+    providerDevice: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
   },
 }));
 
@@ -256,6 +262,76 @@ describe("syncAugustDevices", () => {
     expect(result).toEqual({ synced: 0, skippedExternalIds: ["lock-1"] });
     expect(mockGetLockDetail).not.toHaveBeenCalled();
     expect(prisma.smartDevice.upsert).not.toHaveBeenCalled();
+  });
+
+  it("reports a lock already mapped via ProviderDevice separately from genuinely unmapped ones — never calls it 'no property mapping'", async () => {
+    setConfigured();
+    process.env.AUGUST_PROPERTY_MAP = JSON.stringify({
+      "house-known": "property-1",
+    });
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListLocks.mockResolvedValueOnce([
+      {
+        id: "lock-mapped-elsewhere",
+        name: "Camingo - Front Door",
+        houseId: "house-camingo",
+      },
+      {
+        id: "lock-truly-unmapped",
+        name: "Some New Lock",
+        houseId: "house-new",
+      },
+    ]);
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      { externalDeviceId: "lock-mapped-elsewhere" },
+    ] as never);
+
+    const result = await syncAugustDevices(actor);
+
+    expect(prisma.providerDevice.findMany).toHaveBeenCalledWith({
+      where: {
+        integrationConnection: { provider: "AUGUST" },
+        externalDeviceId: {
+          in: ["lock-mapped-elsewhere", "lock-truly-unmapped"],
+        },
+        propertyId: { not: null },
+      },
+      select: { externalDeviceId: true },
+    });
+    expect(result).toEqual({
+      synced: 0,
+      skippedExternalIds: ["lock-truly-unmapped"],
+      alreadyMappedExternalIds: ["lock-mapped-elsewhere"],
+    });
+    // Still read-only for both — this legacy sync writes to neither.
+    expect(mockGetLockDetail).not.toHaveBeenCalled();
+    expect(prisma.smartDevice.upsert).not.toHaveBeenCalled();
+  });
+
+  it("never queries ProviderDevice when every lock is already covered by AUGUST_PROPERTY_MAP (nothing to check)", async () => {
+    setConfigured();
+    process.env.AUGUST_PROPERTY_MAP = JSON.stringify({
+      "house-1": "property-1",
+    });
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockListLocks.mockResolvedValueOnce([
+      { id: "lock-1", name: "Front Door", houseId: "house-1" },
+    ]);
+    mockGetLockDetail.mockResolvedValueOnce({
+      id: "lock-1",
+      name: "Front Door",
+      houseId: "house-1",
+      batteryLevel: 72,
+      connectivity: "ONLINE",
+      lockState: "locked",
+      telemetryUpdatedAt: "2026-08-19T18:00:00.000Z",
+      seenAt: "2026-08-19T19:00:00.000Z",
+    });
+
+    const result = await syncAugustDevices(actor);
+
+    expect(prisma.providerDevice.findMany).not.toHaveBeenCalled();
+    expect(result).toEqual({ synced: 1, skippedExternalIds: [] });
   });
 
   it("upserts a mapped lock with battery/online status converted from the raw API shape", async () => {

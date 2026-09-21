@@ -8,23 +8,44 @@ import type { SyncActionState } from "../actions";
 const INITIAL_STATE: SyncActionState = { status: "idle" };
 
 /**
+ * `skipped` means genuinely unmapped anywhere in the app — never a device
+ * that's already mapped via the current ProviderDevice architecture but
+ * simply not touched by this legacy sync (see smart-devices.service.ts's
+ * DeviceSyncResult doc comment). `alreadyMapped` covers that latter case
+ * explicitly, so "no property mapping" is never shown for a device that
+ * actually has one.
+ *
  * A synced=0 result is never shown as a plain, unqualified "success" — it's
- * always exactly one of three distinguishable states, never conflated:
- *   - synced=0, skipped=0: the provider itself returned zero devices.
- *   - synced=0, skipped>0: devices exist but none had a property mapping.
+ * always exactly one of these distinguishable states, never conflated:
+ *   - synced=0, skipped=0, alreadyMapped=0: the provider itself returned
+ *     zero devices.
+ *   - skipped>0: devices exist with genuinely no property mapping anywhere.
+ *   - alreadyMapped>0: devices exist that are already mapped/managed by the
+ *     newer device-mapping system — informational, not a problem.
  *   - anything thrown: a separate "failure" status entirely (red, distinct
  *     branch below), never reaches this function at all.
  */
-function successMessage(state: { synced: number; skipped: number }): string {
-  if (state.synced > 0) {
-    return `Synced ${state.synced} device${state.synced === 1 ? "" : "s"}${
-      state.skipped > 0
-        ? ` (${state.skipped} more discovered but skipped — no property mapping)`
-        : ""
-    }.`;
+function successMessage(state: {
+  synced: number;
+  skipped: number;
+  alreadyMapped: number;
+}): string {
+  const notes: string[] = [];
+  if (state.alreadyMapped > 0) {
+    notes.push(
+      `${state.alreadyMapped} already mapped via device mapping — kept up to date separately`,
+    );
   }
   if (state.skipped > 0) {
-    return `Synced 0 devices — ${state.skipped} discovered but skipped (no property mapping).`;
+    notes.push(`${state.skipped} discovered but skipped — no property mapping`);
+  }
+  const suffix = notes.length > 0 ? ` (${notes.join("; ")})` : "";
+
+  if (state.synced > 0) {
+    return `Synced ${state.synced} device${state.synced === 1 ? "" : "s"}${suffix}.`;
+  }
+  if (notes.length > 0) {
+    return `Synced 0 devices${suffix}.`;
   }
   return "Provider returned 0 devices — nothing to sync.";
 }

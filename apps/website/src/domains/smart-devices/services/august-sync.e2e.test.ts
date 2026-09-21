@@ -33,6 +33,12 @@ vi.mock("@stayw/database", () => ({
       upsert: vi.fn().mockResolvedValue({}),
       deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
+    // Nothing already mapped via ProviderDevice in this fixture — matches
+    // this file's existing "unmapped lock" test, which asserts a plain
+    // skippedExternalIds with no alreadyMappedExternalIds field.
+    providerDevice: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
   },
 }));
 

@@ -74,8 +74,26 @@ export function isThermostatVisible(
 
 export interface DeviceSyncResult {
   synced: number;
-  /** External IDs (lock/device IDs) fetched from the provider but not written, because their house/MAC-address key wasn't in the property map. */
+  /**
+   * External IDs fetched from the provider but not written by THIS sync,
+   * AND genuinely unmapped to any property anywhere in the app — no
+   * legacy `*_PROPERTY_MAP` entry, and (August only) no `ProviderDevice`
+   * mapping either. The one case that should ever read as "no property
+   * mapping" to a human.
+   */
   skippedExternalIds: string[];
+  /**
+   * August only. External IDs skipped by the legacy `AUGUST_PROPERTY_MAP`
+   * check above but which already have a real property mapping via the
+   * current `ProviderDevice` architecture (Discover → Map → Enable) — kept
+   * up to date by that system's own refresh path (lock-refresh.service.ts /
+   * lock-spot-refresh.service.ts), not by this legacy sync. Reported
+   * separately so callers never describe an already-mapped device as
+   * unmapped. Read-only lookup — this function still never writes to
+   * ProviderDevice or to these devices' SmartDevice rows, exactly as
+   * before; see the module-level note on syncAugustDevices() for why.
+   */
+  alreadyMappedExternalIds?: string[];
 }
 
 /** `AUGUST_PROPERTY_MAP` / `CIELO_PROPERTY_MAP` are JSON objects — malformed or missing means "map nothing," not a crash. */
@@ -123,6 +141,24 @@ function parseExcludedLockIds(raw: string | undefined): Set<string> {
  * not by this function). Requires smart_devices:update, distinct from the
  * smart_devices:read the dashboard uses, since this makes real outbound API
  * calls and writes.
+ *
+ * This function's own write path is deliberately untouched and still
+ * covers only the legacy `AUGUST_PROPERTY_MAP` houses — it does not sync,
+ * refresh, or write anything for a lock mapped via the newer
+ * `ProviderDevice` (Discover → Map → Enable) architecture; that fleet is
+ * owned exclusively by lock-refresh.service.ts / lock-spot-refresh.service.ts.
+ * Merging the two write paths here was considered and rejected: it would
+ * mean two independent code paths writing the same SmartDevice rows (this
+ * sync's `getLockDetail()` call and the dedicated refresh's own), risking
+ * redundant provider calls and diverging field-write behavior for no
+ * benefit, since the dedicated fleet refresh already keeps those devices
+ * current. The one thing this function's `AUGUST_PROPERTY_MAP`-miss branch
+ * gets WRONG without this check is calling every non-legacy lock
+ * "skipped — no property mapping" even when it already has a real mapping
+ * via ProviderDevice — see `alreadyMappedExternalIds` on DeviceSyncResult.
+ * This added lookup is read-only (one batched `findMany`, no write) and
+ * only ever narrows what's reported as genuinely unmapped; it changes no
+ * existing write behavior.
  */
 export async function syncAugustDevices(
   actor: AuthContext,
@@ -207,6 +243,31 @@ export async function syncAugustDevices(
     synced++;
   }
 
+  // Of the locks this legacy sync just skipped (not in AUGUST_PROPERTY_MAP),
+  // some already have a real property mapping via the current ProviderDevice
+  // architecture — they're correctly synced/refreshed elsewhere, just not by
+  // this function. Read-only: one batched lookup, no write. Only runs when
+  // there's something to check, so a fully-mapped-via-legacy-map run (the
+  // common case in tests and for a config with no discovery yet) never pays
+  // for an unnecessary query.
+  let trulyUnmapped = skipped;
+  let alreadyMappedElsewhere: string[] = [];
+  if (skipped.length > 0) {
+    const mappedElsewhere = await prisma.providerDevice.findMany({
+      where: {
+        integrationConnection: { provider: "AUGUST" },
+        externalDeviceId: { in: skipped },
+        propertyId: { not: null },
+      },
+      select: { externalDeviceId: true },
+    });
+    const mappedElsewhereIds = new Set(
+      mappedElsewhere.map((d) => d.externalDeviceId),
+    );
+    trulyUnmapped = skipped.filter((id) => !mappedElsewhereIds.has(id));
+    alreadyMappedElsewhere = skipped.filter((id) => mappedElsewhereIds.has(id));
+  }
+
   /**
    * Deliberately no pruning of SmartDevice rows missing from `locks`. This
    * used to hard-delete any row not in the current run's response — real,
@@ -233,7 +294,13 @@ export async function syncAugustDevices(
    * unmap/disable flow (not built yet).
    */
 
-  return { synced, skippedExternalIds: skipped };
+  return {
+    synced,
+    skippedExternalIds: trulyUnmapped,
+    ...(alreadyMappedElsewhere.length > 0 && {
+      alreadyMappedExternalIds: alreadyMappedElsewhere,
+    }),
+  };
 }
 
 /**
