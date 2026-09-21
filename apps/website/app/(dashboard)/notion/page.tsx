@@ -2,6 +2,7 @@ import { hasPermission } from "@stayw/auth";
 import { PageHeader, SectionHeader } from "@stayw/ui";
 
 import {
+  fetchNotionPageContentAction,
   searchNotionAction,
   updateNotionFieldAction,
 } from "@/domains/integrations/actions";
@@ -112,7 +113,10 @@ export default async function NotionPage() {
       <div className="space-y-10">
         <div>
           <SectionHeader title="Search Notion" size="lg" />
-          <NotionSearch action={searchNotionAction} />
+          <NotionSearch
+            action={searchNotionAction}
+            fetchContentAction={fetchNotionPageContentAction}
+          />
         </div>
         <div>
           <SectionHeader title="Property Listings" size="lg" />

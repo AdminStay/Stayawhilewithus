@@ -40,12 +40,14 @@ const mockListRecentlyEdited = vi.fn();
 const mockQueryDataSource = vi.fn();
 const mockListDataSourceRecords = vi.fn();
 const mockSearch = vi.fn();
+const mockGetPageContent = vi.fn();
 vi.mock("@stayw/integrations/notion", () => ({
   NotionClient: vi.fn().mockImplementation(() => ({
     listRecentlyEdited: mockListRecentlyEdited,
     queryDataSource: mockQueryDataSource,
     listDataSourceRecords: mockListDataSourceRecords,
     search: mockSearch,
+    getPageContent: mockGetPageContent,
   })),
 }));
 
@@ -70,6 +72,7 @@ import {
   getNotionHighlights,
   getNotionIntegrationConfigStatus,
   getNotionListingsAccessProof,
+  getNotionPageContent,
   getOwnerRezHighlights,
   getOwnerRezProperties,
   listIntegrationConnections,
@@ -566,6 +569,116 @@ describe("getNotionListingsAccessProof", () => {
 
     await expect(getNotionListingsAccessProof(actor)).rejects.toThrow();
     expect(mockQueryDataSource).not.toHaveBeenCalled();
+  });
+});
+
+describe("getNotionPageContent", () => {
+  const originalToken = process.env.NOTION_API_KEY;
+  afterEach(() => {
+    process.env.NOTION_API_KEY = originalToken;
+  });
+
+  it("reports not configured when NOTION_API_KEY is unset, without calling Notion", async () => {
+    delete process.env.NOTION_API_KEY;
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+
+    const result = await getNotionPageContent(actor, "page-1");
+
+    expect(result).toEqual({ configured: false });
+    expect(mockGetPageContent).not.toHaveBeenCalled();
+  });
+
+  it("returns the real page content on a successful read", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    const content = {
+      blocks: [
+        {
+          id: "b1",
+          type: "paragraph",
+          text: [
+            {
+              text: "Call the guest.",
+              href: null,
+              bold: false,
+              italic: false,
+              code: false,
+            },
+          ],
+          children: [],
+        },
+      ],
+      truncated: false,
+    };
+    mockGetPageContent.mockResolvedValueOnce(content);
+
+    const result = await getNotionPageContent(actor, "page-1");
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "integrations:read");
+    expect(mockGetPageContent).toHaveBeenCalledWith("page-1");
+    expect(result).toEqual({ configured: true, ok: true, content });
+  });
+
+  it("reports a real read failure without swallowing it or inventing content, using only the fixed generic message", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockGetPageContent.mockRejectedValueOnce(
+      new Error("Request to /blocks/page-1/children failed with 404"),
+    );
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+
+    const result = await getNotionPageContent(actor, "page-1");
+
+    expect(result).toEqual({
+      configured: true,
+      ok: false,
+      error: "Couldn't load this page's content from Notion. Please try again.",
+    });
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("never returns the underlying provider error text to the caller, even when it contains sensitive/internal detail — only the approved generic message", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    const sensitiveError = new Error(
+      "Request to /blocks/aaaa-1111/children failed with 500: <html>Internal Server Error — Authorization: Bearer secret_abc123, at /srv/app/notion/client.ts:42</html>",
+    );
+    mockGetPageContent.mockRejectedValueOnce(sensitiveError);
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+
+    const result = await getNotionPageContent(actor, "page-1");
+
+    expect(result).toEqual({
+      configured: true,
+      ok: false,
+      error: "Couldn't load this page's content from Notion. Please try again.",
+    });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain("secret_abc123");
+    expect(serialized).not.toContain("/srv/app");
+    expect(serialized).not.toContain("Bearer");
+    expect(serialized).not.toContain("500");
+    // The real error is still logged server-side (for operator debugging) —
+    // it just never travels in the returned value.
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      "getNotionPageContent failed:",
+      sensitiveError,
+    );
+    consoleErrorSpy.mockRestore();
+  });
+
+  it("propagates denial when the actor lacks integrations:read", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(getNotionPageContent(actor, "page-1")).rejects.toThrow();
+    expect(mockGetPageContent).not.toHaveBeenCalled();
   });
 });
 

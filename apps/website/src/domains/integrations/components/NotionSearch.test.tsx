@@ -22,6 +22,7 @@ import { NotionSearch } from "./NotionSearch";
 afterEach(cleanup);
 
 const noopFormAction = vi.fn();
+const noopFetchContentAction = vi.fn();
 
 function isDisabled(el: HTMLElement): boolean {
   return (el as HTMLButtonElement | HTMLInputElement).disabled;
@@ -35,7 +36,12 @@ describe("NotionSearch", () => {
       false,
     ]);
 
-    render(<NotionSearch action={vi.fn()} />);
+    render(
+      <NotionSearch
+        action={vi.fn()}
+        fetchContentAction={noopFetchContentAction}
+      />,
+    );
 
     expect(
       screen.getByText(/Type a property name, procedure, keyword/),
@@ -52,7 +58,12 @@ describe("NotionSearch", () => {
       false,
     ]);
 
-    render(<NotionSearch action={vi.fn()} />);
+    render(
+      <NotionSearch
+        action={vi.fn()}
+        fetchContentAction={noopFetchContentAction}
+      />,
+    );
 
     const input = screen.getByLabelText("Search Notion");
     fireEvent.change(input, { target: { value: "pool" } });
@@ -69,7 +80,12 @@ describe("NotionSearch", () => {
       true,
     ]);
 
-    render(<NotionSearch action={vi.fn()} />);
+    render(
+      <NotionSearch
+        action={vi.fn()}
+        fetchContentAction={noopFetchContentAction}
+      />,
+    );
 
     expect(screen.getByText("Searching Notion…")).toBeTruthy();
     expect(isDisabled(screen.getByRole("button", { name: "Searching…" }))).toBe(
@@ -87,7 +103,12 @@ describe("NotionSearch", () => {
       false,
     ]);
 
-    render(<NotionSearch action={vi.fn()} />);
+    render(
+      <NotionSearch
+        action={vi.fn()}
+        fetchContentAction={noopFetchContentAction}
+      />,
+    );
 
     expect(
       screen.getByText(/Not connected — set NOTION_API_KEY to enable\./),
@@ -106,7 +127,12 @@ describe("NotionSearch", () => {
       false,
     ]);
 
-    render(<NotionSearch action={vi.fn()} />);
+    render(
+      <NotionSearch
+        action={vi.fn()}
+        fetchContentAction={noopFetchContentAction}
+      />,
+    );
 
     expect(
       screen.getByText("Search failed — Request to /search failed with 401"),
@@ -121,7 +147,12 @@ describe("NotionSearch", () => {
       false,
     ]);
 
-    render(<NotionSearch action={vi.fn()} />);
+    render(
+      <NotionSearch
+        action={vi.fn()}
+        fetchContentAction={noopFetchContentAction}
+      />,
+    );
 
     expect(screen.getByText("No results")).toBeTruthy();
     expect(screen.getByText("0 results for “zzz”")).toBeTruthy();
@@ -149,7 +180,12 @@ describe("NotionSearch", () => {
       false,
     ]);
 
-    render(<NotionSearch action={vi.fn()} />);
+    render(
+      <NotionSearch
+        action={vi.fn()}
+        fetchContentAction={noopFetchContentAction}
+      />,
+    );
 
     expect(screen.getByText("Moonlit Cove")).toBeTruthy();
     expect(screen.getByText("Property listing")).toBeTruthy();
@@ -182,7 +218,12 @@ describe("NotionSearch", () => {
       false,
     ]);
 
-    render(<NotionSearch action={vi.fn()} />);
+    render(
+      <NotionSearch
+        action={vi.fn()}
+        fetchContentAction={noopFetchContentAction}
+      />,
+    );
 
     expect(screen.queryByRole("link", { name: "Open in Notion" })).toBeNull();
   });
@@ -209,7 +250,12 @@ describe("NotionSearch", () => {
       false,
     ]);
 
-    render(<NotionSearch action={vi.fn()} />);
+    render(
+      <NotionSearch
+        action={vi.fn()}
+        fetchContentAction={noopFetchContentAction}
+      />,
+    );
 
     expect(screen.getByText("Cleaning SOP")).toBeTruthy();
     expect(screen.getByText("Notion page")).toBeTruthy();
@@ -224,8 +270,146 @@ describe("NotionSearch", () => {
     ]);
     const action = vi.fn();
 
-    render(<NotionSearch action={action} />);
+    render(
+      <NotionSearch
+        action={action}
+        fetchContentAction={noopFetchContentAction}
+      />,
+    );
 
     expect(mockUseActionState).toHaveBeenCalledWith(action, { status: "idle" });
+  });
+
+  describe("opening a result's real content", () => {
+    function renderWithOneResult(
+      contentType: string,
+      fetchContentAction: (pageId: string) => Promise<unknown>,
+    ) {
+      mockUseActionState.mockReturnValue([
+        {
+          configured: true,
+          ok: true,
+          query: "sop",
+          results: [
+            {
+              id: "page-1",
+              title: "SOP for VRBO & Direct Bookings",
+              url: "https://notion.so/page-1",
+              lastEditedTime: null,
+              contentType,
+              region: null,
+              snippet: null,
+            },
+          ],
+        },
+        noopFormAction,
+        false,
+      ]);
+
+      render(
+        <NotionSearch
+          action={vi.fn()}
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test double narrower than the real action's typed return
+          fetchContentAction={fetchContentAction as any}
+        />,
+      );
+    }
+
+    it("fetches and renders a page result's real content when opened, keeping Open in Notion available", async () => {
+      const fetchContentAction = vi.fn().mockResolvedValue({
+        status: "success",
+        content: {
+          blocks: [
+            {
+              id: "b1",
+              type: "paragraph",
+              text: [
+                {
+                  text: "Call the guest before arrival.",
+                  href: null,
+                  bold: false,
+                  italic: false,
+                  code: false,
+                },
+              ],
+              children: [],
+            },
+          ],
+          truncated: false,
+        },
+      });
+      renderWithOneResult("Notion page", fetchContentAction);
+
+      fireEvent.click(screen.getByText("SOP for VRBO & Direct Bookings"));
+
+      expect(fetchContentAction).toHaveBeenCalledWith("page-1");
+      expect(
+        await screen.findByText("Call the guest before arrival."),
+      ).toBeTruthy();
+      expect(
+        screen.getAllByRole("link", { name: "Open in Notion" }).length,
+      ).toBeGreaterThan(0);
+    });
+
+    it("does not fetch content for a Property listing result — it has its own field-based detail view", () => {
+      const fetchContentAction = vi.fn();
+      renderWithOneResult("Property listing", fetchContentAction);
+
+      fireEvent.click(screen.getByText("SOP for VRBO & Direct Bookings"));
+
+      expect(fetchContentAction).not.toHaveBeenCalled();
+    });
+
+    it("shows a loading indicator while content is being fetched", () => {
+      const fetchContentAction = vi.fn().mockReturnValue(new Promise(() => {}));
+      renderWithOneResult("Notion page", fetchContentAction);
+
+      fireEvent.click(screen.getByText("SOP for VRBO & Direct Bookings"));
+
+      expect(screen.getByText("Loading content…")).toBeTruthy();
+    });
+
+    it("shows a safe error message on a real read failure, never a raw error string", async () => {
+      const fetchContentAction = vi.fn().mockResolvedValue({
+        status: "error",
+        error: "Request failed with 404",
+      });
+      renderWithOneResult("Database row", fetchContentAction);
+
+      fireEvent.click(screen.getByText("SOP for VRBO & Direct Bookings"));
+
+      expect(
+        await screen.findByText(/Couldn.t load this page.s content/),
+      ).toBeTruthy();
+      expect(screen.queryByText(/404/)).toBeNull();
+    });
+
+    it("shows a truncation notice when the read was cut off by the safety caps, without hiding the content that did load", async () => {
+      const fetchContentAction = vi.fn().mockResolvedValue({
+        status: "success",
+        content: { blocks: [], truncated: true },
+      });
+      renderWithOneResult("Notion page", fetchContentAction);
+
+      fireEvent.click(screen.getByText("SOP for VRBO & Direct Bookings"));
+
+      expect(
+        await screen.findByText(/more content than shown here/),
+      ).toBeTruthy();
+    });
+
+    it("shows a safe empty-content message for a genuinely empty page", async () => {
+      const fetchContentAction = vi.fn().mockResolvedValue({
+        status: "success",
+        content: { blocks: [], truncated: false },
+      });
+      renderWithOneResult("Notion page", fetchContentAction);
+
+      fireEvent.click(screen.getByText("SOP for VRBO & Direct Bookings"));
+
+      expect(
+        await screen.findByText("No readable content on this page yet."),
+      ).toBeTruthy();
+    });
   });
 });

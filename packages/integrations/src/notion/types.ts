@@ -158,3 +158,117 @@ export interface NotionListingRecord {
  */
 export type NotionEditableFieldType =
   "text" | "select" | "multi_select" | "checkbox" | "date" | "number" | "url";
+
+/** One raw page of `GET /v1/blocks/{id}/children` — the shared shape used to read both a page's own top-level blocks and any block's nested children (e.g. a toggle's contents, a table's rows). Each raw block is read generically (`Record<string, unknown>`), same discipline as `NotionDataSourceRow` above — a network response is never trusted to match a static type, so `mapRawNotionBlock()` (client.ts) checks each field's real runtime shape itself rather than casting. */
+export interface NotionBlockChildrenResponse {
+  results: Array<Record<string, unknown>>;
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+/**
+ * One Notion rich-text run reduced to exactly what SOP/operational content
+ * actually needs to render readably: the text itself, a real hyperlink when
+ * present, and the three annotations StayWhile's operational content
+ * actually uses (bold/italic/code) — deliberately not the full annotations
+ * set (strikethrough/underline/color), which isn't needed for this V1 and
+ * would just be more surface area to render or ignore.
+ */
+export interface NotionRichTextRun {
+  text: string;
+  href: string | null;
+  bold: boolean;
+  italic: boolean;
+  code: boolean;
+}
+
+/**
+ * The closed set of Notion block types this V1 renders with real structure.
+ * Confirmed from real discovery (see HANDOFF.md Increment 122): paragraph/
+ * heading_2/callout on the real "SOP for VRBO & Direct Bookings" page, toggle
+ * and child_page-adjacent structure on the "SOPs" parent page. heading_1/
+ * heading_3/bulleted_list_item/numbered_list_item/table are added ahead of
+ * having a confirmed real example of each specifically, because they are
+ * ordinary, common Notion content blocks any other operational page in this
+ * same workspace (a different SOP, a checklist, a reference table) could
+ * already use — extending this set further, for a type genuinely absent from
+ * every accessible page, remains a deliberate, reviewed addition, never
+ * automatic. Anything outside this set maps to "unsupported" rather than
+ * guessed at.
+ */
+export type NotionSupportedBlockType =
+  | "paragraph"
+  | "heading_1"
+  | "heading_2"
+  | "heading_3"
+  | "bulleted_list_item"
+  | "numbered_list_item"
+  | "callout"
+  | "toggle"
+  | "table";
+
+interface NotionContentBlockBase {
+  id: string;
+}
+
+/** paragraph/heading/list-item/toggle all share this exact shape (text + optionally-nested children) — callout is its own type only because it also carries an icon. */
+export interface NotionTextContentBlock extends NotionContentBlockBase {
+  type:
+    | "paragraph"
+    | "heading_1"
+    | "heading_2"
+    | "heading_3"
+    | "bulleted_list_item"
+    | "numbered_list_item"
+    | "toggle";
+  text: NotionRichTextRun[];
+  /** Nested sub-blocks (e.g. a toggle's contents, an indented sub-paragraph) — always [] when the real block had none, also [] (never guessed) when nesting was cut off by the depth/call-budget safety caps (see NotionPageContent.truncated). */
+  children: NotionContentBlock[];
+}
+
+export interface NotionCalloutContentBlock extends NotionContentBlockBase {
+  type: "callout";
+  text: NotionRichTextRun[];
+  /** A plain emoji character when the callout's icon is Notion's "emoji" icon type — null for every other icon type (external image, uploaded file) or when absent, never a raw file URL. */
+  icon: string | null;
+  children: NotionContentBlock[];
+}
+
+export interface NotionTableRow {
+  id: string;
+  cells: NotionRichTextRun[][];
+}
+
+export interface NotionTableContentBlock extends NotionContentBlockBase {
+  type: "table";
+  tableWidth: number;
+  hasColumnHeader: boolean;
+  hasRowHeader: boolean;
+  rows: NotionTableRow[];
+}
+
+/** A block type outside NotionSupportedBlockType (or a table row's own container, which is only ever consumed as part of its parent table) — rendered as a safe, explicit fallback, never silently dropped and never guessed at as some other type. */
+export interface NotionUnsupportedContentBlock extends NotionContentBlockBase {
+  type: "unsupported";
+  /** The real Notion block type this V1 doesn't yet render (e.g. "image", "video", "child_page") — shown only as a small descriptive label, never raw block content. */
+  originalType: string;
+}
+
+export type NotionContentBlock =
+  | NotionTextContentBlock
+  | NotionCalloutContentBlock
+  | NotionTableContentBlock
+  | NotionUnsupportedContentBlock;
+
+/**
+ * The full result of a read-only getPageContent() call. `truncated: true`
+ * means the real page had more nested content than the depth/call-budget
+ * safety caps allowed reading (see MAX_BLOCK_TREE_DEPTH/MAX_BLOCK_FETCH_CALLS
+ * in client.ts) — the caller must show this honestly (e.g. "Open in Notion
+ * to see everything") rather than silently presenting a partial page as
+ * complete.
+ */
+export interface NotionPageContent {
+  blocks: NotionContentBlock[];
+  truncated: boolean;
+}

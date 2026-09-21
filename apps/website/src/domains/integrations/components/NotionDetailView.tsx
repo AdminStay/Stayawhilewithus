@@ -2,6 +2,7 @@
 
 import { Badge, Dialog } from "@stayw/ui";
 import { ExternalLink } from "lucide-react";
+import type { ReactNode } from "react";
 
 import type {
   NotionDetailField,
@@ -241,6 +242,7 @@ export function NotionDetailView({
   subtitle,
   region,
   sections,
+  bodyContent,
   lastEditedTime,
   notionUrl,
   propertyContext,
@@ -256,6 +258,8 @@ export function NotionDetailView({
   /** App-computed region badge (e.g. "SRQ") — never raw Notion content. */
   region?: string | null;
   sections: NotionDetailSection[];
+  /** The real Notion page-body content (see NotionBlockList) or a loading/error state for it — rendered above `sections`, entirely separate from the field/section model above (a general search result's page/database-row content, not a "View of Listings" row's structured fields). Absent for a listing detail view, which has no page-body content to fetch. */
+  bodyContent?: ReactNode;
   lastEditedTime: string | null;
   notionUrl: string | null;
   propertyContext: NotionDetailPropertyContext | null;
@@ -288,10 +292,14 @@ export function NotionDetailView({
           </div>
         )}
 
+        {bodyContent}
+
         {sections.length === 0 ? (
-          <p className="text-sm text-ink-muted">
-            No additional information is available to show here yet.
-          </p>
+          bodyContent ? null : (
+            <p className="text-sm text-ink-muted">
+              No additional information is available to show here yet.
+            </p>
+          )
         ) : (
           <div className="space-y-5">
             {sections.map((section) => (

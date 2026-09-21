@@ -1119,4 +1119,326 @@ describe("NotionClient", () => {
       expect(patchCall[1].body).not.toContain(credentials.token);
     });
   });
+
+  describe("getPageContent", () => {
+    function page(
+      results: Record<string, unknown>[],
+      hasMore = false,
+      nextCursor: string | null = null,
+    ) {
+      return { results, has_more: hasMore, next_cursor: nextCursor };
+    }
+
+    it("reads a page's real body content — reading it with a single GET to /blocks/{pageId}/children", async () => {
+      mockRequest.mockResolvedValueOnce(
+        page([
+          {
+            id: "b1",
+            type: "heading_2",
+            has_children: false,
+            heading_2: { rich_text: [{ plain_text: "Booking Steps" }] },
+          },
+          {
+            id: "b2",
+            type: "paragraph",
+            has_children: false,
+            paragraph: {
+              rich_text: [
+                { plain_text: "Call the guest.", annotations: { bold: true } },
+              ],
+            },
+          },
+          {
+            id: "b3",
+            type: "callout",
+            has_children: false,
+            callout: {
+              rich_text: [{ plain_text: "Never share the door code by text." }],
+              icon: { type: "emoji", emoji: "⚠️" },
+            },
+          },
+        ]),
+      );
+      const client = new NotionClient(credentials);
+
+      const result = await client.getPageContent("page-1");
+
+      expect(mockRequest).toHaveBeenCalledWith(
+        "/blocks/page-1/children?page_size=100",
+      );
+      expect(result).toEqual({
+        truncated: false,
+        blocks: [
+          {
+            id: "b1",
+            type: "heading_2",
+            text: [
+              {
+                text: "Booking Steps",
+                href: null,
+                bold: false,
+                italic: false,
+                code: false,
+              },
+            ],
+            children: [],
+          },
+          {
+            id: "b2",
+            type: "paragraph",
+            text: [
+              {
+                text: "Call the guest.",
+                href: null,
+                bold: true,
+                italic: false,
+                code: false,
+              },
+            ],
+            children: [],
+          },
+          {
+            id: "b3",
+            type: "callout",
+            text: [
+              {
+                text: "Never share the door code by text.",
+                href: null,
+                bold: false,
+                italic: false,
+                code: false,
+              },
+            ],
+            icon: "⚠️",
+            children: [],
+          },
+        ],
+      });
+    });
+
+    it("maps bulleted_list_item and numbered_list_item blocks", async () => {
+      mockRequest.mockResolvedValueOnce(
+        page([
+          {
+            id: "b1",
+            type: "bulleted_list_item",
+            has_children: false,
+            bulleted_list_item: {
+              rich_text: [{ plain_text: "Lock the door" }],
+            },
+          },
+          {
+            id: "b2",
+            type: "numbered_list_item",
+            has_children: false,
+            numbered_list_item: {
+              rich_text: [{ plain_text: "Turn off lights" }],
+            },
+          },
+        ]),
+      );
+      const client = new NotionClient(credentials);
+
+      const { blocks } = await client.getPageContent("page-1");
+
+      expect(blocks[0]).toEqual(
+        expect.objectContaining({ type: "bulleted_list_item" }),
+      );
+      expect(blocks[1]).toEqual(
+        expect.objectContaining({ type: "numbered_list_item" }),
+      );
+    });
+
+    it("fetches a toggle's nested children as a real recursive read, not invented content", async () => {
+      mockRequest
+        .mockResolvedValueOnce(
+          page([
+            {
+              id: "toggle-1",
+              type: "toggle",
+              has_children: true,
+              toggle: { rich_text: [{ plain_text: "Advanced steps" }] },
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(
+          page([
+            {
+              id: "child-1",
+              type: "paragraph",
+              has_children: false,
+              paragraph: { rich_text: [{ plain_text: "Nested instruction" }] },
+            },
+          ]),
+        );
+      const client = new NotionClient(credentials);
+
+      const { blocks } = await client.getPageContent("page-1");
+
+      expect(mockRequest).toHaveBeenNthCalledWith(
+        2,
+        "/blocks/toggle-1/children?page_size=100",
+      );
+      expect(blocks[0]).toMatchObject({
+        type: "toggle",
+        children: [
+          expect.objectContaining({
+            type: "paragraph",
+            text: [
+              {
+                text: "Nested instruction",
+                href: null,
+                bold: false,
+                italic: false,
+                code: false,
+              },
+            ],
+          }),
+        ],
+      });
+    });
+
+    it("renders a table's rows from its children, reading cells inline rather than recursing into each row", async () => {
+      mockRequest
+        .mockResolvedValueOnce(
+          page([
+            {
+              id: "table-1",
+              type: "table",
+              has_children: true,
+              table: {
+                table_width: 2,
+                has_column_header: true,
+                has_row_header: false,
+              },
+            },
+          ]),
+        )
+        .mockResolvedValueOnce(
+          page([
+            {
+              id: "row-1",
+              type: "table_row",
+              has_children: false,
+              table_row: {
+                cells: [
+                  [{ plain_text: "Property" }],
+                  [{ plain_text: "Lockbox code" }],
+                ],
+              },
+            },
+          ]),
+        );
+      const client = new NotionClient(credentials);
+
+      const { blocks } = await client.getPageContent("page-1");
+
+      expect(blocks[0]).toEqual({
+        id: "table-1",
+        type: "table",
+        tableWidth: 2,
+        hasColumnHeader: true,
+        hasRowHeader: false,
+        rows: [
+          {
+            id: "row-1",
+            cells: [
+              [
+                {
+                  text: "Property",
+                  href: null,
+                  bold: false,
+                  italic: false,
+                  code: false,
+                },
+              ],
+              [
+                {
+                  text: "Lockbox code",
+                  href: null,
+                  bold: false,
+                  italic: false,
+                  code: false,
+                },
+              ],
+            ],
+          },
+        ],
+      });
+    });
+
+    it("maps an unsupported block type to a safe fallback and never fetches its children even if has_children is true", async () => {
+      mockRequest.mockResolvedValueOnce(
+        page([{ id: "img-1", type: "image", has_children: true, image: {} }]),
+      );
+      const client = new NotionClient(credentials);
+
+      const { blocks } = await client.getPageContent("page-1");
+
+      expect(blocks).toEqual([
+        { id: "img-1", type: "unsupported", originalType: "image" },
+      ]);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns an empty block list, not an error, for an empty page", async () => {
+      mockRequest.mockResolvedValueOnce(page([]));
+      const client = new NotionClient(credentials);
+
+      const result = await client.getPageContent("page-1");
+
+      expect(result).toEqual({ blocks: [], truncated: false });
+    });
+
+    it("propagates a real read failure (e.g. 404/401) untouched rather than swallowing it", async () => {
+      mockRequest.mockRejectedValueOnce(
+        new Error("Request to /blocks/page-1/children failed with 404"),
+      );
+      const client = new NotionClient(credentials);
+
+      await expect(client.getPageContent("page-1")).rejects.toThrow(
+        "failed with 404",
+      );
+    });
+
+    it("stops recursing and reports truncated:true past the max nesting depth, instead of guessing or looping forever", async () => {
+      // Every level returns one toggle block with a child, forever — a real
+      // pathological/cyclical-looking structure. The depth cap must stop
+      // this deterministically at MAX_BLOCK_TREE_DEPTH, not rely on the
+      // per-parent-page cap or the call budget to eventually kick in.
+      let depth = 0;
+      mockRequest.mockImplementation(async () => {
+        depth += 1;
+        return page([
+          {
+            id: `toggle-${depth}`,
+            type: "toggle",
+            has_children: true,
+            toggle: { rich_text: [{ plain_text: `Level ${depth}` }] },
+          },
+        ]);
+      });
+      const client = new NotionClient(credentials);
+
+      const result = await client.getPageContent("page-1");
+
+      expect(result.truncated).toBe(true);
+      // depth 0 (page itself) + 4 nested fetches = 5 total requests, then
+      // the 5th-level toggle's own children are never fetched.
+      expect(mockRequest).toHaveBeenCalledTimes(5);
+    });
+
+    it("never issues anything but a GET-style read — no create/update/delete/archive call is introduced", async () => {
+      mockRequest.mockResolvedValueOnce(page([]));
+      const client = new NotionClient(credentials);
+
+      await client.getPageContent("page-1");
+
+      for (const call of mockRequest.mock.calls) {
+        const [path, init] = call as [string, { method?: string } | undefined];
+        expect(path).toMatch(/^\/blocks\//);
+        expect(init).toBeUndefined();
+      }
+    });
+  });
 });

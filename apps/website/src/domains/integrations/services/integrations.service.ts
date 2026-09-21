@@ -10,6 +10,7 @@ import {
   NotionClient,
   type NotionHighlight,
   type NotionListingRecord,
+  type NotionPageContent,
   type NotionSearchResultItem,
   type NotionSearchSourceType,
 } from "@stayw/integrations/notion";
@@ -775,6 +776,79 @@ export async function searchNotionContent(
       ok: false,
       query,
       error: err instanceof Error ? err.message : "Notion search failed.",
+    };
+  }
+}
+
+/**
+ * Real, read-only result of fetching one Notion page's actual body content
+ * (headings/paragraphs/callouts/lists/toggles/tables) — same
+ * IntegrationHighlights-style discriminated shape as every other live read
+ * above: `configured: false` means NOTION_API_KEY isn't set, `ok: false`
+ * means a real read failure (bad token, page not shared with this
+ * integration, network error), never fabricated content either way.
+ *
+ * Unlike getNotionHighlights/getNotionListingsAccessProof/searchNotionContent
+ * above, `error` here is NEVER the raw `err.message` from a failed Notion
+ * call — see getNotionPageContent()'s own doc comment for why this one
+ * specifically is held to a stricter, sanitize-at-the-service-boundary
+ * standard.
+ */
+export type NotionPageContentResult =
+  | { configured: false }
+  | { configured: true; ok: true; content: NotionPageContent }
+  | { configured: true; ok: false; error: string };
+
+/** The only text a real getPageContent() failure is ever allowed to surface past this function — see getNotionPageContent()'s own doc comment. */
+const NOTION_PAGE_CONTENT_GENERIC_ERROR =
+  "Couldn't load this page's content from Notion. Please try again.";
+
+/**
+ * Backs the "read the real SOP/page content inline" experience (see
+ * NotionSearch.tsx) — called only once a user actually opens a specific
+ * search result, never eagerly for every result in a list. `pageId` is
+ * whatever id the search results the actor already has access to expose
+ * (see searchNotionContent above) — this performs no further access check
+ * beyond the same `integrations:read` permission every other Notion read in
+ * this file requires, since a page's real Notion sharing (this integration
+ * token's own access grant) is already the actual authorization boundary;
+ * this function can't reveal any page the token itself couldn't already
+ * read directly.
+ *
+ * A real `getPageContent()` failure can be an arbitrary Notion API error
+ * string, a raw HTTP status line, or a network-layer message — none of it
+ * vetted for what it might contain, and a page id (arbitrary,
+ * user-influenced input) is now part of the request that produced it. Unlike
+ * the other read functions in this file (whose `error` is only ever shown on
+ * an admin-only diagnostic surface), this failure reaches every
+ * `integrations:read` user through the general search UI, so the real
+ * message is logged server-side only (`console.error`) and the caller —
+ * the action, and everything past it — only ever sees the fixed
+ * NOTION_PAGE_CONTENT_GENERIC_ERROR text. This is a deliberate, independent
+ * sanitization boundary: NotionSearch.tsx's own error rendering already
+ * shows a fixed generic message today, but that's a UI choice that could
+ * change; this function's contract can't be defeated by a future UI that
+ * decides to render `error` directly.
+ */
+export async function getNotionPageContent(
+  actor: AuthContext,
+  pageId: string,
+): Promise<NotionPageContentResult> {
+  await assertPermission(actor, "integrations:read");
+
+  const token = process.env.NOTION_API_KEY;
+  if (!token) return { configured: false };
+
+  try {
+    const client = new NotionClient({ token });
+    const content = await client.getPageContent(pageId);
+    return { configured: true, ok: true, content };
+  } catch (err) {
+    console.error("getNotionPageContent failed:", err);
+    return {
+      configured: true,
+      ok: false,
+      error: NOTION_PAGE_CONTENT_GENERIC_ERROR,
     };
   }
 }

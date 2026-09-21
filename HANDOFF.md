@@ -6788,3 +6788,93 @@ Per explicit instruction: build the dashboard-editing architecture end-to-end wh
 ### Files changed this increment
 
 `apps/website/app/(dashboard)/notion/page.tsx`, `apps/website/src/domains/integrations/actions.ts`, `apps/website/src/domains/integrations/components/{NotionDetailView.tsx,NotionDetailView.test.tsx,NotionListingsSearch.tsx,NotionListingsSearch.test.tsx,NotionFieldEditor.tsx (new),NotionFieldEditor.test.tsx (new)}`, `apps/website/src/domains/integrations/config/{notion-edit-allowlist.ts,notion-edit-allowlist.test.ts (new)}`, `apps/website/src/domains/integrations/services/{integrations.service.ts,integrations.service.test.ts,notion-detail-sections.ts,notion-edit.service.ts,notion-edit.service.test.ts}`, `packages/integrations/src/notion/{client.ts,client.test.ts}`, `HANDOFF.md`. **Nothing committed, pushed, or deployed.** General Resources, August, and Ecobee files are untouched (confirmed via `git status`).
+
+## Increment 123 — 2026-09-22 (same day): Notion SOP/operational-content READ + DISPLAY built (§C.1/§C.2 of Increment 122) — real page-body content (headings/paragraphs/callouts/lists/toggles/tables) now renders inline inside StayWhile for a search result; still 100% read-only, no code committed/pushed/deployed
+
+### A. What this increment builds
+
+Approved direction was §C.1/§C.2 from Increment 122: the smallest clean read-only increment letting a StayWhile user search for "SOP" or "booking", open a result, and read the real Notion content (not just title + "Open in Notion") directly inside the dashboard, with "Open in Notion" kept as a secondary action. Built exactly that — nothing else. Editing (§C.4) remains explicitly **not** built this increment; it stays the deliberate next phase.
+
+### B. Real behavior implemented
+
+1. **`NotionClient.getPageContent(pageId)`** (`packages/integrations/src/notion/client.ts`) — a real, read-only, recursive `GET /v1/blocks/{id}/children` reader. Returns `{ blocks: NotionContentBlock[], truncated: boolean }`. Supported block types (a closed set, matching every other "never guess a shape" convention in this codebase): `paragraph`, `heading_1`/`heading_2`/`heading_3`, `callout` (incl. emoji icon), `bulleted_list_item`, `numbered_list_item`, `toggle`, `table` (with `table_row` cells read inline, not recursed into). Anything outside that set maps to `{ type: "unsupported", originalType }` — rendered as an explicit, honest fallback, never dropped silently and never guessed at. Nested children (a toggle's contents, a table's rows) are fetched recursively, bounded by two independent, belt-and-suspenders safety caps mirroring `search()`/`listDataSourceRecords()`'s existing discipline: `MAX_BLOCK_TREE_DEPTH` (4) and a whole-call-tree `MAX_BLOCK_FETCH_CALLS` budget (100) shared across every nested fetch in one call — hitting either sets `truncated: true` (shown honestly to the user) rather than throwing or silently presenting a partial page as complete. An unsupported block's children are never fetched even when `has_children` is true, so content this V1 can't render never costs a wasted API call.
+2. **`getNotionPageContent(actor, pageId)`** (`apps/website/src/domains/integrations/services/integrations.service.ts`) — same `IntegrationHighlights`-style discriminated result as every other live Notion/OwnerRez read in this file (`configured: false` = no `NOTION_API_KEY`; `ok: false` = a real read failure, message never fabricated). Gated on the existing `integrations:read` permission only — no new permission introduced, since a page's real Notion sharing (this integration token's own access grant) is already the actual authorization boundary; this can't reveal anything the token couldn't already read directly via "Open in Notion".
+3. **`fetchNotionPageContentAction(pageId)`** (`apps/website/src/domains/integrations/actions.ts`) — a plain callable Server Action (not `useActionState`-bound; this is a one-shot fetch triggered by opening a result, not a form submission), same "never throw, always return a typed outcome" convention as every other action in this file.
+4. **`NotionBlockList`** (new file, `apps/website/src/domains/integrations/components/NotionBlockRenderer.tsx`) — the pure presentational renderer. Groups Notion's flat, one-block-per-list-item structure into real `<ul>`/`<ol>` elements (Notion itself never groups consecutive list items into one block). Renders bold/italic/code rich-text annotations and real `http(s)` links only (same `isSafeHttpUrl` rule as everywhere else in this domain). A toggle renders as a real `<details>`/`<summary>` (no client-side state needed — native HTML handles open/close). A table renders as a real `<table>`, marking the header row/column as `<th>` when Notion's own `has_column_header`/`has_row_header` say so. An "unsupported" block renders a small, honest inline note ("Additional content isn't shown here — open in Notion to view it.") — never a raw internal type string, never silently dropped. Uses a TypeScript exhaustiveness guard (`const exhaustive: never = block`) so a future new `NotionContentBlock` variant without a render case is a compile error, not a silent gap.
+5. **`NotionSearch.tsx` wiring** — opening a search result of `contentType` `"Notion page"` or `"Database row"` now triggers `fetchContentAction(result.id)` and shows: a loading state, the real rendered content on success, a safe generic error message on failure (never the raw error string), an honest "not everything shown" note when `truncated: true`, and a safe "No readable content on this page yet." message for a genuinely empty page. A `"Property listing"` result is deliberately **not** fetched this way — it already has its own richer, field-based detail view (`buildNotionDetailSections`/`NotionListingsSearch`), and a `"Notion database"` result (the database object itself) has no page body to fetch. "Open in Notion" remains visible in the dialog regardless of content-fetch outcome.
+6. **`NotionDetailView.tsx`** — added one new optional `bodyContent?: ReactNode` prop, rendered above the existing `sections` (which stays exactly as-is for the Property Listings field-based view — completely untouched, no shared code path with the new block content). This is the only change to this file.
+
+### C. Explicit separation preserved
+
+Notion SOP/operational content is rendered **only** from live Notion reads via `getPageContent()` — nothing is copied into `ResourceLink`/General Resources, no separate dashboard database of Notion content was created, and General Resources (Increment 120, commit `3c6abd1`) was not touched at all this increment. Notion remains the sole source of truth for this content, matching the explicit instruction.
+
+### D. Security / safety confirmed
+
+- **Zero writes**: no `PATCH`/`POST .../pages`/block-mutation call exists anywhere in this increment's code. `getPageContent()`'s own test suite includes an explicit "never issues anything but a GET-style read" assertion.
+- `NOTION_EDIT_ALLOWLIST` untouched (still `[]`); RBAC untouched (no new permission); search/exclusion logic untouched (still exactly Increment 122's confirmed-correct `search()` + `notion-search-exclusions.ts`).
+- No raw Notion API payload, page/block id, or credential is ever rendered to the user — only the narrow `NotionContentBlock` shape's already-extracted text/annotations/links.
+- No Vercel CLI, no ambient GitHub CLI, no Ecobee action, no commit, no push, no deploy, no Production change.
+
+### E. Tests / typechecks
+
+New/updated test files (all real, run this increment):
+
+- `packages/integrations/src/notion/client.test.ts` — 9 new tests for `getPageContent()`: real body content (heading/paragraph/callout), bulleted/numbered list mapping, a toggle's real recursive nested-child fetch, a table's rows-from-children read, an unsupported block's safe fallback (and that its children are never fetched), an empty page, a propagated real read failure (404), the depth-cap truncation behavior (5 total requests, `truncated: true`), and a read-only-call assertion. **63 → new total not yet re-counted here; all pass.**
+- `apps/website/src/domains/integrations/services/integrations.service.test.ts` — 4 new tests for `getNotionPageContent()` (not-configured, success, real-failure, RBAC-denial-propagation).
+- `apps/website/src/domains/integrations/actions.test.ts` — **new file** (this domain had none before), 4 tests for `fetchNotionPageContentAction()` (success, not_configured, safe error message, caught unexpected exception).
+- `apps/website/src/domains/integrations/components/NotionBlockRenderer.test.tsx` — **new file**, 10 tests: empty page, paragraph, all three heading levels, callout + icon, bulleted-list grouping, numbered-list grouping, toggle with nested child, table with header row/column, unsupported-block fallback (and that the raw type string isn't exposed), safe-link rendering (and unsafe-scheme rejection).
+- `apps/website/src/domains/integrations/components/NotionSearch.test.tsx` — 6 new tests under "opening a result's real content": fetch-and-render + "Open in Notion" still present, no fetch for a Property listing result, loading state, safe error message (no raw error text), truncation notice, empty-content message.
+
+Results: `packages/integrations` — 251 tests pass, `tsc --noEmit` clean. `apps/website` — 265/265 tests pass in `src/domains/integrations`; full-repo `apps/website` run shows 1186 passing and exactly the same 3 pre-existing failures that exist on a clean checkout of this increment's untouched files (`OwnerRezConfirmLinkPanel.test.tsx`'s 3 tests and the pre-existing `_tmp-cielo-production-integration.test.ts` scratch file, both already present/dirty before this increment started and never touched by it — confirmed via `git status` showing zero changes to either); `tsc --noEmit` clean for `apps/website`.
+
+### F. What still prevents block-level editing
+
+Unchanged from Increment 122 §C.4: block-content editing is genuinely new work (a block-`PATCH` write path + its own conflict/validation/audit handling mirroring `updateNotionField()`'s existing discipline for property edits) and needs its own discovery-verified design pass — not proposed or started this increment. Property-value editing for "View of Listings"-shaped fields remains fully built (Increment 118/119) and only waiting on a `NOTION_EDIT_ALLOWLIST` entry.
+
+### Files changed this increment
+
+`packages/integrations/src/notion/types.ts`, `packages/integrations/src/notion/client.ts`, `packages/integrations/src/notion/client.test.ts`, `apps/website/src/domains/integrations/services/integrations.service.ts`, `apps/website/src/domains/integrations/services/integrations.service.test.ts`, `apps/website/src/domains/integrations/actions.ts`, `apps/website/src/domains/integrations/actions.test.ts` (new), `apps/website/src/domains/integrations/components/NotionBlockRenderer.tsx` (new), `apps/website/src/domains/integrations/components/NotionBlockRenderer.test.tsx` (new), `apps/website/src/domains/integrations/components/NotionDetailView.tsx`, `apps/website/src/domains/integrations/components/NotionSearch.tsx`, `apps/website/src/domains/integrations/components/NotionSearch.test.tsx`, `apps/website/app/(dashboard)/notion/page.tsx`, `HANDOFF.md`. No other file touched. No commit, no push, no deploy, no Production change, no provider write, no Ecobee action.
+
+## Increment 124 — 2026-09-22 (same day): Notion SOP read/display increment CLOSED OUT — error-sanitization hardening applied, full verification re-run, real read-only check against the live workspace confirms the path actually works
+
+### A. Security fix: raw provider/network error messages can no longer reach the browser
+
+Pre-existing gap in Increment 123: `getNotionPageContent()` returned `err.message` verbatim on a real Notion read failure. Today's `NotionSearch.tsx` UI never actually displays that string (it shows a fixed generic message), so nothing was exposed in practice — but the raw text was still sitting in the `NotionPageContentActionState`/`NotionPageContentResult` value itself, one accidental future UI change away from leaking (endpoint paths, HTTP status detail, or worse) to every `integrations:read` user, not just admins.
+
+Fixed at **two independent boundaries**, not just the UI:
+
+1. **`getNotionPageContent()`** (`integrations.service.ts`) — a real Notion read failure is now logged server-side only (`console.error`) and the function returns a single fixed string (`"Couldn't load this page's content from Notion. Please try again."`) as `error`, never `err.message`.
+2. **`fetchNotionPageContentAction()`** (`actions.ts`) — its own top-level catch (covering `getCurrentUser()`/RBAC-denial failures, not provider errors) got the same treatment: logged server-side, fixed generic message (`"Something went wrong loading this page's content. Please try again."`) returned instead of `err.message`. The service's already-sanitized `result.error` is passed through unchanged when the service itself reports `ok: false` — sanitization happens once, at the source, not re-derived at every layer.
+
+Net effect: no path through this feature — today, or after a future edit to the service, the action, or the UI — can hand a raw provider/network/internal error string to the browser. This mirrors the "never expose raw error/stack/credential" discipline already enforced for Resources' form error UX (Increment 121) and extends it to this feature specifically because, unlike the admin-only `getNotionListingsAccessProof` diagnostic (which intentionally still surfaces classified real error text on an admin-only surface), this path is reachable by every `integrations:read` user through ordinary search.
+
+**New/updated tests proving this**: `integrations.service.test.ts` — updated the existing failure test to assert the fixed message, plus a new test that rejects with an error containing a fake bearer token, file path, and HTTP status, and asserts none of that text appears anywhere in the serialized result (only the fixed message does), and that the real error was still logged server-side. `actions.test.ts` — same two-sided proof: the action passes through an already-sanitized service message unchanged, and separately never leaks a sensitive string from its own top-level catch (both the "service threw instead of returning a result" case and the "getCurrentUser threw" case).
+
+### B. Full verification re-run after the fix
+
+- `packages/integrations`: `tsc --noEmit` clean; `vitest run` — **251/251 tests pass** (unchanged from Increment 123, this fix didn't touch this package).
+- `apps/website`: `tsc --noEmit` clean; `vitest run src/domains/integrations` — **267/267 tests pass** (265 from Increment 123 + 2 new sanitization-proof tests, one in `integrations.service.test.ts`, one in `actions.test.ts`; the other 3 new test bodies replaced pre-existing tests in place rather than adding count).
+- Confirmed via `git status`: the only files touched by this fix are the same four already part of this increment (`integrations.service.ts`/`.test.ts`, `actions.ts`/`.test.ts`) — no new files, no scope creep.
+- **No Notion write**: no `PATCH`/`POST .../pages`/block-mutation call exists anywhere in the touched code; unchanged from Increment 123's confirmation.
+- **No `NOTION_EDIT_ALLOWLIST` change**: confirmed via `git diff --stat` on `notion-edit-allowlist.ts` — empty (file untouched); the constant remains `[]`.
+- **No Resources/Ecobee/other-provider change**: confirmed via `git diff --stat` on `apps/website/src/domains/resources/` — empty. The pre-existing modified/untracked Ecobee and `_tmp-*`/database-script files visible in `git status` were already dirty before this session started (per the session's own git-status snapshot) and were never opened, read, or written by this work.
+
+### C. Real read-only verification against the live connected Notion workspace
+
+Ran a temporary, throwaway script (`packages/integrations/src/notion/scripts/_tmp-verify-sop-read-path.ts` — written, run once, then deleted immediately after; never committed) that calls the **real, unmocked** `NotionClient` against the actual StayWhile Notion integration token (from `apps/website/.env.local`):
+
+1. `search("SOP")` → 8 real results, "SOP for VRBO & Direct Bookings" present: **true**.
+2. `search("booking")` → 8 real results, "SOP for VRBO & Direct Bookings" present: **true**.
+3. `getPageContent()` on the real page (id `26109800-a0fd-4848-9c7c-ff06c1f75bab`) → **5 top-level blocks, truncated: false**, type breakdown `{heading_2: 2, callout: 1, paragraph: 2}`, 3 of 5 blocks carry non-empty rich text. This is the exact same shape confirmed structurally in Increment 122's discovery (2 headings, 1 callout, paragraphs), now proven to flow correctly through the real, shipped `getPageContent()` → `getNotionPageContent()` → `fetchNotionPageContentAction()` → `NotionBlockList` path end-to-end.
+
+No actual SOP text/plain_text was printed or logged at any point — only counts and block types, per instruction. No write call was made.
+
+### D. What's now working in the StayWhile Notion UI
+
+Search "SOP" or "booking" → open "SOP for VRBO & Direct Bookings" (or any other page/database-row result) → its real headings, paragraphs, and callout render inline in the dashboard dialog, with "Open in Notion" still available. Verified against real data this increment (§C), not just unit-test fixtures.
+
+### Files changed this increment
+
+`apps/website/src/domains/integrations/services/integrations.service.ts`, `apps/website/src/domains/integrations/services/integrations.service.test.ts`, `apps/website/src/domains/integrations/actions.ts`, `apps/website/src/domains/integrations/actions.test.ts`, `HANDOFF.md`. No other file touched (the verification script in §C was deleted immediately after use and was never committed). No commit, no push, no deploy, no Production change, no provider write, no Ecobee action, no `NOTION_EDIT_ALLOWLIST` change, no Resources change.
+
+**Recommendation recorded here for the next step**: this read/display increment (Increments 123+124 combined) is functionally complete, tested, sanitized, and verified against real data — ready for an isolated local commit (Notion-only files, not mixed with the unrelated pre-existing dirty Ecobee/`_tmp-*`/database-script files also present in the working tree). Not pushed or deployed; that remains a separate, later, explicitly-approved step.

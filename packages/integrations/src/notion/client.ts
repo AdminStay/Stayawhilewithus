@@ -8,26 +8,38 @@ import type {
 } from "../core";
 
 import type {
+  NotionBlockChildrenResponse,
+  NotionCalloutContentBlock,
+  NotionContentBlock,
   NotionCredentials,
   NotionDataSourceQueryPage,
   NotionDataSourceQueryResult,
   NotionDataSourceRow,
   NotionHighlight,
   NotionListingRecord,
+  NotionPageContent,
+  NotionRichTextRun,
   NotionSearchResponse,
   NotionSearchResult,
   NotionSearchResultItem,
   NotionSearchSourceType,
+  NotionTableRow,
+  NotionTextContentBlock,
   NotionUser,
 } from "./types";
 
 export type {
   NotionEditableFieldType,
   NotionHighlight,
+  NotionContentBlock,
   NotionDataSourceQueryResult,
   NotionListingRecord,
+  NotionPageContent,
+  NotionRichTextRun,
   NotionSearchResultItem,
   NotionSearchSourceType,
+  NotionTableRow,
+  NotionTextContentBlock,
 } from "./types";
 
 /**
@@ -192,6 +204,83 @@ function mapListingRecord(row: NotionDataSourceRow): NotionListingRecord {
     guidebookUrl: extractUrlValue(props[LISTING_PROPERTY.guidebookUrl]),
     lastEditedTime: row.last_edited_time ?? null,
   };
+}
+
+/**
+ * Reads a Notion block-level rich_text array into the narrow
+ * NotionRichTextRun shape — mirrors extractRichTextRuns/extractRichTextValue
+ * above, but for block content (paragraphs, headings, callouts, table
+ * cells), not page properties, and keeps each run's href/bold/italic/code
+ * separately rather than flattening to one plain string, since block
+ * content needs to render as more than a single unstyled string. Same
+ * "never trust the shape" discipline: a malformed/missing rich_text array,
+ * or a malformed individual run, resolves to [] or a blank run rather than
+ * throwing.
+ */
+function mapRichTextRuns(value: unknown): NotionRichTextRun[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isPlainObject).map((run) => {
+    const annotations = isPlainObject(run.annotations) ? run.annotations : {};
+    return {
+      text: typeof run.plain_text === "string" ? run.plain_text : "",
+      href: typeof run.href === "string" ? run.href : null,
+      bold: annotations.bold === true,
+      italic: annotations.italic === true,
+      code: annotations.code === true,
+    };
+  });
+}
+
+/** A callout's icon is only ever rendered when it's Notion's plain "emoji" icon type — an external image/uploaded file icon resolves to null rather than exposing a raw file URL the caller never asked to render. */
+function extractCalloutIcon(value: unknown): string | null {
+  if (!isPlainObject(value)) return null;
+  if (value.type === "emoji" && typeof value.emoji === "string") {
+    return value.emoji;
+  }
+  return null;
+}
+
+/** One `table_row` block's cells reduced to nested rich-text runs — a table row is never traversed as generic `children`, since its content (`cells`) is already inline on the block itself, not fetched via a further children request. */
+function mapTableRow(raw: Record<string, unknown>): NotionTableRow {
+  const id = typeof raw.id === "string" ? raw.id : "";
+  const body = isPlainObject(raw.table_row) ? raw.table_row : {};
+  const rawCells = Array.isArray(body.cells) ? body.cells : [];
+  return {
+    id,
+    cells: rawCells.map((cell) => mapRichTextRuns(cell)),
+  };
+}
+
+const TEXT_BLOCK_TYPES = new Set<NotionTextContentBlock["type"]>([
+  "paragraph",
+  "heading_1",
+  "heading_2",
+  "heading_3",
+  "bulleted_list_item",
+  "numbered_list_item",
+  "toggle",
+]);
+
+// Two independent, belt-and-suspenders safety caps on a single
+// getPageContent() call, mirroring the discipline already applied to
+// search()/listDataSourceRecords() above: a per-parent-block pagination cap
+// (a single block realistically never has thousands of direct children),
+// and a whole-call-tree budget shared across every nested fetch, so a
+// pathologically deep/wide real page can't turn one dashboard click into an
+// unbounded number of Notion API requests. Depth 4 comfortably covers a
+// real SOP's actual nesting (page -> toggle -> paragraph, or table -> row)
+// with headroom for one more level; hitting either cap sets `truncated`
+// rather than throwing, since "show the page with a caveat" is the right
+// user-facing behavior here, not "the whole page failed to load."
+const MAX_BLOCK_TREE_DEPTH = 4;
+const MAX_BLOCK_FETCH_CALLS = 100;
+const MAX_PAGES_PER_BLOCK = 20;
+const BLOCK_CHILDREN_PAGE_SIZE = 100;
+
+/** Mutable, shared across an entire getPageContent() call tree (never per-branch) — see the caps' own doc comment above. */
+interface BlockFetchBudget {
+  calls: number;
+  truncated: boolean;
 }
 
 /**
@@ -522,6 +611,175 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
       }),
     });
     return { lastEditedTime: updated.last_edited_time };
+  }
+
+  /**
+   * Real, read-only, fully paginated `GET /v1/blocks/{blockId}/children` —
+   * the shared primitive both the page-level read and any nested-block read
+   * (a toggle's contents, a table's rows) go through. Same cycle-detection +
+   * hard per-parent-page-cap discipline as search()/listDataSourceRecords()
+   * above, plus a whole-call-tree budget (`budget.calls`) shared across every
+   * nested call in the same getPageContent() invocation — see
+   * MAX_BLOCK_FETCH_CALLS's own doc comment.
+   */
+  private async fetchBlockChildren(
+    blockId: string,
+    budget: BlockFetchBudget,
+  ): Promise<Record<string, unknown>[]> {
+    const blocks: Record<string, unknown>[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    let pageCount = 0;
+
+    for (;;) {
+      if (pageCount >= MAX_PAGES_PER_BLOCK) {
+        throw new Error(
+          `Notion block ${blockId} exceeded the maximum of ${MAX_PAGES_PER_BLOCK} children pages — refusing to continue.`,
+        );
+      }
+      if (budget.calls >= MAX_BLOCK_FETCH_CALLS) {
+        budget.truncated = true;
+        break;
+      }
+      pageCount++;
+      budget.calls++;
+
+      const queryString: string = cursor
+        ? `?page_size=${BLOCK_CHILDREN_PAGE_SIZE}&start_cursor=${encodeURIComponent(cursor)}`
+        : `?page_size=${BLOCK_CHILDREN_PAGE_SIZE}`;
+      const childrenPage: NotionBlockChildrenResponse =
+        await this.http.request<NotionBlockChildrenResponse>(
+          `/blocks/${blockId}/children${queryString}`,
+        );
+
+      blocks.push(...childrenPage.results);
+
+      if (!childrenPage.has_more) break;
+      if (!childrenPage.next_cursor) {
+        throw new Error(
+          "Notion reported more block children (has_more: true) but returned no next_cursor — refusing to silently truncate.",
+        );
+      }
+      if (seenCursors.has(childrenPage.next_cursor)) {
+        throw new Error(
+          "Notion returned a repeated pagination cursor while reading block children — refusing to loop.",
+        );
+      }
+      seenCursors.add(childrenPage.next_cursor);
+      cursor = childrenPage.next_cursor;
+    }
+
+    return blocks;
+  }
+
+  /**
+   * Maps one raw block to the closed NotionContentBlock shape, recursing
+   * into real nested children (via fetchBlockChildren) only for a block type
+   * that both (a) is in the supported set and (b) actually has children —
+   * never for an "unsupported" block, so content this V1 can't render never
+   * costs an extra wasted API call. `depth >= MAX_BLOCK_TREE_DEPTH` stops
+   * recursing and flips `budget.truncated` instead of guessing/omitting
+   * silently.
+   */
+  private async mapRawBlock(
+    raw: Record<string, unknown>,
+    depth: number,
+    budget: BlockFetchBudget,
+  ): Promise<NotionContentBlock> {
+    const id = typeof raw.id === "string" ? raw.id : "";
+    const type = typeof raw.type === "string" ? raw.type : "";
+    const hasChildren = raw.has_children === true;
+    const body = isPlainObject(raw[type]) ? raw[type] : {};
+
+    if (type === "table") {
+      let rows: NotionTableRow[] = [];
+      if (hasChildren) {
+        if (depth >= MAX_BLOCK_TREE_DEPTH) {
+          budget.truncated = true;
+        } else {
+          const rawRows = await this.fetchBlockChildren(id, budget);
+          rows = rawRows.map((rawRow) => mapTableRow(rawRow));
+        }
+      }
+      return {
+        id,
+        type: "table",
+        tableWidth: typeof body.table_width === "number" ? body.table_width : 0,
+        hasColumnHeader: body.has_column_header === true,
+        hasRowHeader: body.has_row_header === true,
+        rows,
+      };
+    }
+
+    if (type === "callout") {
+      const calloutBlock: NotionCalloutContentBlock = {
+        id,
+        type: "callout",
+        text: mapRichTextRuns(body.rich_text),
+        icon: extractCalloutIcon(body.icon),
+        children: [],
+      };
+      if (hasChildren) {
+        if (depth >= MAX_BLOCK_TREE_DEPTH) {
+          budget.truncated = true;
+        } else {
+          calloutBlock.children = await this.buildBlockTree(
+            id,
+            depth + 1,
+            budget,
+          );
+        }
+      }
+      return calloutBlock;
+    }
+
+    if (TEXT_BLOCK_TYPES.has(type as NotionTextContentBlock["type"])) {
+      const textBlock: NotionTextContentBlock = {
+        id,
+        type: type as NotionTextContentBlock["type"],
+        text: mapRichTextRuns(body.rich_text),
+        children: [],
+      };
+      if (hasChildren) {
+        if (depth >= MAX_BLOCK_TREE_DEPTH) {
+          budget.truncated = true;
+        } else {
+          textBlock.children = await this.buildBlockTree(id, depth + 1, budget);
+        }
+      }
+      return textBlock;
+    }
+
+    return { id, type: "unsupported", originalType: type || "(unknown)" };
+  }
+
+  /** Fetches one block's children and maps every one of them — the shared recursive step both getPageContent() (depth 0, blockId = the page itself — a page's top-level content IS its "children" in Notion's block model) and mapRawBlock() (deeper levels) call. */
+  private async buildBlockTree(
+    blockId: string,
+    depth: number,
+    budget: BlockFetchBudget,
+  ): Promise<NotionContentBlock[]> {
+    const rawBlocks = await this.fetchBlockChildren(blockId, budget);
+    const mapped: NotionContentBlock[] = [];
+    for (const raw of rawBlocks) {
+      mapped.push(await this.mapRawBlock(raw, depth, budget));
+    }
+    return mapped;
+  }
+
+  /**
+   * Real, read-only retrieval of a page's actual body content — headings,
+   * paragraphs, callouts, lists, toggles, tables — reduced to the closed
+   * NotionContentBlock tree, never a raw Notion block dump. This is what
+   * lets StayWhile render an SOP's real instructions inline instead of only
+   * "title + Open in Notion." Never writes anything; a page this token can't
+   * read simply propagates the real Notion error (401/404/etc.), same
+   * convention as every other read method above.
+   */
+  async getPageContent(pageId: string): Promise<NotionPageContent> {
+    const budget: BlockFetchBudget = { calls: 0, truncated: false };
+    const blocks = await this.buildBlockTree(pageId, 0, budget);
+    return { blocks, truncated: budget.truncated };
   }
 }
 

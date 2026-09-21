@@ -1,5 +1,6 @@
 "use server";
 
+import type { NotionPageContent } from "@stayw/integrations/notion";
 import { revalidatePath } from "next/cache";
 
 import {
@@ -10,6 +11,7 @@ import {
   beginDeviceSync,
   disconnectIntegration,
   finishDeviceSync,
+  getNotionPageContent,
   searchNotionContent,
   type NotionSearchState,
 } from "./services/integrations.service";
@@ -179,6 +181,60 @@ export async function searchNotionAction(
   if (!parsed.success) return { status: "idle" };
 
   return searchNotionContent(actor, parsed.data.query);
+}
+
+/**
+ * Discriminated result for the "read a search result's real content inline"
+ * fetch (see NotionPageContentViewer.tsx) — bound directly (not via
+ * useActionState) since this is a one-shot fetch triggered by opening a
+ * result, not a form submission. Same "never throw, always return a typed
+ * outcome" convention as every other action here.
+ *
+ * `error` is NEVER a raw provider/network error message — see
+ * fetchNotionPageContentAction()'s own doc comment for why this action is
+ * itself an independent sanitization boundary, not just a pass-through of
+ * getNotionPageContent()'s already-sanitized result.
+ */
+export type NotionPageContentActionState =
+  | { status: "idle" }
+  | { status: "success"; content: NotionPageContent }
+  | { status: "not_configured" }
+  | { status: "error"; error: string };
+
+/** The only text an unexpected (non-getNotionPageContent) failure in this action is ever allowed to surface — see this action's own doc comment. */
+const FETCH_NOTION_PAGE_CONTENT_GENERIC_ERROR =
+  "Something went wrong loading this page's content. Please try again.";
+
+/**
+ * `getNotionPageContent()` already sanitizes any real Notion/provider/network
+ * failure to a fixed generic message before returning it (see that
+ * function's own doc comment) — `result.error` below is safe to pass through
+ * unchanged. This function's own catch block is a SEPARATE sanitization
+ * boundary for everything else that could throw here (`getCurrentUser()`,
+ * an RBAC denial from `assertPermission` inside the service call): those
+ * error messages are internal app detail, not raw provider text, but this
+ * action still never lets one reach the browser verbatim — logged
+ * server-side only, with a fixed generic message returned instead. The net
+ * effect: no path through this action, today or after a future edit to
+ * either this file or the service it calls, can hand a raw internal or
+ * provider error string to the client.
+ */
+export async function fetchNotionPageContentAction(
+  pageId: string,
+): Promise<NotionPageContentActionState> {
+  try {
+    const actor = await getCurrentUser();
+    const result = await getNotionPageContent(actor, pageId);
+    if (!result.configured) return { status: "not_configured" };
+    if (!result.ok) return { status: "error", error: result.error };
+    return { status: "success", content: result.content };
+  } catch (err) {
+    console.error("fetchNotionPageContentAction failed:", err);
+    return {
+      status: "error",
+      error: FETCH_NOTION_PAGE_CONTENT_GENERIC_ERROR,
+    };
+  }
 }
 
 export type UpdateNotionFieldActionState =
