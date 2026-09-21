@@ -642,10 +642,15 @@ describe("listNotionListings", () => {
       configured: true,
       ok: true,
       items: [
-        expect.objectContaining({ name: "Moonlit Cove", region: "SRQ" }),
+        expect.objectContaining({
+          name: "Moonlit Cove",
+          region: "SRQ",
+          dataSourceId: "ds-123",
+        }),
         expect.objectContaining({
           name: "Some Unmapped Property",
           region: "Unknown / Unassigned",
+          dataSourceId: "ds-123",
         }),
       ],
     });
@@ -705,6 +710,7 @@ describe("buildNotionListingClientDto — the one place the safe client DTO is b
     guidebookUrl: null,
     lastEditedTime: "2026-09-01T00:00:00.000Z",
     region: "SRQ",
+    dataSourceId: "ds-1",
   };
 
   // Requirement 9: no raw Notion provider object is passed to a Client
@@ -716,6 +722,7 @@ describe("buildNotionListingClientDto — the one place the safe client DTO is b
       RECORD_WITH_REGION,
       { canSeeSensitiveFields: false },
       null,
+      false,
     );
     expect(dto).not.toBe(RECORD_WITH_REGION);
     expect(dto.fields).not.toBe(RECORD_WITH_REGION);
@@ -729,6 +736,7 @@ describe("buildNotionListingClientDto — the one place the safe client DTO is b
       RECORD_WITH_REGION,
       { canSeeSensitiveFields: false },
       null,
+      false,
     );
     expect(dto.fields.name).toBe("Moonlit Cove");
     expect(dto.fields.address).toBe("123 Main St");
@@ -741,6 +749,7 @@ describe("buildNotionListingClientDto — the one place the safe client DTO is b
       RECORD_WITH_REGION,
       { canSeeSensitiveFields: false },
       null,
+      false,
     );
     expect(dto.id).toBe("page-1");
     expect(dto.url).toBe("https://notion.so/page-1");
@@ -754,6 +763,7 @@ describe("buildNotionListingClientDto — the one place the safe client DTO is b
       RECORD_WITH_REGION,
       { canSeeSensitiveFields: false },
       ctx,
+      false,
     );
     expect(dto.propertyContext).toBe(ctx);
   });
@@ -763,11 +773,23 @@ describe("buildNotionListingClientDto — the one place the safe client DTO is b
       RECORD_WITH_REGION,
       { canSeeSensitiveFields: false },
       null,
+      false,
     );
     for (const entry of dto.visibleFields) {
       expect(dto.fields[entry.field]).toEqual(entry.value);
     }
     expect(dto.visibleFields).toHaveLength(Object.keys(dto.fields).length);
+  });
+
+  it("carries dataSourceId through to the DTO, and every visibleField is non-editable against the real (empty) allowlist even when canEdit is true", () => {
+    const dto = buildNotionListingClientDto(
+      RECORD_WITH_REGION,
+      { canSeeSensitiveFields: false },
+      null,
+      true,
+    );
+    expect(dto.dataSourceId).toBe("ds-1");
+    expect(dto.visibleFields.every((f) => f.editable === false)).toBe(true);
   });
 });
 

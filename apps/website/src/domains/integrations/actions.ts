@@ -184,6 +184,14 @@ export async function searchNotionAction(
 export type UpdateNotionFieldActionState =
   { status: "idle" } | NotionEditResult | { status: "failure"; error: string };
 
+export interface UpdateNotionFieldActionInput {
+  pageId: string;
+  dataSourceId: string;
+  field: string;
+  expectedLastEditedTime: string;
+  value: unknown;
+}
+
 /**
  * The single entry point for the (currently unreachable, allowlist-empty)
  * dashboard-edit foundation — see notion-edit.service.ts's own doc comment
@@ -192,20 +200,23 @@ export type UpdateNotionFieldActionState =
  * per-request outcome" convention as every other action in this app; only
  * a genuinely unexpected top-level error (RBAC denial, malformed request)
  * is caught and reported the same way.
+ *
+ * Takes a plain typed object, not FormData — useActionState's dispatcher
+ * accepts any payload shape, and a native `<form>` submission was never
+ * required here (nothing wires this to one). A real HTML form would
+ * stringify every value, which breaks number/checkbox/multi_select fields
+ * (fieldValueSchemaFor's z.number()/z.boolean()/z.array() reject a string
+ * outright, by design — no silent coercion of a value about to be written
+ * to a shared operational record). NotionFieldEditor.tsx calls this
+ * directly with the field's real JS-typed value instead.
  */
 export async function updateNotionFieldAction(
   _prevState: UpdateNotionFieldActionState,
-  formData: FormData,
+  input: UpdateNotionFieldActionInput,
 ): Promise<UpdateNotionFieldActionState> {
   try {
     const actor = await getCurrentUser();
-    const result = await updateNotionField(actor, {
-      pageId: formData.get("pageId"),
-      dataSourceId: formData.get("dataSourceId"),
-      field: formData.get("field"),
-      expectedLastEditedTime: formData.get("expectedLastEditedTime"),
-      value: formData.get("value"),
-    });
+    const result = await updateNotionField(actor, input);
     if (result.status === "success") {
       revalidatePath("/notion");
     }

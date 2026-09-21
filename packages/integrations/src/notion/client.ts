@@ -1,6 +1,6 @@
 import type { SyncDirection } from "@stayw/database/enums";
 
-import { HttpClient, NotImplementedError } from "../core";
+import { HttpClient } from "../core";
 import type {
   BaseIntegrationClient,
   IntegrationCapability,
@@ -478,25 +478,100 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
   }
 
   /**
-   * NOT YET IMPLEMENTED — deliberately. The dashboard-edit foundation
-   * (RBAC, allowlist, validation, conflict check — see
-   * apps/website's notion-edit.service.ts) is built and callable, but the
-   * real edit allowlist is empty (no field/database has been approved by
-   * the client yet), so this method can never actually be reached from a
-   * real request today. Throwing here — rather than a real `PATCH
-   * /v1/pages/{id}` implementation — is a second, independent fail-closed
-   * layer on top of the empty allowlist: even a bug that somehow bypassed
-   * the allowlist check could still not perform a real Notion write,
-   * because there is no real write call to perform. Implement the real
-   * PATCH call only once specific fields are approved (same "build the
-   * real thing only when actually needed" discipline this package's own
-   * write-capability README section already documents).
+   * Real `PATCH /v1/pages/{id}` implementation. `NOTION_EDIT_ALLOWLIST`
+   * (apps/website's notion-edit-allowlist.ts) is still deliberately empty,
+   * so `updateNotionField()` still rejects every real request with
+   * "not_editable" before this method is ever reached — that remains the
+   * one thing only Kenny/Michelle's field-approval decision can lift.
+   * Implementing the real call ahead of that means the entire round-trip
+   * (validate → conflict-check → write → confirm → audit) is proven
+   * correct end-to-end today, so approving a field later is a one-line
+   * config change, not a new engineering task.
+   *
+   * Never trusts the allowlist's own `fieldType` for the wire shape —
+   * fetches the page fresh and reads Notion's own current property `type`
+   * for `propertyKey` instead, so the PATCH body's shape always matches
+   * what Notion itself says this property actually is right now. Refuses
+   * to guess if the property doesn't exist on the page at all.
+   *
+   * Returns the real `last_edited_time` Notion's own PATCH response
+   * reports — Notion echoes back the full updated page on a successful
+   * PATCH, so this is the server-confirmed value, not a locally-fabricated
+   * timestamp standing in for it. No second read is needed just to learn
+   * this.
    */
   async updatePageProperty(
-    _pageId: string,
-    _propertyKey: string,
-    _value: unknown,
-  ): Promise<never> {
-    throw new NotImplementedError("Notion", "updatePageProperty");
+    pageId: string,
+    propertyKey: string,
+    value: unknown,
+  ): Promise<{ lastEditedTime: string }> {
+    const page = await this.http.request<NotionRawPage>(`/pages/${pageId}`);
+    const currentProperty = page.properties[propertyKey];
+    if (!currentProperty) {
+      throw new Error(
+        `Notion page ${pageId} has no property named "${propertyKey}" — refusing to guess a type to write as.`,
+      );
+    }
+
+    const updated = await this.http.request<NotionRawPage>(`/pages/${pageId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        properties: {
+          [propertyKey]: buildNotionPropertyPatch(currentProperty.type, value),
+        },
+      }),
+    });
+    return { lastEditedTime: updated.last_edited_time };
+  }
+}
+
+/** Minimal shape read from a raw `GET`/`PATCH /v1/pages/{id}` response — only `last_edited_time` and each property's `type` are ever read from it, never a property's value, so this deliberately doesn't model every possible Notion property payload. */
+interface NotionRawPage {
+  id: string;
+  last_edited_time: string;
+  properties: Record<string, { type: string }>;
+}
+
+/**
+ * Builds the one `properties.<key>` value Notion's PATCH API expects for a
+ * given real Notion property type — the inverse of reading
+ * `NotionPropertyValue` above. Covers every `NotionEditableFieldType` this
+ * package's edit architecture validates against (see notion-edit.schema.ts)
+ * plus `select`/`multi_select`/`checkbox`/`date`, which "View of Listings"
+ * doesn't currently use but the closed type set already models for a
+ * future data source. An unrecognized/unsupported Notion property type
+ * throws rather than guessing a shape — the same fail-closed discipline as
+ * every other provider write path in this codebase.
+ */
+function buildNotionPropertyPatch(
+  notionType: string,
+  value: unknown,
+): Record<string, unknown> {
+  switch (notionType) {
+    case "rich_text":
+      return {
+        rich_text:
+          value === "" || value == null
+            ? []
+            : [{ type: "text", text: { content: value as string } }],
+      };
+    case "url":
+      return { url: (value as string) || null };
+    case "number":
+      return { number: value as number };
+    case "checkbox":
+      return { checkbox: value as boolean };
+    case "date":
+      return { date: value ? { start: value as string } : null };
+    case "select":
+      return { select: value ? { name: value as string } : null };
+    case "multi_select":
+      return {
+        multi_select: (value as string[]).map((name) => ({ name })),
+      };
+    default:
+      throw new Error(
+        `Notion property type "${notionType}" is not supported for editing.`,
+      );
   }
 }

@@ -1,7 +1,10 @@
 import { hasPermission } from "@stayw/auth";
 import { PageHeader, SectionHeader } from "@stayw/ui";
 
-import { searchNotionAction } from "@/domains/integrations/actions";
+import {
+  searchNotionAction,
+  updateNotionFieldAction,
+} from "@/domains/integrations/actions";
 import { NotionListingsSearch } from "@/domains/integrations/components/NotionListingsSearch";
 import { NotionRecentActivity } from "@/domains/integrations/components/NotionRecentActivity";
 import { NotionSearch } from "@/domains/integrations/components/NotionSearch";
@@ -53,6 +56,15 @@ export default async function NotionPage() {
   // before Kenny/Michelle approve the first sensitive field.
   const canSeeSensitiveFields = await hasPermission(actor, "notion:manage");
 
+  // UX-only gate, same convention as canSeeSensitiveFields above — real
+  // enforcement is updateNotionField()'s own independent assertPermission +
+  // allowlist checks, which run again regardless of what this boolean (or a
+  // tampered client) claims. NOTION_EDIT_ALLOWLIST is currently empty, so
+  // annotateNotionFieldEditability() marks every field non-editable
+  // regardless of this value — the dashboard stays 100% read-only today
+  // even though admin already holds notion:update via its wildcard grant.
+  const canEditNotion = await hasPermission(actor, "notion:update");
+
   // Confirmed Property.notionPageId associations only — never inferred.
   // Empty today (no property has this field populated yet), so every
   // detail view correctly shows no property context until a human sets it.
@@ -75,6 +87,7 @@ export default async function NotionPage() {
               item,
               { canSeeSensitiveFields },
               propertyAssociations.get(item.id) ?? null,
+              canEditNotion,
             ),
           ),
         }
@@ -103,7 +116,10 @@ export default async function NotionPage() {
         </div>
         <div>
           <SectionHeader title="Property Listings" size="lg" />
-          <NotionListingsSearch listings={listingsWithVisibility} />
+          <NotionListingsSearch
+            listings={listingsWithVisibility}
+            updateFieldAction={updateNotionFieldAction}
+          />
         </div>
         {recentActivity !== null && (
           <NotionRecentActivity items={recentActivity} />

@@ -22,9 +22,12 @@ import {
 export type { IntegrationConnection };
 
 import {
+  annotateNotionFieldEditability,
+  type NotionEditableField,
+} from "../config/notion-edit-allowlist";
+import {
   selectVisibleNotionFields,
   type NotionVisibilityContext,
-  type NotionVisibleField,
 } from "../config/notion-field-visibility";
 import { UNKNOWN_REGION } from "../config/notion-region-reference";
 import type { DisconnectIntegrationInput } from "../schemas/integrations.schema";
@@ -433,8 +436,11 @@ export async function getNotionListingsAccessProof(
   }
 }
 
-/** A "View of Listings" row plus its app-side-resolved region — never a raw Notion property object. */
-export type NotionListingWithRegion = NotionListingRecord & { region: string };
+/** A "View of Listings" row plus its app-side-resolved region and the data source it came from — never a raw Notion property object. `dataSourceId` is structural plumbing (needed to submit an edit request against the right data source), never operational content. */
+export type NotionListingWithRegion = NotionListingRecord & {
+  region: string;
+  dataSourceId: string;
+};
 
 /**
  * The SAFE CLIENT DTO for a Notion listing — the only shape of a listing
@@ -448,21 +454,29 @@ export type NotionListingWithRegion = NotionListingRecord & { region: string };
  * returned by selectVisibleNotionFields() — see buildNotionListingClientDto
  * below, the one function that may construct this type.
  *
- * `id`/`url`/`lastEditedTime`/`region` are not gated by the visibility
- * allowlist: `id` is Notion's page identifier (structural plumbing, not
- * operational content), `url` is the explicitly-approved "Open in Notion"
- * fallback link, `lastEditedTime` is conflict/staleness metadata, and
- * `region` is app-computed from the property name against a static
+ * `id`/`url`/`lastEditedTime`/`region`/`dataSourceId` are not gated by the
+ * visibility allowlist: `id` is Notion's page identifier (structural
+ * plumbing, not operational content), `url` is the explicitly-approved
+ * "Open in Notion" fallback link, `lastEditedTime` is conflict/staleness
+ * metadata (and the optimistic-concurrency token an edit submission must
+ * echo back), `dataSourceId` is which data source an edit request targets,
+ * and `region` is app-computed from the property name against a static
  * reference list — never raw Notion content.
+ *
+ * `visibleFields` is `NotionEditableField[]`, a strict superset of
+ * `NotionVisibleField[]` — every field also carries whether an edit control
+ * should render for it (see annotateNotionFieldEditability's own doc
+ * comment for why that's a UX decision only, never the security boundary).
  */
 export interface NotionListingWithVisibility {
   id: string;
   url: string | null;
   lastEditedTime: string | null;
   region: string;
+  dataSourceId: string;
   /** Only the fields this actor is authorized to see. Never spread a NotionListingRecord/NotionListingWithRegion into this shape. */
   fields: Partial<NotionListingRecord>;
-  visibleFields: NotionVisibleField[];
+  visibleFields: NotionEditableField[];
   propertyContext: NotionPropertyAssociation | null;
 }
 
@@ -472,12 +486,16 @@ export interface NotionListingWithVisibility {
  * (which itself must never cross the server/client boundary) and returns
  * only what selectVisibleNotionFields() actually authorized — see that
  * function's own doc comment for why `record` itself must never be spread
- * into the result.
+ * into the result. `canEdit` is the actor's `notion:update` grant, checked
+ * by the caller (a plain server-computed boolean, same convention as
+ * `canSeeSensitiveFields`) — combined here with the (separate, currently
+ * empty) edit allowlist via annotateNotionFieldEditability().
  */
 export function buildNotionListingClientDto(
   record: NotionListingWithRegion,
   visibilityContext: NotionVisibilityContext,
   propertyContext: NotionPropertyAssociation | null,
+  canEdit: boolean,
 ): NotionListingWithVisibility {
   const { fields, list } = selectVisibleNotionFields(record, visibilityContext);
   return {
@@ -485,8 +503,13 @@ export function buildNotionListingClientDto(
     url: record.url,
     lastEditedTime: record.lastEditedTime,
     region: record.region,
+    dataSourceId: record.dataSourceId,
     fields,
-    visibleFields: list,
+    visibleFields: annotateNotionFieldEditability(
+      list,
+      record.dataSourceId,
+      canEdit,
+    ),
     propertyContext,
   };
 }
@@ -517,6 +540,7 @@ export async function listNotionListings(
     const items = records.map((record) => ({
       ...record,
       region: resolveRegion(record.name),
+      dataSourceId,
     }));
     return { configured: true, ok: true, items };
   } catch (err) {

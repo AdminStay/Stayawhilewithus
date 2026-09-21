@@ -1,18 +1,41 @@
+import type { NotionEditableFieldType } from "@stayw/integrations/notion";
 import type { ReactNode } from "react";
 
+import type { NotionEditableField } from "../config/notion-edit-allowlist";
 import type { NotionVisibleField } from "../config/notion-field-visibility";
+
+/**
+ * buildNotionDetailSections() accepts either a plain NotionVisibleField
+ * (editable/edit absent, e.g. every existing test fixture — renders
+ * plain/read-only) or an already-annotated NotionEditableField (the real
+ * caller, NotionListingsSearch.tsx) — never requires every caller to know
+ * about editability just to build a detail view.
+ */
+type NotionDetailInputField = NotionVisibleField &
+  Partial<Pick<NotionEditableField, "editable" | "edit">>;
 
 /**
  * The presentational shape NotionDetailView actually renders — deliberately
  * NOT tied to NotionListingRecord's keys, so the same dialog can render a
  * grouped listing (built by buildNotionDetailSections below) or a single
  * generic field (e.g. NotionSearch's "Preview" snippet, which isn't a real
- * Notion listing property at all).
+ * Notion listing property at all — `editable`/`edit`/`rawValue` are always
+ * absent there, so it renders exactly as before: plain, read-only).
+ *
+ * `editable`/`edit`/`rawValue` are optional and only ever set by
+ * buildNotionDetailSections() below, from an already-computed
+ * NotionEditableField — never invented here. `rawValue` is the actual value
+ * an edit control needs to start from (a string/number/boolean/string[]),
+ * kept separate from `value` (a ReactNode) since a future caller could
+ * render `value` as something other than the raw value itself.
  */
 export interface NotionDetailField {
   key: string;
   label: string;
   value: ReactNode;
+  editable?: boolean;
+  edit?: { fieldType: NotionEditableFieldType; options?: readonly string[] };
+  rawValue?: string | number | boolean | readonly string[] | null;
 }
 
 export type NotionDetailSectionLayout = "grid" | "actions" | "list";
@@ -53,12 +76,15 @@ const HEADER_FIELDS = new Set(["name", "address"]);
  * selectVisibleNotionFields()/buildNotionListingClientDto().
  */
 export function buildNotionDetailSections(
-  visibleFields: readonly NotionVisibleField[],
+  visibleFields: readonly NotionDetailInputField[],
 ): NotionDetailSection[] {
-  const toDetailField = (f: NotionVisibleField): NotionDetailField => ({
+  const toDetailField = (f: NotionDetailInputField): NotionDetailField => ({
     key: f.field,
     label: f.label,
     value: f.value,
+    editable: f.editable ?? false,
+    edit: f.edit,
+    rawValue: f.value,
   });
 
   const overview = visibleFields

@@ -896,4 +896,227 @@ describe("NotionClient", () => {
       }
     });
   });
+
+  describe("updatePageProperty", () => {
+    it("reads the page first, then PATCHes using Notion's OWN current property type — never the caller's assumption", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          id: "page-1",
+          properties: { Notes: { type: "rich_text" } },
+        })
+        .mockResolvedValueOnce({
+          last_edited_time: "2026-09-22T00:00:00.000Z",
+        });
+      const client = new NotionClient(credentials);
+
+      const result = await client.updatePageProperty(
+        "page-1",
+        "Notes",
+        "New note text",
+      );
+
+      expect(mockRequest).toHaveBeenNthCalledWith(1, "/pages/page-1");
+      expect(mockRequest).toHaveBeenNthCalledWith(2, "/pages/page-1", {
+        method: "PATCH",
+        body: JSON.stringify({
+          properties: {
+            Notes: {
+              rich_text: [{ type: "text", text: { content: "New note text" } }],
+            },
+          },
+        }),
+      });
+      expect(result).toEqual({ lastEditedTime: "2026-09-22T00:00:00.000Z" });
+    });
+
+    it("writes an empty rich_text array for an empty string, never a one-item array with empty content", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          id: "page-1",
+          properties: { Notes: { type: "rich_text" } },
+        })
+        .mockResolvedValueOnce({
+          last_edited_time: "2026-09-22T00:00:00.000Z",
+        });
+      const client = new NotionClient(credentials);
+
+      await client.updatePageProperty("page-1", "Notes", "");
+
+      expect(mockRequest).toHaveBeenNthCalledWith(2, "/pages/page-1", {
+        method: "PATCH",
+        body: JSON.stringify({ properties: { Notes: { rich_text: [] } } }),
+      });
+    });
+
+    it("shapes a url property as a bare url string", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          id: "page-1",
+          properties: { Guidebook: { type: "url" } },
+        })
+        .mockResolvedValueOnce({
+          last_edited_time: "2026-09-22T00:00:00.000Z",
+        });
+      const client = new NotionClient(credentials);
+
+      await client.updatePageProperty(
+        "page-1",
+        "Guidebook",
+        "https://example.com/guide",
+      );
+
+      expect(mockRequest).toHaveBeenNthCalledWith(2, "/pages/page-1", {
+        method: "PATCH",
+        body: JSON.stringify({
+          properties: { Guidebook: { url: "https://example.com/guide" } },
+        }),
+      });
+    });
+
+    it("shapes a number property as a bare number", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          id: "page-1",
+          properties: { Bedrooms: { type: "number" } },
+        })
+        .mockResolvedValueOnce({
+          last_edited_time: "2026-09-22T00:00:00.000Z",
+        });
+      const client = new NotionClient(credentials);
+
+      await client.updatePageProperty("page-1", "Bedrooms", 4);
+
+      expect(mockRequest).toHaveBeenNthCalledWith(2, "/pages/page-1", {
+        method: "PATCH",
+        body: JSON.stringify({ properties: { Bedrooms: { number: 4 } } }),
+      });
+    });
+
+    it("shapes a checkbox property as a bare boolean", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          id: "page-1",
+          properties: { Active: { type: "checkbox" } },
+        })
+        .mockResolvedValueOnce({
+          last_edited_time: "2026-09-22T00:00:00.000Z",
+        });
+      const client = new NotionClient(credentials);
+
+      await client.updatePageProperty("page-1", "Active", true);
+
+      expect(mockRequest).toHaveBeenNthCalledWith(2, "/pages/page-1", {
+        method: "PATCH",
+        body: JSON.stringify({ properties: { Active: { checkbox: true } } }),
+      });
+    });
+
+    it("shapes a date property as { start }", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          id: "page-1",
+          properties: { "Move-in": { type: "date" } },
+        })
+        .mockResolvedValueOnce({
+          last_edited_time: "2026-09-22T00:00:00.000Z",
+        });
+      const client = new NotionClient(credentials);
+
+      await client.updatePageProperty("page-1", "Move-in", "2026-10-01");
+
+      expect(mockRequest).toHaveBeenNthCalledWith(2, "/pages/page-1", {
+        method: "PATCH",
+        body: JSON.stringify({
+          properties: { "Move-in": { date: { start: "2026-10-01" } } },
+        }),
+      });
+    });
+
+    it("shapes a select property as { name }", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          id: "page-1",
+          properties: { Status: { type: "select" } },
+        })
+        .mockResolvedValueOnce({
+          last_edited_time: "2026-09-22T00:00:00.000Z",
+        });
+      const client = new NotionClient(credentials);
+
+      await client.updatePageProperty("page-1", "Status", "Active");
+
+      expect(mockRequest).toHaveBeenNthCalledWith(2, "/pages/page-1", {
+        method: "PATCH",
+        body: JSON.stringify({
+          properties: { Status: { select: { name: "Active" } } },
+        }),
+      });
+    });
+
+    it("shapes a multi_select property as an array of { name }", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          id: "page-1",
+          properties: { Tags: { type: "multi_select" } },
+        })
+        .mockResolvedValueOnce({
+          last_edited_time: "2026-09-22T00:00:00.000Z",
+        });
+      const client = new NotionClient(credentials);
+
+      await client.updatePageProperty("page-1", "Tags", ["A", "B"]);
+
+      expect(mockRequest).toHaveBeenNthCalledWith(2, "/pages/page-1", {
+        method: "PATCH",
+        body: JSON.stringify({
+          properties: {
+            Tags: { multi_select: [{ name: "A" }, { name: "B" }] },
+          },
+        }),
+      });
+    });
+
+    it("refuses to guess and throws when the property doesn't exist on the page — never falls back to a default type", async () => {
+      mockRequest.mockResolvedValueOnce({
+        id: "page-1",
+        properties: { Notes: { type: "rich_text" } },
+      });
+      const client = new NotionClient(credentials);
+
+      await expect(
+        client.updatePageProperty("page-1", "NotARealField", "x"),
+      ).rejects.toThrow(/has no property named "NotARealField"/);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    it("throws rather than guessing a shape for an unsupported/unrecognized Notion property type", async () => {
+      mockRequest.mockResolvedValueOnce({
+        id: "page-1",
+        properties: { Owner: { type: "people" } },
+      });
+      const client = new NotionClient(credentials);
+
+      await expect(
+        client.updatePageProperty("page-1", "Owner", "someone"),
+      ).rejects.toThrow(/property type "people" is not supported/);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    it("never puts the credential token anywhere in the PATCH request body", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          id: "page-1",
+          properties: { Notes: { type: "rich_text" } },
+        })
+        .mockResolvedValueOnce({
+          last_edited_time: "2026-09-22T00:00:00.000Z",
+        });
+      const client = new NotionClient(credentials);
+
+      await client.updatePageProperty("page-1", "Notes", "hello");
+
+      const patchCall = mockRequest.mock.calls[1] as [string, { body: string }];
+      expect(patchCall[1].body).not.toContain(credentials.token);
+    });
+  });
 });

@@ -30,6 +30,7 @@ import { matchesListingQuery } from "../services/notion-listing-match";
 
 import { NotionDetailView } from "./NotionDetailView";
 import { isSafeHttpUrl } from "./notion-link.utils";
+import type { NotionFieldEditorProps } from "./NotionFieldEditor";
 
 const ALL_REGIONS_VALUE = "";
 
@@ -125,8 +126,11 @@ function ResourceChips({
  */
 export function NotionListingsSearch({
   listings,
+  updateFieldAction,
 }: {
   listings: IntegrationHighlights<NotionListingWithVisibility>;
+  /** Passed straight through to NotionDetailView/NotionFieldEditor — see NotionFieldEditor's own doc comment for why this is threaded as a prop instead of imported directly here. Optional: absent means the dashboard stays read-only regardless of any field's `editable` flag. */
+  updateFieldAction?: NotionFieldEditorProps["action"];
 }) {
   const [nameQuery, setNameQuery] = useState("");
   const [keywordQuery, setKeywordQuery] = useState("");
@@ -321,6 +325,9 @@ export function NotionListingsSearch({
         lastEditedTime={openListing?.lastEditedTime ?? null}
         notionUrl={openListing?.url ?? null}
         propertyContext={openListing?.propertyContext ?? null}
+        pageId={openListing?.id ?? null}
+        dataSourceId={openListing?.dataSourceId ?? null}
+        updateFieldAction={updateFieldAction}
       />
     </div>
   );

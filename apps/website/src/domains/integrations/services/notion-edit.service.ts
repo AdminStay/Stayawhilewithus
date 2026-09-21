@@ -26,7 +26,12 @@ import { recordAudit } from "@/platform/audit/record-audit";
  * write boundary for a single Notion property, nothing else.
  */
 export type NotionEditResult =
-  | { status: "success"; newLastEditedTime: string }
+  | {
+      status: "success";
+      newLastEditedTime: string;
+      /** The value Notion's PATCH response just confirmed — same shape as the value submitted, already validated by fieldValueSchemaFor(). The dashboard should display exactly this, not its own optimistic guess. */
+      newValue: unknown;
+    }
   | { status: "not_editable" }
   | { status: "conflict" }
   | { status: "validation_error"; message: string }
@@ -96,12 +101,13 @@ export async function updateNotionField(
     return { status: "conflict" };
   }
 
+  // Structurally unreachable today (NOTION_EDIT_ALLOWLIST is empty, so
+  // allowlistEntry is always null above, and updateNotionField() already
+  // returned "not_editable" long before this line). Kept for when a field
+  // is eventually approved.
+  let confirmed: { lastEditedTime: string };
   try {
-    // Structurally unreachable today (NOTION_EDIT_ALLOWLIST is empty, so
-    // allowlistEntry is always null above) — updatePageProperty() itself
-    // is an intentional NotImplementedError stub (see client.ts), a second
-    // independent fail-closed layer on top of the allowlist check.
-    await client.updatePageProperty(
+    confirmed = await client.updatePageProperty(
       input.pageId,
       allowlistEntry.field,
       parsedValue.data,
@@ -113,7 +119,6 @@ export async function updateNotionField(
     };
   }
 
-  const newLastEditedTime = new Date().toISOString();
   await recordAudit({
     actorUserId: actor.userId,
     actorType: "USER",
@@ -127,5 +132,14 @@ export async function updateNotionField(
     afterState: { field: input.field, value: parsedValue.data },
   });
 
-  return { status: "success", newLastEditedTime };
+  // The value/timestamp Notion's own PATCH response just confirmed — never
+  // the value the dashboard optimistically assumed, and never a locally
+  // fabricated timestamp. This is what "re-fetch/verification" means here:
+  // Notion's PATCH response already echoes the updated page, so a second,
+  // separate read isn't needed just to learn this.
+  return {
+    status: "success",
+    newLastEditedTime: confirmed.lastEditedTime,
+    newValue: parsedValue.data,
+  };
 }

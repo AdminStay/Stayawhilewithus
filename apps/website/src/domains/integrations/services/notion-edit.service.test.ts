@@ -224,11 +224,17 @@ describe("updateNotionField — conflict/validation/provider-error/success (simu
         lastEditedTime: BASE_REQUEST.expectedLastEditedTime,
       },
     ]);
-    mockUpdatePageProperty.mockResolvedValueOnce(undefined);
+    mockUpdatePageProperty.mockResolvedValueOnce({
+      lastEditedTime: "2026-09-22T00:00:00.000Z",
+    });
 
     const result = await updateNotionField(ACTOR, BASE_REQUEST);
 
-    expect(result.status).toBe("success");
+    expect(result).toEqual({
+      status: "success",
+      newLastEditedTime: "2026-09-22T00:00:00.000Z",
+      newValue: "https://guidebook.example/x",
+    });
     expect(mockUpdatePageProperty).toHaveBeenCalledWith(
       "page-1",
       "guidebookUrl",
