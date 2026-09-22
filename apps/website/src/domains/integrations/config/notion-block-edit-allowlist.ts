@@ -17,14 +17,18 @@ import type { NotionEditableBlockType } from "@stayw/integrations/notion";
  * getPageContent() tree-membership check), never so a whole page can be
  * edited by naming just its id.
  *
- * CURRENT STATE (2026-09-22): exactly one entry, for the user-created,
- * explicitly-approved controlled-test page "StayWhile Dashboard Integration
- * Test" — real-verified via read-only discovery to be a genuine paragraph
- * block whose current text exactly matches the approved test string. This
- * enables ONLY that one page/block for editing; every other page/block in
- * the workspace is still rejected before any Notion API call is made. No
- * real write has been made yet — the user will perform the approved
- * original → verified → original test through the dashboard UI itself.
+ * CURRENT STATE (2026-09-23): DELIBERATELY EMPTY. The one prior entry — the
+ * user-created, explicitly-approved controlled-test page "StayWhile
+ * Dashboard Integration Test" — has already served its purpose: a real
+ * Production write (original → "verified") was made through the live
+ * dashboard UI, independently re-fetched and confirmed via the provider's
+ * own second GET, then restored (original → "verified" → original),
+ * proving the full write-lifecycle end-to-end in Production. That entry is
+ * now removed. With this array empty, `updateNotionBlockContent()` rejects
+ * every write request before any Notion API call is made — zero pages or
+ * blocks, real or test, are write-enabled today. A future entry (for a
+ * real, approved operational SOP block) requires the same explicit,
+ * reviewed, client-approved process as this one did.
  */
 export interface NotionBlockEditAllowlistEntry {
   /** The root Notion page this block must actually belong to — re-verified server-side against a fresh getPageContent(pageId) read, never trusted from the request alone. */
@@ -38,14 +42,7 @@ export interface NotionBlockEditAllowlistEntry {
 }
 
 export const NOTION_BLOCK_EDIT_ALLOWLIST: readonly NotionBlockEditAllowlistEntry[] =
-  [
-    {
-      pageId: "3e26058d-b989-803d-a1d7-f06f8adc27a6",
-      blockId: "3e26058d-b989-8006-9732-c285c035e832",
-      blockType: "paragraph",
-      label: "StayWhile Dashboard Integration Test — first paragraph",
-    },
-  ];
+  [];
 
 export function findBlockEditAllowlistEntry(
   pageId: string,

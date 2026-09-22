@@ -477,16 +477,16 @@ describe("updateNotionBlockContent — with a simulated allowlist entry", () => 
 });
 
 describe("listEditableNotionBlockIds", () => {
-  const APPROVED_TEST_PAGE_ID = "3e26058d-b989-803d-a1d7-f06f8adc27a6";
-  const APPROVED_TEST_BLOCK_ID = "3e26058d-b989-8006-9732-c285c035e832";
+  // The former controlled-test page — its allowlist entry has been removed
+  // now that the real Production write/verify/restore test has already
+  // passed (see HANDOFF.md). Kept here only to prove it's no longer
+  // editable, not because it's still expected to be.
+  const FORMER_TEST_PAGE_ID = "3e26058d-b989-803d-a1d7-f06f8adc27a6";
 
   it("returns an empty array when the actor lacks notion:update, without reading the allowlist", async () => {
     mockHasPermission.mockResolvedValueOnce(false);
 
-    const result = await listEditableNotionBlockIds(
-      ACTOR,
-      APPROVED_TEST_PAGE_ID,
-    );
+    const result = await listEditableNotionBlockIds(ACTOR, FORMER_TEST_PAGE_ID);
 
     expect(result).toEqual([]);
   });
@@ -499,14 +499,11 @@ describe("listEditableNotionBlockIds", () => {
     expect(result).toEqual([]);
   });
 
-  it("returns exactly the one real approved block id for the approved test page, when the actor has notion:update", async () => {
+  it("returns an empty array for the former controlled-test page too, now that its allowlist entry is removed — zero pages are write-enabled today", async () => {
     mockHasPermission.mockResolvedValueOnce(true);
 
-    const result = await listEditableNotionBlockIds(
-      ACTOR,
-      APPROVED_TEST_PAGE_ID,
-    );
+    const result = await listEditableNotionBlockIds(ACTOR, FORMER_TEST_PAGE_ID);
 
-    expect(result).toEqual([APPROVED_TEST_BLOCK_ID]);
+    expect(result).toEqual([]);
   });
 });

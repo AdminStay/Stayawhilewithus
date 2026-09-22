@@ -5,46 +5,34 @@ import {
   NOTION_BLOCK_EDIT_ALLOWLIST,
 } from "./notion-block-edit-allowlist";
 
-const APPROVED_TEST_PAGE_ID = "3e26058d-b989-803d-a1d7-f06f8adc27a6";
-const APPROVED_TEST_BLOCK_ID = "3e26058d-b989-8006-9732-c285c035e832";
+// The former controlled-test page/block — its allowlist entry has been
+// removed now that the real Production write/verify/restore test has
+// already passed (see HANDOFF.md). Kept here only to prove it's no longer
+// editable, not because it's still expected to be.
+const FORMER_TEST_PAGE_ID = "3e26058d-b989-803d-a1d7-f06f8adc27a6";
+const FORMER_TEST_BLOCK_ID = "3e26058d-b989-8006-9732-c285c035e832";
 
 describe("NOTION_BLOCK_EDIT_ALLOWLIST — real, live config", () => {
-  it("contains exactly one entry — the user-approved controlled-test page/block, and nothing else", () => {
-    expect(NOTION_BLOCK_EDIT_ALLOWLIST).toEqual([
-      {
-        pageId: APPROVED_TEST_PAGE_ID,
-        blockId: APPROVED_TEST_BLOCK_ID,
-        blockType: "paragraph",
-        label: "StayWhile Dashboard Integration Test — first paragraph",
-      },
-    ]);
+  it("is empty — no page/block is editable in the real app until a new one is explicitly approved", () => {
+    expect(NOTION_BLOCK_EDIT_ALLOWLIST).toEqual([]);
   });
 
-  it("findBlockEditAllowlistEntry returns the real entry for the exact approved page+block pair", () => {
-    const entry = findBlockEditAllowlistEntry(
-      APPROVED_TEST_PAGE_ID,
-      APPROVED_TEST_BLOCK_ID,
-    );
-    expect(entry).toEqual({
-      pageId: APPROVED_TEST_PAGE_ID,
-      blockId: APPROVED_TEST_BLOCK_ID,
-      blockType: "paragraph",
-      label: "StayWhile Dashboard Integration Test — first paragraph",
-    });
+  it("findBlockEditAllowlistEntry returns null for the former controlled-test page/block now that its entry is removed", () => {
+    expect(
+      findBlockEditAllowlistEntry(FORMER_TEST_PAGE_ID, FORMER_TEST_BLOCK_ID),
+    ).toBeNull();
   });
 
-  it("findBlockEditAllowlistEntry returns null for every other page/block — the approved entry does not broaden access to anything else", () => {
+  it("findBlockEditAllowlistEntry returns null for every other page/block against the real, empty allowlist", () => {
     expect(findBlockEditAllowlistEntry("page-1", "block-1")).toBeNull();
-    // The approved page's OTHER (second, unapproved) paragraph block.
     expect(
       findBlockEditAllowlistEntry(
-        APPROVED_TEST_PAGE_ID,
+        FORMER_TEST_PAGE_ID,
         "3e26058d-b989-806a-a79f-e082f156eeef",
       ),
     ).toBeNull();
-    // The approved block id under a different (wrong) page id.
     expect(
-      findBlockEditAllowlistEntry("some-other-page", APPROVED_TEST_BLOCK_ID),
+      findBlockEditAllowlistEntry("some-other-page", FORMER_TEST_BLOCK_ID),
     ).toBeNull();
   });
 });
