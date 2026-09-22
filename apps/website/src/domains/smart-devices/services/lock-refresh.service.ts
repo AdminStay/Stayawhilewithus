@@ -10,6 +10,11 @@ import {
 
 import { AUGUST_DETAIL_CONCURRENCY, chunk } from "./provider-devices.service";
 
+import {
+  ensureConnectionRows,
+  STALE_RUNNING_THRESHOLD_MS,
+} from "@/domains/integrations/services/integrations.service";
+
 /**
  * Manual telemetry refresh for August locks already onboarded through the
  * ProviderDevice Map -> Enable pipeline — the read-from-provider,
@@ -126,6 +131,13 @@ export interface AugustRefreshResult {
  * endpoint (no such method is imported into this file at all — see
  * lock-refresh.service.test.ts's dedicated source-level guarantee test).
  *
+ * This is the shared core both the human-triggered refreshAugustTelemetry()
+ * (below — RBAC-gated) and the automatic, scheduler-triggered
+ * refreshAugustTelemetryAutomatic() (further below — actor-agnostic, no
+ * RBAC, no human involved) call — identical read/write behavior either way,
+ * so a manual click and an automatic tick can never diverge in what they
+ * actually do to a device's data.
+ *
  * Unlike Nest/Cielo, August has no single bulk "give me every device's full
  * detail" call — listLocks() returns identity only, and
  * battery/connectivity/lock-state require one getLockDetail() call per
@@ -142,11 +154,7 @@ export interface AugustRefreshResult {
  * getLockDetail() call for one lock never blocks or fails any other lock's
  * refresh, in the same batch or a different one.
  */
-export async function refreshAugustTelemetry(
-  actor: AuthContext,
-): Promise<AugustRefreshResult> {
-  await assertPermission(actor, "smart_devices:update");
-
+async function runAugustTelemetryRefresh(): Promise<AugustRefreshResult> {
   // Configuration is validated unconditionally, before checking whether
   // there's anything to refresh — same discipline as every other provider
   // refresh/sync function in this codebase.
@@ -161,12 +169,11 @@ export async function refreshAugustTelemetry(
     select: { id: true, externalDeviceId: true, smartDeviceId: true },
   });
   logLockRefresh("august_eligible_rows", {
-    actorUserId: actor.userId,
     eligibleCount: eligibleDevices.length,
   });
 
   if (eligibleDevices.length === 0) {
-    logLockRefresh("august_no_eligible_rows", { actorUserId: actor.userId });
+    logLockRefresh("august_no_eligible_rows", {});
     return { refreshed: 0, notReturnedByProvider: 0 };
   }
 
@@ -252,17 +259,196 @@ export async function refreshAugustTelemetry(
       refreshed += writes.length / 2;
     } else {
       logLockRefresh("august_batch_zero_matched", {
-        actorUserId: actor.userId,
         batchSize: batch.length,
       });
     }
   }
 
   logLockRefresh("august_refresh_completed", {
-    actorUserId: actor.userId,
     refreshed,
     notReturnedByProvider,
   });
 
   return { refreshed, notReturnedByProvider };
+}
+
+/**
+ * Every real outcome any guarded (RBAC-gated OR automatic) August refresh
+ * entry point can produce. `already_running` covers every source of
+ * contention this mechanism protects against — another automatic tick,
+ * another manual Refresh All, or a manual Sync Now/Discover — the caller
+ * never needs to know or care which one is holding the row.
+ */
+export type AugustRefreshOutcome =
+  | ({ status: "completed" } & AugustRefreshResult)
+  | { status: "already_running" }
+  | { status: "failed"; reason: string };
+
+/**
+ * The one lock name every August-connection sync/refresh path shares —
+ * reused verbatim from beginDeviceSync() (integrations.service.ts) so
+ * every one of them (automatic refresh, manual Refresh All, manual Sync
+ * Now/Discover) can never run concurrently against the same AUGUST
+ * IntegrationConnection, regardless of which claims the advisory lock
+ * first.
+ */
+const INTEGRATION_SYNC_LOCK_NAME = "integration_sync";
+
+/**
+ * The single, shared claim-run-finish implementation behind EVERY August
+ * telemetry refresh entry point — human-clicked (refreshAugustTelemetry)
+ * and scheduler-triggered (refreshAugustTelemetryAutomatic) alike. Neither
+ * public function duplicates any of this logic; they differ only in
+ * whether they run an RBAC check first. This is deliberate: the whole
+ * point of this review was to close the gap where the manual "Refresh all"
+ * button could run concurrently with the automatic job (or with itself, or
+ * with a manual Sync Now/Discover) — a second, differently-written
+ * implementation here would just be a second place for that gap to
+ * reappear.
+ *
+ * Mechanism (identical to beginDeviceSync()'s own, integrations.service.ts):
+ *   1. `pg_try_advisory_xact_lock('integration_sync', <connectionId>)` —
+ *      transaction-scoped, released the instant the claim transaction
+ *      below commits. This makes the "is there already a RUNNING row?
+ *      if not, create one" check atomic against a simultaneous race at the
+ *      same instant — it is NOT what protects the actual refresh work
+ *      below, which runs after the lock is already released.
+ *   2. The real protection during that (potentially slow) work is the
+ *      durable `RUNNING` IntegrationSyncLog row itself, checked against
+ *      the exact same STALE_RUNNING_THRESHOLD_MS beginDeviceSync() uses
+ *      (imported, never redefined — see that constant's own doc comment
+ *      for why a mismatched threshold here would be a real cross-path
+ *      mutual-exclusion bug, not a cosmetic inconsistency). Any other
+ *      caller — automatic or manual, this function or beginDeviceSync() —
+ *      checking the same connection's RUNNING row while it's still fresh
+ *      correctly refuses to start.
+ *   3. `IntegrationSyncLog` is closed out `SUCCEEDED` (with the real
+ *      `recordsProcessed`) or `FAILED` (with a sanitized message — the
+ *      only errors that can reach this catch are getAugustClientFromEnv()'s
+ *      static "isn't configured" message, or a genuinely unexpected
+ *      Prisma/network failure; every per-device provider failure is
+ *      already isolated and swallowed inside runAugustTelemetryRefresh()
+ *      itself). `IntegrationConnection.lastSyncedAt`/`status` is bumped
+ *      only on success, mirroring finishDeviceSync()'s own documented
+ *      convention ("preserve the last good data when a new sync fails").
+ *
+ * Never creates, maps, unmaps, enables, disables, or deletes anything —
+ * inherits every one of the shared core's guarantees unchanged, including
+ * the structural impossibility of reaching a lock/unlock/PIN endpoint from
+ * this file (see this file's own dedicated source-level test).
+ */
+async function runGuardedAugustTelemetryRefresh(): Promise<AugustRefreshOutcome> {
+  await ensureConnectionRows();
+  const connection = await prisma.integrationConnection.findUniqueOrThrow({
+    where: { provider: "AUGUST" },
+  });
+
+  const claim = await prisma.$transaction(async (tx) => {
+    const lockRows = await tx.$queryRaw<{ locked: boolean }[]>`
+      SELECT pg_try_advisory_xact_lock(hashtext(${INTEGRATION_SYNC_LOCK_NAME}), hashtext(${connection.id})) AS locked
+    `;
+    if (!lockRows[0]?.locked) {
+      return { proceeding: false } as const;
+    }
+
+    const existingRunning = await tx.integrationSyncLog.findFirst({
+      where: { integrationConnectionId: connection.id, status: "RUNNING" },
+    });
+    if (existingRunning) {
+      const ageMs = Date.now() - existingRunning.startedAt.getTime();
+      if (ageMs < STALE_RUNNING_THRESHOLD_MS) {
+        return { proceeding: false } as const;
+      }
+      await tx.integrationSyncLog.update({
+        where: { id: existingRunning.id },
+        data: {
+          status: "FAILED",
+          errorMessage:
+            "August refresh timed out or the process terminated unexpectedly.",
+          finishedAt: new Date(),
+        },
+      });
+    }
+
+    const log = await tx.integrationSyncLog.create({
+      data: {
+        integrationConnectionId: connection.id,
+        direction: "INBOUND",
+        entityType: "SmartDevice",
+        status: "RUNNING",
+      },
+    });
+    return { proceeding: true, logId: log.id } as const;
+  });
+
+  if (!claim.proceeding) {
+    logLockRefresh("august_refresh_skipped_already_running", {});
+    return { status: "already_running" };
+  }
+
+  try {
+    const result = await runAugustTelemetryRefresh();
+
+    await prisma.integrationSyncLog.update({
+      where: { id: claim.logId },
+      data: {
+        status: "SUCCEEDED",
+        recordsProcessed: result.refreshed,
+        finishedAt: new Date(),
+      },
+    });
+    await prisma.integrationConnection.update({
+      where: { id: connection.id },
+      data: { status: "CONNECTED", lastSyncedAt: new Date() },
+    });
+
+    logLockRefresh("august_guarded_refresh_completed", {
+      refreshed: result.refreshed,
+      notReturnedByProvider: result.notReturnedByProvider,
+    });
+    return { status: "completed", ...result };
+  } catch (err) {
+    // Same convention as finishDeviceSync()'s real caller today
+    // (actions.ts): the caught error's own message is stored — never a
+    // second, separately-serialized raw provider payload or credential.
+    const message = err instanceof Error ? err.message : "Unknown error";
+    await prisma.integrationSyncLog.update({
+      where: { id: claim.logId },
+      data: { status: "FAILED", errorMessage: message, finishedAt: new Date() },
+    });
+    logLockRefresh("august_guarded_refresh_failed", { error: message });
+    return { status: "failed", reason: message };
+  }
+}
+
+/**
+ * Human-triggered entry point — the existing "Refresh all" dashboard
+ * action. RBAC-gated exactly as before, then delegates entirely to the
+ * shared guarded core above — this is what closes the gap this review
+ * found: before this change, "Refresh all" bypassed the mutual-exclusion
+ * mechanism entirely (no advisory lock, no IntegrationSyncLog row) and
+ * could run concurrently with the automatic refresh, with a manual Sync
+ * Now/Discover, or with itself (e.g. a double submission). It now
+ * participates in exactly the same protection those already had.
+ */
+export async function refreshAugustTelemetry(
+  actor: AuthContext,
+): Promise<AugustRefreshOutcome> {
+  await assertPermission(actor, "smart_devices:update");
+  return runGuardedAugustTelemetryRefresh();
+}
+
+/**
+ * Actor-agnostic automatic refresh — the scheduler-triggered counterpart to
+ * refreshAugustTelemetry() above, called only from
+ * app/api/cron/august-lock-refresh/route.ts (itself authenticated via its
+ * own dedicated AUGUST_REFRESH_CRON_SECRET check, never a signed-in
+ * StayWhile user). No `assertPermission` call here is correct, not an
+ * oversight: there is no human actor to check a permission against, exactly
+ * like runScheduleSync()'s own documented reasoning. Otherwise identical to
+ * the human-triggered path above — same shared guarded core, same
+ * protection against every other August refresh/sync path.
+ */
+export async function refreshAugustTelemetryAutomatic(): Promise<AugustRefreshOutcome> {
+  return runGuardedAugustTelemetryRefresh();
 }

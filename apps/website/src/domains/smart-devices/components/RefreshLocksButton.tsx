@@ -98,6 +98,12 @@ export function RefreshLocksButton({
         </div>
       )}
 
+      {!isPending && state.status === "already_running" && (
+        <p className="text-xs text-ink-muted">
+          Another August refresh is already in progress — try again shortly.
+        </p>
+      )}
+
       {!isPending && state.status === "failure" && (
         <p className="text-xs text-error-500">Refresh failed: {state.error}</p>
       )}

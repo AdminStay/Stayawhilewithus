@@ -168,6 +168,23 @@ describe("RefreshLocksButton", () => {
     expect(screen.queryByText(/online/i)).toBeNull();
   });
 
+  it("shows a clear, non-error 'already running' message when another August refresh is already in progress — this is an expected outcome now that Refresh All shares the mutual-exclusion mechanism with the automatic refresh and Sync/Discover, never a failure", () => {
+    mockUseActionState.mockReturnValue([
+      { status: "already_running" },
+      noopFormAction,
+      false,
+    ]);
+
+    render(<RefreshLocksButton action={vi.fn()} />);
+
+    expect(
+      screen.getByText(
+        "Another August refresh is already in progress — try again shortly.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/failed/i)).toBeNull();
+  });
+
   it("shows a clear failure message when the whole refresh call failed, and no last-refreshed line", () => {
     mockUseActionState.mockReturnValue([
       { status: "failure", error: "ForbiddenError" },

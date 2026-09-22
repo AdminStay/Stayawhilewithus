@@ -176,8 +176,23 @@ export async function disconnectIntegration(
  * grant access to more August locks (see HANDOFF.md's Priority 7) — while
  * staying short enough that a genuinely crashed request self-heals within
  * a reasonable window rather than blocking a connection all day.
+ *
+ * Exported (2026-09-23) so lock-refresh.service.ts's
+ * refreshAugustTelemetryAutomatic() reuses this exact same value for its
+ * own RUNNING-row staleness check, rather than defining a second, different
+ * threshold — both functions evaluate staleness against the SAME
+ * IntegrationSyncLog row for the same AUGUST connection (via the shared
+ * `integration_sync` advisory lock name), so if they disagreed on what
+ * counts as "stale," a request landing in the gap between the two values
+ * could incorrectly conclude a still-genuinely-running job had crashed and
+ * start a second, overlapping one — defeating the whole point of this
+ * mechanism. Re-verified against the newer, larger ProviderDevice-scoped
+ * August fleet (currently up to ~43 locks, AUGUST_DETAIL_CONCURRENCY(5)
+ * bounded — ~9 sequential batches, ≈277s/~4.6min worst case even if every
+ * batch hits the full retry ceiling) — still comfortably under this
+ * threshold, not just the original 7-lock legacy estimate above.
  */
-const STALE_RUNNING_THRESHOLD_MS = 10 * 60 * 1000;
+export const STALE_RUNNING_THRESHOLD_MS = 10 * 60 * 1000;
 
 /**
  * Starts a manual smart-device sync against a SPECIFIC IntegrationConnection

@@ -15,12 +15,38 @@ const {
   mockGetLockDetail,
   mockEnsureConnectionRows,
   mockRecordAudit,
+  mockQueryRaw,
+  mockConnectionFindUniqueOrThrow,
+  mockConnectionUpdate,
+  mockSyncLogFindFirst,
+  mockSyncLogCreate,
+  mockSyncLogUpdate,
 } = vi.hoisted(() => ({
   mockTransaction: vi.fn(),
   mockGetLockDetail: vi.fn(),
   mockEnsureConnectionRows: vi.fn().mockResolvedValue(undefined),
   mockRecordAudit: vi.fn().mockResolvedValue({}),
+  mockQueryRaw: vi.fn(),
+  mockConnectionFindUniqueOrThrow: vi.fn(),
+  mockConnectionUpdate: vi.fn().mockResolvedValue({}),
+  mockSyncLogFindFirst: vi.fn(),
+  mockSyncLogCreate: vi.fn(),
+  mockSyncLogUpdate: vi.fn().mockResolvedValue({}),
 }));
+
+// The transaction-callback shape (refreshAugustTelemetryAutomatic's
+// overlap-claim transaction) and the transaction-array shape (the existing
+// batched-write pattern below) share the same `$transaction` mock — real
+// Prisma supports both call forms, so this generic implementation mirrors
+// that rather than assuming only one is ever used in this file.
+const txClient = {
+  $queryRaw: mockQueryRaw,
+  integrationSyncLog: {
+    findFirst: mockSyncLogFindFirst,
+    create: mockSyncLogCreate,
+    update: mockSyncLogUpdate,
+  },
+};
 
 vi.mock("@stayw/database", () => ({
   prisma: {
@@ -33,6 +59,15 @@ vi.mock("@stayw/database", () => ({
     },
     smartDevice: {
       update: vi.fn().mockResolvedValue({}),
+    },
+    integrationConnection: {
+      findUniqueOrThrow: mockConnectionFindUniqueOrThrow,
+      update: mockConnectionUpdate,
+    },
+    integrationSyncLog: {
+      findFirst: mockSyncLogFindFirst,
+      create: mockSyncLogCreate,
+      update: mockSyncLogUpdate,
     },
     $transaction: mockTransaction,
   },
@@ -61,8 +96,21 @@ vi.mock("@stayw/integrations/august", () => ({
 // turn imports these two modules at its own top level — mocked here purely
 // so that transitive import resolves without touching a real DB/audit call,
 // same reason provider-devices.service.test.ts mocks them.
+//
+// STALE_RUNNING_THRESHOLD_MS is a plain, hardcoded 10-minute literal here
+// (never `importOriginal`) — deliberately, to keep this mock as narrow as
+// the rest of this file's mocks (this test file's own stated philosophy;
+// pulling in the real integrations.service.ts module graph here would drag
+// in NotionClient/OwnerrezClient, which this focused unit test has no
+// business touching). This value MUST stay equal to the real exported
+// STALE_RUNNING_THRESHOLD_MS in integrations.service.ts — if that constant
+// ever changes, this literal needs updating too; the cross-file
+// mutual-exclusion test (lock-refresh-automatic-mutual-exclusion.test.ts)
+// imports both real modules together specifically so drift like that would
+// be caught there even if missed here.
 vi.mock("@/domains/integrations/services/integrations.service", () => ({
   ensureConnectionRows: mockEnsureConnectionRows,
+  STALE_RUNNING_THRESHOLD_MS: 10 * 60 * 1000,
 }));
 vi.mock("@/platform/audit/record-audit", () => ({
   recordAudit: mockRecordAudit,
@@ -71,7 +119,10 @@ vi.mock("@/platform/audit/record-audit", () => ({
 import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
 
-import { refreshAugustTelemetry } from "./lock-refresh.service";
+import {
+  refreshAugustTelemetry,
+  refreshAugustTelemetryAutomatic,
+} from "./lock-refresh.service";
 
 const actor = { userId: "user-1" };
 const ORIGINAL_ENV = { ...process.env };
@@ -92,6 +143,31 @@ function eligibleProviderDevice(
   smartDeviceId: string,
 ) {
   return { id, externalDeviceId, smartDeviceId };
+}
+
+/**
+ * Shared setup for every test that exercises the guarded
+ * claim-run-finish path (refreshAugustTelemetry AND
+ * refreshAugustTelemetryAutomatic both delegate to the same internal
+ * core) — one place to configure the advisory-lock/IntegrationSyncLog/
+ * IntegrationConnection mocks, reused by all three describe blocks below
+ * that call either function, so their setups can't quietly drift apart.
+ */
+function setupGuardedRefreshMocks() {
+  mockQueryRaw.mockReset().mockResolvedValue([{ locked: true }]);
+  mockConnectionFindUniqueOrThrow
+    .mockReset()
+    .mockResolvedValue({ id: "conn-august-1", provider: "AUGUST" });
+  mockConnectionUpdate.mockReset().mockResolvedValue({});
+  mockSyncLogFindFirst.mockReset().mockResolvedValue(null);
+  mockSyncLogCreate.mockReset().mockResolvedValue({ id: "log-new" });
+  mockSyncLogUpdate.mockReset().mockResolvedValue({});
+  mockTransaction.mockReset().mockImplementation(async (arg: unknown) => {
+    if (typeof arg === "function") {
+      return (arg as (tx: typeof txClient) => unknown)(txClient);
+    }
+    return Promise.all(arg as Promise<unknown>[]);
+  });
 }
 
 function augustLockDetail(id: string, overrides: Record<string, unknown> = {}) {
@@ -180,11 +256,7 @@ describe("refreshAugustTelemetry", () => {
       .mockReset()
       .mockResolvedValue({} as never);
     mockGetLockDetail.mockReset();
-    mockTransaction
-      .mockReset()
-      .mockImplementation(async (arg) =>
-        Array.isArray(arg) ? Promise.all(arg) : arg,
-      );
+    setupGuardedRefreshMocks();
   });
   afterEach(restoreEnv);
 
@@ -209,7 +281,11 @@ describe("refreshAugustTelemetry", () => {
     const result = await refreshAugustTelemetry(actor);
 
     expect(mockGetLockDetail).not.toHaveBeenCalled();
-    expect(result).toEqual({ refreshed: 0, notReturnedByProvider: 0 });
+    expect(result).toEqual({
+      status: "completed",
+      refreshed: 0,
+      notReturnedByProvider: 0,
+    });
   });
 
   it("updates the existing SmartDevice's status/metadata and the existing ProviderDevice's snapshot/freshness for a matched device", async () => {
@@ -244,7 +320,11 @@ describe("refreshAugustTelemetry", () => {
         }),
       }),
     );
-    expect(result).toEqual({ refreshed: 1, notReturnedByProvider: 0 });
+    expect(result).toEqual({
+      status: "completed",
+      refreshed: 1,
+      notReturnedByProvider: 0,
+    });
   });
 
   it("TIMESTAMP-CORRECTNESS: writes August's own telemetryUpdatedAt value into SmartDevice.metadata exactly — never fabricates it from this refresh's own execution time, even though the API call itself succeeds 'now'", async () => {
@@ -430,7 +510,11 @@ describe("refreshAugustTelemetry", () => {
     expect(prisma.smartDevice.update).not.toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: "sd-2" } }),
     );
-    expect(result).toEqual({ refreshed: 2, notReturnedByProvider: 1 });
+    expect(result).toEqual({
+      status: "completed",
+      refreshed: 2,
+      notReturnedByProvider: 1,
+    });
   });
 
   it("bounds detail-request concurrency to the shared AUGUST_DETAIL_CONCURRENCY cap (5) instead of running all requests at once — reuses discoverAugustDevices()'s own constant, not a second copy", async () => {
@@ -455,7 +539,11 @@ describe("refreshAugustTelemetry", () => {
     expect(mockGetLockDetail).toHaveBeenCalledTimes(12);
     expect(maxInFlight).toBeLessThanOrEqual(5);
     expect(maxInFlight).toBeGreaterThan(1);
-    expect(result).toEqual({ refreshed: 12, notReturnedByProvider: 0 });
+    expect(result).toEqual({
+      status: "completed",
+      refreshed: 12,
+      notReturnedByProvider: 0,
+    });
   });
 
   it("leaves a device August doesn't confirm this time completely untouched and counts it separately, if every device in a batch fails", async () => {
@@ -468,15 +556,22 @@ describe("refreshAugustTelemetry", () => {
 
     expect(prisma.smartDevice.update).not.toHaveBeenCalled();
     expect(prisma.providerDevice.update).not.toHaveBeenCalled();
-    expect(result).toEqual({ refreshed: 0, notReturnedByProvider: 1 });
+    expect(result).toEqual({
+      status: "completed",
+      refreshed: 0,
+      notReturnedByProvider: 1,
+    });
   });
 
-  it("propagates a not-configured error when August credentials are missing, even when there are zero eligible devices — never silently reports a misleading '0 refreshed' success", async () => {
+  it("returns a sanitized failed outcome (never a throw) when August credentials are missing, even when there are zero eligible devices — never silently reports a misleading '0 refreshed' success", async () => {
     delete process.env.AUGUST_IDENTIFIER;
 
-    await expect(refreshAugustTelemetry(actor)).rejects.toThrow(
-      /isn't configured/,
-    );
+    const result = await refreshAugustTelemetry(actor);
+
+    expect(result).toEqual({
+      status: "failed",
+      reason: expect.stringContaining("isn't configured"),
+    });
     expect(prisma.providerDevice.findMany).not.toHaveBeenCalled();
     expect(mockGetLockDetail).not.toHaveBeenCalled();
   });
@@ -511,11 +606,7 @@ describe("lock-refresh.service — diagnostic logging", () => {
       .mockReset()
       .mockResolvedValue({} as never);
     mockGetLockDetail.mockReset();
-    mockTransaction
-      .mockReset()
-      .mockImplementation(async (arg) =>
-        Array.isArray(arg) ? Promise.all(arg) : arg,
-      );
+    setupGuardedRefreshMocks();
     consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
   });
   afterEach(() => {
@@ -569,5 +660,324 @@ describe("lock-refresh.service — diagnostic logging", () => {
     const serialized = JSON.stringify(loggedEvents());
     expect(serialized).not.toContain("secret-house-id-value");
     expect(serialized).not.toContain("houseId");
+  });
+});
+
+describe("refreshAugustTelemetryAutomatic", () => {
+  const CONNECTION = { id: "conn-august-1", provider: "AUGUST" };
+
+  function runningLog(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "log-existing",
+      integrationConnectionId: CONNECTION.id,
+      status: "RUNNING",
+      startedAt: new Date(),
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    setAugustEnv();
+    vi.mocked(prisma.providerDevice.findMany).mockReset().mockResolvedValue([]);
+    vi.mocked(prisma.smartDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    vi.mocked(prisma.providerDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    mockGetLockDetail.mockReset();
+    setupGuardedRefreshMocks();
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+  });
+  afterEach(restoreEnv);
+
+  it("is actor-agnostic — never calls assertPermission, since there is no signed-in user to check a permission against", async () => {
+    await refreshAugustTelemetryAutomatic();
+
+    expect(assertPermission).not.toHaveBeenCalled();
+  });
+
+  it("ensures the AUGUST connection row exists and claims the same advisory lock name beginDeviceSync() uses, before creating a RUNNING log", async () => {
+    await refreshAugustTelemetryAutomatic();
+
+    expect(mockEnsureConnectionRows).toHaveBeenCalled();
+    expect(mockQueryRaw).toHaveBeenCalled();
+    expect(mockSyncLogCreate).toHaveBeenCalledWith({
+      data: {
+        integrationConnectionId: CONNECTION.id,
+        direction: "INBOUND",
+        entityType: "SmartDevice",
+        status: "RUNNING",
+      },
+    });
+  });
+
+  it("OVERLAP-PROTECTION: skips the run entirely when the advisory lock can't be claimed — never creates a log row, never calls August", async () => {
+    mockQueryRaw.mockResolvedValueOnce([{ locked: false }]);
+
+    const result = await refreshAugustTelemetryAutomatic();
+
+    expect(result).toEqual({ status: "already_running" });
+    expect(mockSyncLogCreate).not.toHaveBeenCalled();
+    expect(mockGetLockDetail).not.toHaveBeenCalled();
+  });
+
+  it("OVERLAP-PROTECTION: skips when a RECENT RUNNING log already exists for this connection, even though the advisory lock itself was claimed", async () => {
+    mockSyncLogFindFirst.mockResolvedValueOnce(
+      runningLog({ startedAt: new Date() }),
+    );
+
+    const result = await refreshAugustTelemetryAutomatic();
+
+    expect(result).toEqual({ status: "already_running" });
+    expect(mockSyncLogCreate).not.toHaveBeenCalled();
+    expect(mockGetLockDetail).not.toHaveBeenCalled();
+  });
+
+  it("CROSS-PATH THRESHOLD SYMMETRY: treats a row 1ms younger than the shared 10-minute threshold as fresh (skip) — the exact boundary beginDeviceSync() itself uses, imported rather than redefined, so the two paths can never disagree about the same row's staleness", async () => {
+    const STALE_RUNNING_THRESHOLD_MS = 10 * 60 * 1000;
+    mockSyncLogFindFirst.mockResolvedValueOnce(
+      runningLog({
+        startedAt: new Date(Date.now() - (STALE_RUNNING_THRESHOLD_MS - 1)),
+      }),
+    );
+
+    const result = await refreshAugustTelemetryAutomatic();
+
+    expect(result).toEqual({ status: "already_running" });
+    expect(mockSyncLogUpdate).not.toHaveBeenCalled();
+  });
+
+  it("CROSS-PATH THRESHOLD SYMMETRY: treats a row 1ms older than the shared 10-minute threshold as stale (recover), at the exact same boundary", async () => {
+    const STALE_RUNNING_THRESHOLD_MS = 10 * 60 * 1000;
+    mockSyncLogFindFirst.mockResolvedValueOnce(
+      runningLog({
+        id: "log-just-over",
+        startedAt: new Date(Date.now() - (STALE_RUNNING_THRESHOLD_MS + 1)),
+      }),
+    );
+
+    const result = await refreshAugustTelemetryAutomatic();
+
+    expect(mockSyncLogUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "log-just-over" },
+        data: expect.objectContaining({ status: "FAILED" }),
+      }),
+    );
+    expect(result.status).toBe("completed");
+  });
+
+  it("OVERLAP-PROTECTION: recovers a STALE RUNNING log (older than the threshold) by closing it out as FAILED, then proceeds with a fresh run", async () => {
+    const staleStartedAt = new Date(Date.now() - 20 * 60 * 1000); // 20 minutes ago
+    mockSyncLogFindFirst.mockResolvedValueOnce(
+      runningLog({ id: "log-stale", startedAt: staleStartedAt }),
+    );
+
+    const result = await refreshAugustTelemetryAutomatic();
+
+    expect(mockSyncLogUpdate).toHaveBeenCalledWith({
+      where: { id: "log-stale" },
+      data: expect.objectContaining({
+        status: "FAILED",
+        finishedAt: expect.any(Date),
+      }),
+    });
+    expect(mockSyncLogCreate).toHaveBeenCalled();
+    expect(result.status).toBe("completed");
+  });
+
+  it("SUCCESS: creates a RUNNING log, refreshes eligible devices via the exact same core the manual refresh uses, then closes the log SUCCEEDED with the real refreshed count and bumps IntegrationConnection.lastSyncedAt", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      eligibleProviderDevice("pd-1", "lock-1", "sd-1"),
+    ] as never);
+    mockGetLockDetail.mockResolvedValueOnce(augustLockDetail("lock-1"));
+
+    const result = await refreshAugustTelemetryAutomatic();
+
+    expect(prisma.smartDevice.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "sd-1" } }),
+    );
+    expect(mockSyncLogUpdate).toHaveBeenCalledWith({
+      where: { id: "log-new" },
+      data: {
+        status: "SUCCEEDED",
+        recordsProcessed: 1,
+        finishedAt: expect.any(Date),
+      },
+    });
+    expect(mockConnectionUpdate).toHaveBeenCalledWith({
+      where: { id: CONNECTION.id },
+      data: { status: "CONNECTED", lastSyncedAt: expect.any(Date) },
+    });
+    expect(result).toEqual({
+      status: "completed",
+      refreshed: 1,
+      notReturnedByProvider: 0,
+    });
+  });
+
+  it("PER-DEVICE ISOLATION: one device's provider failure doesn't fail the whole automatic run — still reports completed with the real split counts", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      eligibleProviderDevice("pd-1", "lock-1", "sd-1"),
+      eligibleProviderDevice("pd-2", "lock-2", "sd-2"),
+    ] as never);
+    mockGetLockDetail.mockImplementation(async (id: string) => {
+      if (id === "lock-2") throw new Error("August API 500");
+      return augustLockDetail(id);
+    });
+
+    const result = await refreshAugustTelemetryAutomatic();
+
+    expect(result).toEqual({
+      status: "completed",
+      refreshed: 1,
+      notReturnedByProvider: 1,
+    });
+    expect(mockSyncLogUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "SUCCEEDED",
+          recordsProcessed: 1,
+        }),
+      }),
+    );
+  });
+
+  it("SANITIZED-FAILURE: a top-level failure (August not configured) closes the log FAILED with that message, and never bumps IntegrationConnection.lastSyncedAt", async () => {
+    delete process.env.AUGUST_IDENTIFIER;
+
+    const result = await refreshAugustTelemetryAutomatic();
+
+    expect(result).toEqual({
+      status: "failed",
+      reason: expect.stringContaining("isn't configured"),
+    });
+    expect(mockSyncLogUpdate).toHaveBeenCalledWith({
+      where: { id: "log-new" },
+      data: {
+        status: "FAILED",
+        errorMessage: expect.stringContaining("isn't configured"),
+        finishedAt: expect.any(Date),
+      },
+    });
+    expect(mockConnectionUpdate).not.toHaveBeenCalled();
+  });
+
+  it("SECRET-SAFETY: never writes a credential value into the IntegrationSyncLog row, even on the not-configured failure path", async () => {
+    process.env.AUGUST_ACCESS_TOKEN = "super-secret-token";
+    delete process.env.AUGUST_IDENTIFIER;
+
+    await refreshAugustTelemetryAutomatic();
+
+    const serialized = JSON.stringify(mockSyncLogUpdate.mock.calls);
+    expect(serialized).not.toContain("super-secret-token");
+  });
+
+  it("never creates/updates a ProviderDevice mapping/enablement field, and never touches lock/unlock/PIN — same structural guarantee as the manual path (see the source-level guarantee tests above), reused unchanged since this function delegates to the same core", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      eligibleProviderDevice("pd-1", "lock-1", "sd-1"),
+    ] as never);
+    mockGetLockDetail.mockResolvedValueOnce(augustLockDetail("lock-1"));
+
+    await refreshAugustTelemetryAutomatic();
+
+    const call = vi.mocked(prisma.providerDevice.update).mock.calls[0]?.[0] as {
+      data: Record<string, unknown>;
+    };
+    for (const forbiddenField of [
+      "propertyId",
+      "enabled",
+      "mappedAt",
+      "mappedByUserId",
+      "smartDeviceId",
+    ]) {
+      expect(call.data).not.toHaveProperty(forbiddenField);
+    }
+  });
+});
+
+describe("refreshAugustTelemetry vs. refreshAugustTelemetryAutomatic — same-file mutual exclusion", () => {
+  const CONNECTION = { id: "conn-august-1", provider: "AUGUST" };
+
+  function runningLog(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "log-existing",
+      integrationConnectionId: CONNECTION.id,
+      status: "RUNNING",
+      startedAt: new Date(),
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    setAugustEnv();
+    vi.mocked(prisma.providerDevice.findMany).mockReset().mockResolvedValue([]);
+    vi.mocked(prisma.smartDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    vi.mocked(prisma.providerDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    mockGetLockDetail.mockReset();
+    setupGuardedRefreshMocks();
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+  });
+  afterEach(restoreEnv);
+
+  it("automatic running → manual Refresh All is refused with already_running (never a throw, never a second provider call)", async () => {
+    mockSyncLogFindFirst.mockResolvedValueOnce(runningLog());
+
+    const result = await refreshAugustTelemetry(actor);
+
+    expect(result).toEqual({ status: "already_running" });
+    expect(mockGetLockDetail).not.toHaveBeenCalled();
+  });
+
+  it("manual Refresh All running → automatic is refused with already_running", async () => {
+    mockSyncLogFindFirst.mockResolvedValueOnce(runningLog());
+
+    const result = await refreshAugustTelemetryAutomatic();
+
+    expect(result).toEqual({ status: "already_running" });
+    expect(mockGetLockDetail).not.toHaveBeenCalled();
+  });
+
+  it("manual Refresh All running → a second manual Refresh All is also refused — protects against a double-click/duplicate submission, not just against other August operations", async () => {
+    mockSyncLogFindFirst.mockResolvedValueOnce(runningLog());
+
+    const result = await refreshAugustTelemetry(actor);
+
+    expect(result).toEqual({ status: "already_running" });
+    expect(mockSyncLogCreate).not.toHaveBeenCalled();
+  });
+
+  it("STALE-RECOVERY VIA MANUAL PATH: refreshAugustTelemetry() recovers a stale RUNNING row using the exact same shared STALE_RUNNING_THRESHOLD_MS as the automatic path — proves the fix isn't automatic-only", async () => {
+    const STALE_RUNNING_THRESHOLD_MS = 10 * 60 * 1000;
+    mockSyncLogFindFirst.mockResolvedValueOnce(
+      runningLog({
+        id: "log-stale",
+        startedAt: new Date(Date.now() - (STALE_RUNNING_THRESHOLD_MS + 1)),
+      }),
+    );
+
+    const result = await refreshAugustTelemetry(actor);
+
+    expect(mockSyncLogUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "log-stale" },
+        data: expect.objectContaining({ status: "FAILED" }),
+      }),
+    );
+    expect(result.status).toBe("completed");
+  });
+
+  it("RBAC still runs first for the manual path even when nothing is running — a denial never depends on / is never masked by the concurrency check", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(refreshAugustTelemetry(actor)).rejects.toThrow();
+    expect(mockSyncLogFindFirst).not.toHaveBeenCalled();
   });
 });

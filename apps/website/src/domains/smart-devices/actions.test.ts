@@ -400,6 +400,34 @@ describe("refreshAugustAction", () => {
     expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
   });
 
+  it("returns already_running (never success, never failure) when refreshAugustTelemetry() reports another August operation is already in progress, and does not revalidate", async () => {
+    mockRefreshAugustTelemetry.mockResolvedValueOnce({
+      status: "already_running",
+    });
+
+    const result = await refreshAugustAction(IDLE_REFRESH);
+
+    expect(result).toEqual({ status: "already_running" });
+    expect(mockRevalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("returns a failure state (not a thrown-error crash) when refreshAugustTelemetry() itself resolves with a sanitized failed outcome (e.g. August not configured), and does not revalidate", async () => {
+    mockRefreshAugustTelemetry.mockResolvedValueOnce({
+      status: "failed",
+      reason:
+        "August isn't configured — set AUGUST_IDENTIFIER/AUGUST_INSTALL_ID/AUGUST_ACCESS_TOKEN.",
+    });
+
+    const result = await refreshAugustAction(IDLE_REFRESH);
+
+    expect(result).toEqual({
+      status: "failure",
+      error:
+        "August isn't configured — set AUGUST_IDENTIFIER/AUGUST_INSTALL_ID/AUGUST_ACCESS_TOKEN.",
+    });
+    expect(mockRevalidatePath).not.toHaveBeenCalled();
+  });
+
   it("returns a top-level failure state instead of throwing when refreshAugustTelemetry() fails (e.g. RBAC denial or missing August credentials), and does not revalidate", async () => {
     mockRefreshAugustTelemetry.mockRejectedValueOnce(
       new Error(

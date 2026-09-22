@@ -522,10 +522,17 @@ export async function refreshAugustTelemetryBatchAction(
  * boundary. refreshAugustTelemetry() itself already enforces
  * smart_devices:update — this action introduces no separate/broader
  * permission check.
+ *
+ * `already_running` (2026-09-23) is a real, expected outcome now that
+ * refreshAugustTelemetry() participates in the same August-connection
+ * mutual-exclusion mechanism as the automatic refresh and Sync Now/
+ * Discover — never a thrown error, so it is its own distinct status here
+ * rather than folded into `failure`.
  */
 export type RefreshAugustActionState =
   | { status: "idle" }
   | ({ status: "success"; refreshedAt: string } & AugustRefreshResult)
+  | { status: "already_running" }
   | { status: "failure"; error: string };
 
 export async function refreshAugustAction(
@@ -534,6 +541,23 @@ export async function refreshAugustAction(
   try {
     const actor = await getCurrentUser();
     const result = await refreshAugustTelemetry(actor);
+
+    if (result.status === "already_running") {
+      logLockRefresh("action_already_running", { actorUserId: actor.userId });
+      return { status: "already_running" };
+    }
+    if (result.status === "failed") {
+      // A real, sanitized failure returned by refreshAugustTelemetry()
+      // itself (e.g. August not configured) — not a thrown exception, but
+      // handled identically to the catch block below: same logging, same
+      // action state.
+      logLockRefresh("action_failed", {
+        actorUserId: actor.userId,
+        error: result.reason,
+      });
+      return { status: "failure", error: result.reason };
+    }
+
     // Keeps the user on /locks and shows the newly refreshed status,
     // battery, lock state, Last Synced, and Last Telemetry without a manual
     // reload — this page is a Server Component that reads fresh on every
