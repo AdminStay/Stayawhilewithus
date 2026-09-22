@@ -15,8 +15,8 @@ import type {
 } from "../services/integrations.service";
 
 import {
-  NotionBlockList,
-  type NotionBlockEditContext,
+  NotionFetchedPageContent,
+  type NotionFetchedPageContentState,
 } from "./NotionBlockRenderer";
 import { NotionDetailView } from "./NotionDetailView";
 import { isSafeHttpUrl } from "./notion-link.utils";
@@ -33,9 +33,6 @@ const INITIAL_STATE: ActionState = { status: "idle" };
 // of its own either. Only an individual page or database row's real content
 // is fetched here.
 const CONTENT_FETCHABLE_TYPES = new Set(["Notion page", "Database row"]);
-
-type PageContentViewState =
-  { status: "idle" } | { status: "loading" } | NotionPageContentActionState;
 
 /**
  * The single, VA-facing "Search Notion" experience — one query, submitted
@@ -66,9 +63,10 @@ export function NotionSearch({
   const [openResult, setOpenResult] = useState<NotionSearchResultCard | null>(
     null,
   );
-  const [contentState, setContentState] = useState<PageContentViewState>({
-    status: "idle",
-  });
+  const [contentState, setContentState] =
+    useState<NotionFetchedPageContentState>({
+      status: "idle",
+    });
   const formRef = useRef<HTMLFormElement>(null);
 
   function handleOpenResult(result: NotionSearchResultCard) {
@@ -259,7 +257,7 @@ export function NotionSearch({
                   : []
               }
               bodyContent={
-                <PageContentBody
+                <NotionFetchedPageContent
                   state={contentState}
                   pageId={openResult?.id ?? null}
                   updateBlockAction={updateBlockAction}
@@ -271,85 +269,6 @@ export function NotionSearch({
             />
           </div>
         )}
-    </div>
-  );
-}
-
-/**
- * The body-content area of a result's detail dialog: a loading indicator
- * while getPageContent() is in flight, a safe error message on a real read
- * failure (never a raw error/stack), the real rendered blocks on success
- * (via NotionBlockList — see that component for the supported-block/
- * fallback rules), and, when the read was cut off by getPageContent()'s own
- * depth/call-budget safety caps, an honest "not everything is shown here"
- * note rather than presenting a partial page as complete. Renders nothing
- * for a result type with no page-body content to fetch (see
- * CONTENT_FETCHABLE_TYPES) or before a result has been opened at all.
- */
-function PageContentBody({
-  state,
-  pageId,
-  updateBlockAction,
-}: {
-  state: PageContentViewState;
-  pageId: string | null;
-  updateBlockAction: (
-    prevState: UpdateNotionBlockActionState,
-    input: UpdateNotionBlockActionInput,
-  ) => Promise<UpdateNotionBlockActionState>;
-}) {
-  if (state.status === "idle") return null;
-
-  if (state.status === "loading") {
-    return <p className="text-sm text-ink-muted">Loading content…</p>;
-  }
-
-  if (state.status === "not_configured") {
-    return null;
-  }
-
-  if (state.status === "error") {
-    return (
-      <p className="text-sm text-error-500">
-        Couldn&apos;t load this page&apos;s content. You can still open it
-        directly in Notion below.
-      </p>
-    );
-  }
-
-  const { content, editableBlockIds } = state;
-  // Absent (not just an empty set) whenever there's no page id to submit an
-  // edit against — NotionBlockList/NotionBlock/maybeEditableText already
-  // treat a missing editContext as "render exactly as before block editing
-  // existed", so this is never a behavior change on its own; it only
-  // matters once editableBlockIds is actually non-empty for some page,
-  // which requires an explicit NOTION_BLOCK_EDIT_ALLOWLIST entry.
-  const editContext: NotionBlockEditContext | null = pageId
-    ? {
-        pageId,
-        editableBlockIds: new Set(editableBlockIds),
-        action: updateBlockAction,
-      }
-    : null;
-
-  return (
-    <div className="space-y-3 border-b border-border pb-4">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
-        Content
-      </h3>
-      {content.blocks.length === 0 ? (
-        <p className="text-sm text-ink-muted">
-          No readable content on this page yet.
-        </p>
-      ) : (
-        <NotionBlockList blocks={content.blocks} editContext={editContext} />
-      )}
-      {content.truncated && (
-        <p className="text-xs italic text-ink-faint">
-          This page has more content than shown here — open it in Notion to see
-          everything.
-        </p>
-      )}
     </div>
   );
 }

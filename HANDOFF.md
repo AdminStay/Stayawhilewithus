@@ -6735,6 +6735,34 @@ The fix designed and tested earlier this session (Increment 115 §D) was **commi
 
 `HANDOFF.md` only (this entry). The August fix itself was committed separately (`9580011`) in this same session, before this documentation pass.
 
+## Increment 117 — 2026-09-22 (same day): General Resources / Helpful Links V1 built and locally verified (not yet committed); Ecobee serial-number discovery confirmed empty across all accessible records; standing priority reset — Ecobee is WAITING/EXTERNAL, do not block development on it
+
+### A. General Resources / Helpful Links — V1 built, local-verified, NOT YET COMMITTED
+
+Full V1 built per the requirements captured earlier this file (permissions, scope, categories, URL safety) — `ResourceLink` model (soft-deleted via `deletedAt`, matching `Property`'s convention; optional `propertyId`, `SetNull` on delete; `ResourceLinkCategory` enum: SOP/VENDOR/OPERATIONS/EMERGENCY/PROPERTY/OTHER), new `resource_links` RBAC resource (V1 read access deliberately narrow — **admin (full CRUD) + ops_manager (read-only) only**; `cleaner`/`maintenance_tech`/`front_desk`/`read_only` deliberately excluded, including a one-line carve-out in `read_only`'s normally-automatic blanket grant, pending Kenny/Michelle's decision on wider rollout), `/resources` route + nav item ("Management" section, reuses an existing `lucide-react` icon — no new dependency), full CRUD service + actions + create/edit forms + list UI (external links open `target="_blank" rel="noopener noreferrer"`, URL validation restricted to `http`/`https` only via a zod refinement — blocks `javascript:`/`data:` as a stored XSS vector).
+
+**Migration** (`20260922020000_add_resource_links`) applied and verified **against local dev only** (`staywhile_dev`) — table structure, RLS-enabled/no-policies (matching the Security P0 baseline), and FK constraints all confirmed via direct `psql` inspection. **Not applied to Production.** RBAC grants verified by direct query against local dev: `admin` has all 5 actions, `ops_manager` has read only, no other role has any grant.
+
+**Verification**: 12 new tests (service + URL-safety schema tests) pass; full website suite 1113/1116 (3 pre-existing, unrelated failures — `OwnerRezConfirmLinkPanel.test.tsx` + an untracked `_tmp-cielo-production-integration.test.ts`, neither touched); `tsc --noEmit` clean across `apps/website`/`packages/ui`/`packages/auth`/`packages/database`; one real lint error caught and fixed during the process (a component file importing a Prisma type directly from `@stayw/database`, which this repo's own module-boundary ESLint rule forbids outside `services/`/`platform/` — fixed by deriving the type from the schema's own exported tuple instead); `next build` compiles and lints clean for every new file — the build's final step still fails, but only on the same pre-existing, unrelated missing-`N8N_*`-env-var issue already flagged during the August fix, on a completely different route.
+
+**Not committed, pushed, or deployed as of this entry** — awaiting the user's explicit go-ahead on that specific action (distinct from the broader development-priority approval below).
+
+### B. Ecobee — serial-number / thermostatId discovery: exhaustive read-only search found NONE on file, confirmed
+
+The user asked whether StayWhile already has the 12-digit serial numbers/thermostatIds for the 4 confirmed intended thermostats (Casa Del Mar ×2, Robinson 2, Camingo) before asking Michelle. Read-only search across the entire repo (this file in full, the `ecobee` package, every root doc, seed/demo data, both old isolated worktrees, every other file mentioning "ecobee") found **zero** serial numbers or thermostatIds for any of the four devices, or for the excluded owner's-residence unit. **Explicitly not confused with a different device**: the only "serial number" string anywhere in this file is the **August lock replacement's** serial (`LRIPA0017Y`, Increment 114/§) — a different provider and device entirely, correctly excluded from this search's results. This is structurally expected, not a gap: no Ecobee discovery call has ever returned a non-empty result (Gate 2, Increment 114), and Production's `ECOBEE` rows are confirmed empty (same increment) — there is no code path or prior session by which either identifier could already exist here. **Conclusion: this information must come from Michelle (from the physical units or the consumer ecobee app) or ecobee's SmartBuildings team — it cannot be sourced internally.** No provider/database/code action taken for this search.
+
+### C. Standing priority reset (user directive, recorded verbatim in substance) — Ecobee is WAITING/EXTERNAL, development continues elsewhere
+
+**Ecobee status, explicit**: `WAITING FOR MICHELLE'S SERIAL-NUMBER CONFIRMATION / SMARTBUILDINGS ENROLLMENT`. Do not spend further session time on Ecobee dashboard code until Michelle responds. **Standing checkpoint sequence for when she does** (recorded so a future session picks this up correctly, in order): (1) verify her serial numbers against the 4 intended devices; (2) explicitly exclude the owner's personal "My ecobee" thermostat — never connect it, regardless of what SmartBuildings discovery later returns; (3) determine whether those specific devices are already enrolled in SmartBuildings; (4) if not, continue the SmartBuildings enrollment process (a provider-side/Kenny-Michelle action, not a StayWhile code task — see Increment 116 §C); (5) re-run Gate-2-style discovery after enrollment; (6) confirm the API returns exactly the correct StayWhile devices, no more, no less; (7) only then continue to dashboard inventory/mapping/telemetry/sync/safe-control verification, following the same Discover → Map → Enable architecture already used for August/Nest.
+
+**Standing operating rule, recorded so it persists across sessions**: whenever a workstream is blocked on Michelle, Kenny, Google, ecobee, or Resideo, do not stop development generally — move to the next client-prioritized, currently-unblocked task instead, and return to the blocked item at its own recorded checkpoint once the external party responds, without re-deriving context or losing the progress already made elsewhere.
+
+**Current work order while Ecobee waits** (user-directed, 2026-09-22): 1. **August** — Sync Now messaging fix is CLOSED/production-verified (Increment 116); still needs the separate replacement/new/deleted-lock reconciliation and stale/UNKNOWN-status question verified before the _whole_ August integration is called complete (distinct, not yet done — see the standing September 16 action items, still open). 2. **Notion — HIGH PRIORITY, move now**: continue read/search/display work AND build the dashboard→Notion editing/write-back round trip (view → edit → save → write back to Notion → re-fetch/verify → display updated value) — explicitly **not** to be treated as fully blocked on Kenny/Michelle's field-scope decision anymore; start conservatively with **admin-only** write access (permission architecture must stay capable of expanding to other roles once Kenny/Michelle approve), everyone else stays read-only, same admin-only-first pattern just used for Resources. 3. **General Resources** — finish/ship V1 (§A above; commit/deploy still needs the user's explicit go-ahead specifically). 4. **Asana** — determine exactly what authorization/credential is needed and prepare the integration, rather than leaving it indefinitely deferred. 5. **VA Schedule** — confirm whether the Google-Sheet-backed dashboard schedule is fully finished/published; close out if so. **Not current priority**: Slack (backlog, unchanged). **On hold**: Trane (unchanged, per Kenny).
+
+### Files changed this increment
+
+`HANDOFF.md` only (this entry). The Resources feature code described in §A was written and tested earlier in this same session, not by this specific edit — it remains uncommitted, as stated above.
+
 ## Increment 118 — 2026-09-22 (same day): Notion write-back API implemented for real and tested (allowlist still deliberately empty); August/Asana/VA-Schedule status researched per the standing work order — NOT YET COMMITTED
 
 ### A. Notion — real `updatePageProperty()` PATCH implementation built and tested; write path is now end-to-end proven, still fail-closed
@@ -7189,3 +7217,153 @@ Per explicit instruction, this fix is applied to the working tree only. It still
 ### Files changed this increment
 
 `apps/website/src/domains/integrations/components/NotionBlockRenderer.tsx`, `HANDOFF.md`. No other file touched. No commit yet (pending explicit go-ahead on the commit step), no push, no deploy, no Production change, no Notion write, no Ecobee/Resources/August action, no Vercel CLI, no ambient `gh`.
+
+**Post-increment update**: approved and completed later the same session — committed as `0e18fe0` (isolated, explicit-file-staged, same discipline as every prior commit), cherry-picked onto `notion-production-release` as `ad65c0c`, pre-push scope re-verified (Resources/Ecobee/August/DB migration all still absent), pushed via `git push origin notion-production-release:main` (`1e38c08..ad65c0c`, no force), confirmed at the remote via a fresh `git fetch`. User independently confirmed via the Vercel dashboard that `ad65c0c` deployed successfully and the new Search Notion UI is now visibly live in Production.
+
+## Increment 130 — 2026-09-23: Live Production Notion search discrepancy diagnosed — user searched the real Production dashboard for the exact SOP title and got 0 results, conflicting with every prior local discovery; root-caused to an environment/credential difference, NOT a code bug — no code fix made (none warranted); still no Notion write
+
+### A. Reported symptom
+
+Live, authenticated Production dashboard, real search box: query `SOP for VRBO & Direct Bookings` → `0 results for "SOP for VRBO & Direct Bookings"`. Separately noted (expected, not a bug): the Moonlit Cove listing modal shows no Edit control, because `NOTION_EDIT_ALLOWLIST` (property-level) is still correctly empty — no change made there, per explicit instruction not to enable property editing just to make that modal editable.
+
+### B. Code path traced exactly
+
+`NotionSearch.tsx`'s form → `searchNotionAction` (`apps/website/src/domains/integrations/actions.ts`) → `searchNotionContent(actor, query)` (`integrations.service.ts`) → (if `NOTION_LISTINGS_DATA_SOURCE_ID` is set) a `listDataSourceRecords()` match for property listings, always followed by `NotionClient.search({ query, maxPages: 3 })` (real `POST /v1/search`) → `isExcludedFromVaSearch()` filter → mapped to result cards. Only two environment values are consulted for general search: `NOTION_API_KEY` and (for the separate listings-match path only, irrelevant to a plain SOP page) `NOTION_LISTINGS_DATA_SOURCE_ID`.
+
+### C. Real, live re-verification against the same Notion API, right now (read-only, no write)
+
+Ran a temporary, throwaway script (written, run once, deleted immediately after — never committed) calling the exact same `NotionClient.search()` method, with the exact same `maxPages: 3` cap `searchNotionContent()` uses, against the real, live Notion API with the local `NOTION_API_KEY` — for every query the user asked about:
+
+| Query                                               | Real result count | Target found       |
+| --------------------------------------------------- | ----------------- | ------------------ |
+| `SOP`                                               | 8                 | SOP page: **yes**  |
+| `VRBO`                                              | 7                 | SOP page: **yes**  |
+| `Direct Bookings`                                   | 9                 | SOP page: **yes**  |
+| `booking`                                           | 8                 | SOP page: **yes**  |
+| `SOP for VRBO & Direct Bookings` (exact full title) | 27                | SOP page: **yes**  |
+| `StayWhile Dashboard Integration Test`              | 1                 | Test page: **yes** |
+
+Also: a direct `GET /v1/pages/{id}` on the real SOP page id (`26109800-a0fd-4848-9c7c-ff06c1f75bab`) → `200`, `archived: false`, `in_trash: false` — the page is definitely still real, live, not deleted/archived, and reachable by this token.
+
+**Every single query the user tried — including the exact literal full title with `&` — correctly finds the SOP page via the real Notion API, right now, using this exact code.** The "exact full-title query behaves differently" hypothesis is directly disproven by this result (27 results, target present).
+
+### D. Ruled out by direct code review (not just testing)
+
+- **`NOTION_SEARCH_EXCLUDED_DATABASE_IDS` exclusion**: `isExcludedFromVaSearch()` (`notion-search-exclusions.ts`) only ever excludes `sourceType: "database"` or `"database_row"` results matched against 5 specific staff/contact-directory database ids. "SOP for VRBO & Direct Bookings" is `sourceType: "page"` with `parentDatabaseId: null` — this function returns `false` unconditionally for every plain page, by construction. **Not the cause.**
+- **Query encoding**: `query` is sent inside a JSON POST body (`client.search()`), never a URL parameter — the `&` in the title poses zero URL-encoding risk in either environment. **Not the cause.**
+- **Pagination truncation**: `maxPages: 3` (150-result cap) — the SOP page ranks well within the first ~30 results for every tested query; nowhere close to being truncated. **Not the cause.**
+- **The app silently dropping a real result**: every mapped field (`id`/`title`/`url`/`lastEditedTime`/`contentType`/`region`/`snippet`) is derived directly from Notion's own response with no further filtering beyond the exclusion check already ruled out above. **Not the cause.**
+
+### E. Root cause — environment/credential discrepancy between local and Production, not a code bug
+
+No code defect was found anywhere in the search/filter/mapping path — the exact same code, called the exact same way, with the local `NOTION_API_KEY`, reliably finds the correct results for every query tested, including the literal exact title. Given that: (1) Production's general "old Notion experience" (search/listings) was already confirmed working before this session's changes, meaning Production's `NOTION_API_KEY` is valid and connected to _some_ real Notion workspace; and (2) that same live, real Notion account, queried right now with the local credential, finds the SOP page instantly and reliably — the most likely explanation is that **Production's `NOTION_API_KEY` is a different Notion internal-integration token than the one used throughout this session's local discovery**, and the "SOPs" page tree (including "SOP for VRBO & Direct Bookings") was only ever explicitly shared, in Notion's own sharing UI, with the local/discovery integration — not with whichever integration Production's token belongs to. Notion's per-integration sharing model means two different tokens for "the same conceptual StayWhile integration" would see genuinely different content, even against the same workspace, unless every relevant page was explicitly shared with both.
+
+**This cannot be independently confirmed from here** — no Vercel dashboard access, no ability to read or compare the actual Production `NOTION_API_KEY` value (and it never should be pasted into this session either). This is recorded as the leading, evidence-based hypothesis, not a certainty.
+
+### F. No code fix made — none is warranted
+
+Per the investigation above, this is a configuration/Notion-sharing issue, not a code bug — writing a "fix" here would mean guessing at and possibly masking a real environment misconfiguration rather than actually resolving it. **Recommended verification/remediation, for the user (no Claude action possible — requires either Vercel dashboard access or Notion's own sharing UI, neither of which Claude can safely touch)**:
+
+1. Compare the exact `NOTION_API_KEY` value in Vercel's Production environment variables against the value in the local `.env.local` already confirmed working all session — do this via the Vercel dashboard directly, never by pasting either value into this chat.
+2. If they differ: either update Vercel's Production `NOTION_API_KEY` to the working value (if that's the intended integration going forward), or — if Production is meant to use its own separate integration token — open the "SOPs" page in Notion, use "•••" → "Connections" → add the Production integration as a connection (this also covers its child pages, including "SOP for VRBO & Direct Bookings", by Notion's own inheritance rule), then re-test the same live search.
+3. Re-run the exact same live search (`SOP for VRBO & Direct Bookings`) on the Production dashboard after either fix — expect a real match this time.
+
+### G. Scope discipline this increment
+
+Read-only investigation only: real `search()`/`GET` calls (same as every prior discovery this session), one temporary script written and deleted immediately after use, never committed. `NOTION_BLOCK_EDIT_ALLOWLIST` untouched — still exactly the one approved test entry (page `3e26058d…`, block `…c285c035e832`). `NOTION_EDIT_ALLOWLIST` (property-level) untouched — still empty; Moonlit Cove's listing modal was NOT made editable. No Notion write, no Resources/Ecobee/August action, no Vercel CLI, no ambient `gh`.
+
+### Files changed this increment
+
+`HANDOFF.md` only. No code file changed — no fix was applicable. No commit, no push, no deploy, no Production change, no Notion write.
+
+## Increment 131 — 2026-09-23: Requirement expanded from "one named SOP" to "the whole operational SOP library, browsable without knowing an exact title" — real structure discovered, designed, and implemented; `child_page` added as a new supported/rendered block type; built and tested locally, NOT yet committed, per this session's own "propose then commit after review" pattern; Production access question unchanged (still needs the user's manual check)
+
+### A. Production access — unchanged from Increment 130
+
+No new diagnostic possible beyond what Increment 130 already established (real code confirmed correct; real local re-verification confirmed the SOP is findable; the leading hypothesis remains a different `NOTION_API_KEY`/sharing scope in Production). Still waiting on the user to compare the Vercel Production `NOTION_API_KEY` against the local one, or to confirm/share the Notion integration used in Production has access to the "SOPs" hierarchy. No further code action is possible here without that information.
+
+### B. Real discovery of the "SOPs" root page's full top-level structure
+
+Ran a temporary, read-only script (written, run once, deleted immediately after — never committed) against the real, live "SOPs" page (id `1f06058d-b989-8036-8068-c8b9dca29dcf`). Confirmed: **22 top-level blocks — 12 `toggle`, 8 `child_page`, 1 `paragraph`, 1 `link_preview`.** Critically: the structure is genuinely mixed and has real, non-trivial overlap — 7 SOPs (Internet, Damage Claim, Left Items, VRBO & Direct Bookings, house-rules violation, SPs to properties, Waive Pet fee) exist as **both** a `toggle` (content inline) **and** a separate `child_page` (its own linked page); 5 (QC Checklist, Recycling, TV Channels, WIFI issues, vetting last-minute bookings) exist **only** as a `toggle`; 1 (RULES AND POLICIES) exists **only** as a `child_page`. **Deliberate design decision**: render every top-level item exactly as Notion returns it, in Notion's own order, with NO fuzzy title-matching to merge the toggle/child_page pairs into one entry — matching this codebase's standing "never fuzzy-map" principle (already applied to property/device mapping elsewhere). This is the real structure; presenting it any other way would mean guessing which representation is authoritative.
+
+Also confirmed the real raw shape of a `child_page` block: `{ ...standard block fields, child_page: { title: string } }` — a genuinely separate page (its real content is NOT included here, only its title; the content must be fetched separately via `getPageContent(id)`, using this block's own `id`, exactly like opening any other page-shaped search result).
+
+### C. What was built
+
+1. **`child_page` promoted from "unsupported" to a real, rendered, first-class block type** — `packages/integrations/src/notion/types.ts` (new `NotionChildPageContentBlock { type: "child_page"; title: string }`, added to `NotionSupportedBlockType` and the `NotionContentBlock` union), `client.ts` (`mapRawBlock()` now maps `child_page` blocks, extracting the real plain-string title — "(untitled page)" only if genuinely absent — and deliberately never recursing into its own `children`, since a child_page's real content lives in the separate linked page, not inline). 2 new tests in `client.test.ts` (real mapping, missing-title fallback) — 76 → 78.
+2. **`NotionBlockRenderer.tsx`** — new `child_page` case: renders as a real clickable button (title + a file icon) when an `onOpenChildPage` handler is supplied, threaded through `NotionBlockList`/`NestedChildren`/`NotionBlock` the same way `editContext` already is; renders as a plain, non-clickable title (never a dead click target) when no handler is given, e.g. inside a generic search-result preview that has no "open a nested page" context wired up. 3 new tests.
+3. **Shared `NotionFetchedPageContent` component extracted** (was a private `PageContentBody` duplicated only in `NotionSearch.tsx`) — now lives in `NotionBlockRenderer.tsx` and is reused by both `NotionSearch.tsx` (unchanged behavior, confirmed via its own still-passing test suite) and the new SOP library view below. Same loading/error/truncated/edit-context handling either way, now written once.
+4. **`NOTION_SOPS_ROOT_PAGE_ID`** (new, `config/notion-sop-library.ts`) — the real, confirmed "SOPs" page id, documented the same way `NOTION_SEARCH_EXCLUDED_DATABASE_IDS` and other stable discovered Notion object ids already are in this codebase: a reviewed constant, never a hard-coded list of SOP _titles_ (the actual SOP list is read fresh from Notion on every page load).
+5. **`NotionSopLibrary.tsx`** (new component) — the real "browse the SOP library" experience: renders the SOPs root page's own real block tree via the existing `NotionBlockList` (toggle-based SOPs render already-expanded inline, zero extra fetch — Notion's own toggle content was already included in the one root read); a `child_page` click triggers `fetchNotionPageContentAction(pageId)` (the exact same server action already used for search results — same sanitized-error/conflict/verification/audit guarantees, since it's literally the same code path) and displays the result in the existing `NotionDetailView` dialog, with "Open in Notion" always available. 8 new tests.
+6. **`/notion` page.tsx wiring** — a new "SOPs" section, server-fetched via the existing `getNotionPageContent(actor, NOTION_SOPS_ROOT_PAGE_ID)` and `listEditableNotionBlockIds(actor, NOTION_SOPS_ROOT_PAGE_ID)` (both already-existing, already-tested functions — no new service function needed), passed down as props exactly like `listNotionListings()` already is.
+
+### D. Explicit requirement checklist
+
+- **Clear SOPs section**: yes — a dedicated "SOPs" section on `/notion`, separate from general Search.
+- **Browse without knowing an exact title**: yes — the whole real library renders on page load.
+- **Search still works across the library**: yes, unchanged — general `search()` already finds every `child_page`-shaped SOP by title/content (Notion indexes pages, not blocks); genuinely toggle-only SOPs (5 of them) are **not** independently searchable via Notion's `/search` (Notion never indexes a toggle as its own searchable object — only the containing page) — this is a real, inherent Notion API limitation, not a bug, and is exactly why the browse view (§C.5) is necessary, not merely a nice-to-have: it's the only way those 5 SOPs are discoverable at all without already knowing to look inside "SOPs".
+- **Both child-page and toggle/block-based SOPs discoverable**: yes, both render.
+- **Selecting an SOP shows real content inside StayWhile**: yes — toggle SOPs inline immediately, child_page SOPs on click (real fetch, same as search).
+- **Headings/paragraphs/callouts/lists/toggles/tables render appropriately**: yes, unchanged — reuses the exact same `NotionBlockList` rendering already built and tested for the general read/display increment.
+- **Open in Notion remains available**: yes, in every dialog.
+- **General SOPs not forced to a property**: yes — no property association exists anywhere in this design.
+- **Real Notion remains the source of truth / no duplication into Resources**: yes — every read is live, on demand; nothing is copied into `ResourceLink` or any other StayWhile table.
+- **Editing architecture preserved, no real SOP block write-enabled**: yes — `NOTION_BLOCK_EDIT_ALLOWLIST` untouched, still exactly the one approved test entry (confirmed via direct file read); every SOP's blocks render with `editableBlockIds` derived from that same allowlist, so nothing here is editable by construction, not by omission.
+
+### E. Verification
+
+- `packages/integrations`: `tsc --noEmit` clean; `vitest run` — **266/266 pass** (+2 from Increment 129's 264, all in `client.test.ts`).
+- `apps/website`: `tsc --noEmit` clean; `vitest run src/domains/integrations` — **327/327 pass** (+11 from Increment 130's 316: 3 in `NotionBlockRenderer.test.tsx`, 8 in the new `NotionSopLibrary.test.tsx`).
+- `pnpm exec eslint` run explicitly, individually, on every touched/new file — **zero errors** (one pre-existing, unrelated import-order warning in `NotionBlockRenderer.tsx`, unchanged from before this increment) — checked deliberately this time, given Increment 129's real lesson that an ESLint error (not just a `tsc` pass) is what actually breaks `next build`.
+- **The real root `pnpm run build` (`turbo run build`) was run again, from the main repo directly, and succeeded — exit code 0, `/notion` route built successfully at 7.56 kB.** (The same pre-existing, unrelated local `.env.local` N8N-var gap from Increment 129 was worked around via inline shell env vars for this one command only — nothing written to any `.env` file.)
+
+### F. Scope discipline
+
+`git status` reconfirmed: only Notion-domain files touched (`page.tsx`, `NotionBlockRenderer.{tsx,test.tsx}`, `NotionSearch.tsx`, `client.{ts,test.ts}`, `types.ts`, plus 3 new files: `config/notion-sop-library.ts`, `NotionSopLibrary.tsx`, `NotionSopLibrary.test.tsx`). Ecobee/Resources/August/database all remain exactly as pre-existing-dirty as before — confirmed unchanged. `NOTION_BLOCK_EDIT_ALLOWLIST` unchanged (still the one test entry). No Notion write, no Vercel CLI, no ambient `gh`.
+
+### Files changed this increment
+
+New: `apps/website/src/domains/integrations/config/notion-sop-library.ts`, `apps/website/src/domains/integrations/components/NotionSopLibrary.tsx` (+`.test.ts`). Modified: `packages/integrations/src/notion/{types.ts,client.ts,client.test.ts}`, `apps/website/app/(dashboard)/notion/page.tsx`, `apps/website/src/domains/integrations/components/{NotionBlockRenderer.tsx,NotionBlockRenderer.test.tsx,NotionSearch.tsx}`, `HANDOFF.md`. No other file touched. **Not yet committed** — stopping here for review, same as every other implementation pass this session, before staging/committing. No push, no deploy, no Production change, no Notion write, no Ecobee/Resources/August action, no Vercel CLI, no ambient `gh`.
+
+## Increment 132 — 2026-09-23: Final UX review before commit — investigated whether the 7 toggle/child_page duplicate pairs have a deterministic link (none found; both kept, per explicit "no fuzzy matching" instruction); replaced the v1 SOP library view (which inline-expanded every toggle and dumped all 22 blocks at once) with a clean, filterable, flat library of real SOP titles; STILL NOT COMMITTED, per explicit instruction
+
+### A. Deterministic-duplicate investigation (read-only, temporary script, deleted after use)
+
+Checked the 3 most representative real toggle/child_page pairs (VRBO & Direct Bookings, Damage Claim, Internet) for any exact, structural link between the toggle and its same-titled child_page, specifically:
+
+- The toggle's own rich-text runs, for an `href` or `mention` pointing at the child_page's real id.
+- Every block inside the toggle's `children`, for a `link_to_page` block type or any `href`/`mention` referencing the child_page's real id.
+- The child_page's own real `parent` field, to see whether it's nested under the toggle (vs. directly under the SOPs root, same as every other top-level `child_page`).
+
+**Result: no deterministic link exists, in any of the 3 pairs, by any of the 3 signals.** The toggle's nested content is genuine, independent operational material (numbered steps, external links to real Airbnb/VRBO help articles, callouts, images) — not a stub or a pointer to the child_page. The child_page's `parent` is always the SOPs root directly, identical to every other top-level `child_page`, never nested under its same-titled toggle. Per the explicit instruction ("if there is no deterministic relationship, say so and keep both rather than guessing"), **both entries are kept, unmerged, with no title-based matching of any kind.** This matches the codebase's standing never-fuzzy-match principle already applied elsewhere (property/device mapping).
+
+### B. SOP library UX redesign
+
+The v1 view (Increment 131) rendered the SOPs root page's real block tree as-is via the existing `NotionBlockList` — all 22 blocks at once, every toggle inline-expanded by default. Per explicit review feedback, this reads as Notion's raw structure, not an operational library, and risks surfacing the same procedure twice (toggle + child_page) as visible clutter. `NotionSopLibrary.tsx` was redesigned:
+
+1. **`extractSopEntries()`** — filters the root page's own top-level blocks down to exactly the real `toggle` and `child_page` blocks (a structural filter by Notion's own block _type_, never a title/content heuristic), producing one `{ id, title, kind }` entry per real SOP. A stray `paragraph` or `link_preview` on the same page is excluded by construction, not by a name-based exclusion list.
+2. **A `Search/filter SOPs…` input** (client-side, plain substring match over the already-extracted entry titles) renders above a flat, wrapped row of pill-style buttons — one per real SOP title, in Notion's own order. This is explicitly a **dashboard filter over already-fetched data, not a second provider search call** — Notion's own `/search` cannot independently index a `toggle` block at all, so this filter is the only way the 5 toggle-only SOPs become findable by keyword.
+3. **Selecting an entry** opens the existing `NotionDetailView` dialog for either kind:
+   - A `toggle` entry's content was already included in the one root-page read (`children` on that block) — synthesized locally into the same `{status:"success", ...}` shape the dialog already expects, with **no fetch and no loading state**.
+   - A `child_page` entry triggers the real `fetchNotionPageContentAction(pageId)` — the exact same server action, sanitized-error handling, and audit path already used by general search — with a real loading state while it's in flight.
+   - Both paths compute the correct `editPageId` for any future edit submission (the SOPs root id for a toggle's nested block; the child_page's own id otherwise) and the correct "Open in Notion" URL (a block-anchor deep link `#<blockId>` for a toggle; a bare page URL for a child_page) — both real, documented Notion URL conventions, not guessed.
+4. Fixed a `tsc` error surfaced during the rewrite: `Extract<NotionContentBlock, {type:"toggle"}>` resolved to `never` (the union's `type` field isn't narrowed per-variant), so `findToggleBlock()`'s return type was changed to plain `NotionTextContentBlock`, relying on control-flow narrowing (`if (block.type === "toggle")`) inside the function body instead.
+5. Rewrote `NotionSopLibrary.test.tsx` from scratch to match (the v1 tests asserted toggle content rendered inline with zero interaction, which is no longer true) — 11 tests: both entry kinds listed as clickable buttons; a stray non-SOP block excluded; no content visible before selection; a toggle opens instantly with no fetch call; a child_page fetches and shows a real loading state, then content, then "Open in Notion"; the filter matches case-insensitively including a toggle-only SOP; a no-match filter state; a real duplicate pair (same title, toggle + child_page) renders as 2 separate buttons, never merged/dropped; an empty-library state; no Edit affordance appears by default.
+6. Also fixed one small pre-existing, unrelated ESLint **warning** (not an error) in `NotionBlockRenderer.tsx` — an `import/order` violation from Increment 131's own new imports — by reordering two import lines. Zero behavior change.
+
+### C. What did NOT change
+
+`page.tsx`'s wiring into `NotionSopLibrary` (`rootPageId`, `library`, `rootEditableBlockIds`, `fetchContentAction`, `updateBlockAction`) — unchanged, since the redesign was entirely internal to the component. `NOTION_BLOCK_EDIT_ALLOWLIST` — unchanged, still exactly the one approved test entry. No real SOP block is write-enabled. No live Notion write.
+
+### D. Verification
+
+- `apps/website`: `tsc --noEmit` clean. `vitest run src/domains/integrations` — **330/330 pass** (29 files; +3 net vs. Increment 131's 327 — old 8-test `NotionSopLibrary.test.tsx` replaced by the new 11-test version).
+- `packages/integrations`: `vitest run src/notion` — **81/81 pass**, unchanged from Increment 131 (this increment touched no package code).
+- `pnpm exec eslint` run explicitly on every touched/new file — **zero errors, zero warnings** (the one pre-existing `import/order` warning noted in §B.6 was fixed, not just left).
+- **The real root `pnpm run build` was run again and succeeded — exit 0, `/notion` route built at 7.87 kB.** The same pre-existing, unrelated local `apps/website/.env.local` gap first noted in Increment 131 was investigated further this time: the file's real `N8N_BASE_URL` line has an unterminated quote (`"https://adminstay.app.n8n.cloud/` with no closing `"`), which is local, gitignored, not part of this session's changes, and was **not edited** — worked around for this one build invocation only via inline shell env var overrides (never written to disk), which let the build proceed all the way through and confirmed every route, including `/notion`, compiles cleanly.
+- **No live Notion write performed or attempted.** `NOTION_BLOCK_EDIT_ALLOWLIST` reconfirmed via direct file read — still exactly the one entry from Increment 127 (test page, test block).
+- Production `NOTION_API_KEY`/sharing-scope question (Increment 130) remains **unchanged and unresolved** — this increment's UX/dedup work does not touch or prove anything about Production access; still needs the user's own manual check of the Vercel env var / the Notion integration's connection to the "SOPs" page.
+
+### E. Files changed this increment (still all uncommitted)
+
+Modified: `apps/website/src/domains/integrations/components/{NotionSopLibrary.tsx,NotionBlockRenderer.tsx}`, `HANDOFF.md`. Rewritten: `apps/website/src/domains/integrations/components/NotionSopLibrary.test.tsx`. No other file touched — `git status` reconfirmed the same Notion-only scope as Increment 131 plus these files; Ecobee/Resources/August/database remain exactly as pre-existing-dirty as before. **Not yet committed or pushed**, per explicit instruction.

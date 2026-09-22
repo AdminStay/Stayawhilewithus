@@ -4,15 +4,17 @@ import type {
   NotionRichTextRun,
   NotionTextContentBlock,
 } from "@stayw/integrations/notion";
+import { FileText } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type {
+  NotionPageContentActionState,
   UpdateNotionBlockActionInput,
   UpdateNotionBlockActionState,
 } from "../actions";
 
-import { isSafeHttpUrl } from "./notion-link.utils";
 import { NotionBlockEditor } from "./NotionBlockEditor";
+import { isSafeHttpUrl } from "./notion-link.utils";
 
 /**
  * Present only when this actor is authorized to edit at least one block on
@@ -158,14 +160,20 @@ function groupBlocks(blocks: NotionContentBlock[]): BlockGroup[] {
 function NestedChildren({
   blocks,
   editContext,
+  onOpenChildPage,
 }: {
   blocks: NotionContentBlock[];
   editContext: NotionBlockEditContext | null | undefined;
+  onOpenChildPage: ((pageId: string, title: string) => void) | undefined;
 }) {
   if (blocks.length === 0) return null;
   return (
     <div className="mt-1.5 pl-4">
-      <NotionBlockList blocks={blocks} editContext={editContext} />
+      <NotionBlockList
+        blocks={blocks}
+        editContext={editContext}
+        onOpenChildPage={onOpenChildPage}
+      />
     </div>
   );
 }
@@ -183,9 +191,11 @@ function NestedChildren({
 function NotionBlock({
   block,
   editContext,
+  onOpenChildPage,
 }: {
   block: NotionContentBlock;
   editContext: NotionBlockEditContext | null | undefined;
+  onOpenChildPage: ((pageId: string, title: string) => void) | undefined;
 }) {
   switch (block.type) {
     case "heading_1":
@@ -205,7 +215,11 @@ function NotionBlock({
       return maybeEditableText(block, editContext, (content) => (
         <div className="text-sm text-ink">
           <p>{content}</p>
-          <NestedChildren blocks={block.children} editContext={editContext} />
+          <NestedChildren
+            blocks={block.children}
+            editContext={editContext}
+            onOpenChildPage={onOpenChildPage}
+          />
         </div>
       ));
     case "callout":
@@ -218,7 +232,11 @@ function NotionBlock({
           )}
           <div className="min-w-0 flex-1">
             {content}
-            <NestedChildren blocks={block.children} editContext={editContext} />
+            <NestedChildren
+              blocks={block.children}
+              editContext={editContext}
+              onOpenChildPage={onOpenChildPage}
+            />
           </div>
         </div>
       ));
@@ -233,8 +251,41 @@ function NotionBlock({
           <summary className="cursor-pointer text-sm font-medium text-ink">
             <RichText runs={block.text} />
           </summary>
-          <NestedChildren blocks={block.children} editContext={editContext} />
+          <NestedChildren
+            blocks={block.children}
+            editContext={editContext}
+            onOpenChildPage={onOpenChildPage}
+          />
         </details>
+      );
+    case "child_page":
+      // A link to a genuinely separate Notion page — its real content is
+      // fetched on demand (via onOpenChildPage, the same
+      // fetchNotionPageContentAction()-backed flow already used for search
+      // results), never eagerly. When no handler is supplied (e.g. this
+      // block appears inside a plain search-result preview with no "open a
+      // nested page" context wired up), it renders as a plain, non-clickable
+      // title instead of a dead click target.
+      return onOpenChildPage ? (
+        <button
+          type="button"
+          onClick={() => onOpenChildPage(block.id, block.title)}
+          className="flex w-full items-center gap-2 rounded-lg border border-border/70 px-3 py-2 text-left text-sm font-medium text-ink transition-colors hover:bg-surface-muted"
+        >
+          <FileText
+            className="h-4 w-4 shrink-0 text-ink-faint"
+            aria-hidden="true"
+          />
+          <span className="min-w-0 flex-1 truncate">{block.title}</span>
+        </button>
+      ) : (
+        <div className="flex items-center gap-2 rounded-lg border border-border/70 px-3 py-2 text-sm font-medium text-ink">
+          <FileText
+            className="h-4 w-4 shrink-0 text-ink-faint"
+            aria-hidden="true"
+          />
+          <span className="min-w-0 flex-1 truncate">{block.title}</span>
+        </div>
       );
     case "table":
       if (block.rows.length === 0) return null;
@@ -271,7 +322,11 @@ function NotionBlock({
         <ul className="list-disc space-y-1 pl-5 text-sm text-ink">
           <li>
             <RichText runs={block.text} />
-            <NestedChildren blocks={block.children} editContext={editContext} />
+            <NestedChildren
+              blocks={block.children}
+              editContext={editContext}
+              onOpenChildPage={onOpenChildPage}
+            />
           </li>
         </ul>
       );
@@ -280,7 +335,11 @@ function NotionBlock({
         <ol className="list-decimal space-y-1 pl-5 text-sm text-ink">
           <li>
             <RichText runs={block.text} />
-            <NestedChildren blocks={block.children} editContext={editContext} />
+            <NestedChildren
+              blocks={block.children}
+              editContext={editContext}
+              onOpenChildPage={onOpenChildPage}
+            />
           </li>
         </ol>
       );
@@ -309,10 +368,13 @@ function NotionBlock({
 export function NotionBlockList({
   blocks,
   editContext,
+  onOpenChildPage,
 }: {
   blocks: NotionContentBlock[];
   /** Absent (or with an empty editableBlockIds) on every real render today — see NotionBlockEditContext's own doc comment. */
   editContext?: NotionBlockEditContext | null;
+  /** Called with a `child_page` block's real id/title when clicked — the caller is expected to fetch that page's content on demand (e.g. via fetchNotionPageContentAction) and display it, the same way a search result is opened. Absent means every `child_page` block renders as a plain, non-clickable title instead of a dead click target. */
+  onOpenChildPage?: (pageId: string, title: string) => void;
 }) {
   if (blocks.length === 0) return null;
   const groups = groupBlocks(blocks);
@@ -332,6 +394,7 @@ export function NotionBlockList({
                   <NestedChildren
                     blocks={item.children}
                     editContext={editContext}
+                    onOpenChildPage={onOpenChildPage}
                   />
                 </li>
               ))}
@@ -350,6 +413,7 @@ export function NotionBlockList({
                   <NestedChildren
                     blocks={item.children}
                     editContext={editContext}
+                    onOpenChildPage={onOpenChildPage}
                   />
                 </li>
               ))}
@@ -361,9 +425,103 @@ export function NotionBlockList({
             key={group.block.id}
             block={group.block}
             editContext={editContext}
+            onOpenChildPage={onOpenChildPage}
           />
         );
       })}
+    </div>
+  );
+}
+
+/** Client-side loading/idle states added on top of whatever fetchNotionPageContentAction() itself returns — "idle" (nothing opened yet) and "loading" (the fetch is in flight) never come from the server, only from the caller's own local state before/during that call. */
+export type NotionFetchedPageContentState =
+  { status: "idle" } | { status: "loading" } | NotionPageContentActionState;
+
+/**
+ * The shared "one Notion page's fetched content, rendered with its loading/
+ * error/truncated states" body — used both by NotionSearch.tsx (opening a
+ * search result) and NotionSopLibrary.tsx (opening a `child_page` block
+ * from the SOP library tree). A loading indicator while the fetch is in
+ * flight, a safe generic error message on a real failure (never the raw
+ * error — see fetchNotionPageContentAction's own doc comment), the real
+ * rendered blocks on success, and an honest "not everything shown" note
+ * when the read was cut off by getPageContent()'s own safety caps. Renders
+ * nothing before a page has been opened (`idle`) or when Notion isn't
+ * configured (`not_configured` — the caller's own connection-status UI
+ * already covers that case elsewhere).
+ */
+export function NotionFetchedPageContent({
+  state,
+  pageId,
+  updateBlockAction,
+  onOpenChildPage,
+}: {
+  state: NotionFetchedPageContentState;
+  /** The real Notion page id this content was fetched from — used to build the block-edit context (never rendered). `null` disables editing entirely, regardless of `state`. */
+  pageId: string | null;
+  updateBlockAction: (
+    prevState: UpdateNotionBlockActionState,
+    input: UpdateNotionBlockActionInput,
+  ) => Promise<UpdateNotionBlockActionState>;
+  /** Forwarded to NotionBlockList — lets a `child_page` block nested inside this fetched content (e.g. a SOP page that itself links to another page) open the same way. */
+  onOpenChildPage?: (pageId: string, title: string) => void;
+}) {
+  if (state.status === "idle") return null;
+
+  if (state.status === "loading") {
+    return <p className="text-sm text-ink-muted">Loading content…</p>;
+  }
+
+  if (state.status === "not_configured") {
+    return null;
+  }
+
+  if (state.status === "error") {
+    return (
+      <p className="text-sm text-error-500">
+        Couldn&apos;t load this page&apos;s content. You can still open it
+        directly in Notion below.
+      </p>
+    );
+  }
+
+  const { content, editableBlockIds } = state;
+  // Absent (not just an empty set) whenever there's no page id to submit an
+  // edit against — NotionBlockList/NotionBlock/maybeEditableText already
+  // treat a missing editContext as "render exactly as before block editing
+  // existed", so this is never a behavior change on its own; it only
+  // matters once editableBlockIds is actually non-empty for some page,
+  // which requires an explicit NOTION_BLOCK_EDIT_ALLOWLIST entry.
+  const editContext: NotionBlockEditContext | null = pageId
+    ? {
+        pageId,
+        editableBlockIds: new Set(editableBlockIds),
+        action: updateBlockAction,
+      }
+    : null;
+
+  return (
+    <div className="space-y-3 border-b border-border pb-4">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
+        Content
+      </h3>
+      {content.blocks.length === 0 ? (
+        <p className="text-sm text-ink-muted">
+          No readable content on this page yet.
+        </p>
+      ) : (
+        <NotionBlockList
+          blocks={content.blocks}
+          editContext={editContext}
+          onOpenChildPage={onOpenChildPage}
+        />
+      )}
+      {content.truncated && (
+        <p className="text-xs italic text-ink-faint">
+          This page has more content than shown here — open it in Notion to see
+          everything.
+        </p>
+      )}
     </div>
   );
 }

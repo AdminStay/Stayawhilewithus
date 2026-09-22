@@ -31,6 +31,7 @@ import type {
 
 export type {
   NotionCalloutContentBlock,
+  NotionChildPageContentBlock,
   NotionEditableBlockType,
   NotionEditableFieldType,
   NotionHighlight,
@@ -752,6 +753,22 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
       return calloutBlock;
     }
 
+    if (type === "child_page") {
+      // A link to a genuinely separate page — its own real content is never
+      // included here (Notion's API only ever returns the title on this
+      // block type) and is deliberately never fetched eagerly: the caller
+      // fetches it on demand via getPageContent(id), exactly like opening
+      // any other page-shaped search result. No recursion into `children`
+      // even if has_children is true — that would be the linked page's own
+      // content, out of scope for this block.
+      return {
+        id,
+        lastEditedTime,
+        type: "child_page",
+        title: typeof body.title === "string" ? body.title : "(untitled page)",
+      };
+    }
+
     if (TEXT_BLOCK_TYPES.has(type as NotionTextContentBlock["type"])) {
       const textBlock: NotionTextContentBlock = {
         id,
@@ -894,9 +911,7 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
    * block's current real type/text/lastEditedTime, as cheaply and directly
    * as possible, immediately after a PATCH. Never writes anything.
    */
-  async getBlockContent(
-    blockId: string,
-  ): Promise<{
+  async getBlockContent(blockId: string): Promise<{
     type: string;
     text: NotionRichTextRun[];
     lastEditedTime: string;

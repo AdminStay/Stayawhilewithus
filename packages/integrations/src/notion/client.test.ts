@@ -1394,6 +1394,53 @@ describe("NotionClient", () => {
       });
     });
 
+    it("maps a child_page block to its own type with the real plain-string title, never fetching its own children (that content lives in the separate linked page, not here)", async () => {
+      mockRequest.mockResolvedValueOnce(
+        page([
+          {
+            id: "child-page-1",
+            type: "child_page",
+            has_children: true,
+            last_edited_time: "2026-09-23T00:00:00.000Z",
+            child_page: { title: "SOP for Internet" },
+          },
+        ]),
+      );
+      const client = new NotionClient(credentials);
+
+      const { blocks } = await client.getPageContent("page-1");
+
+      expect(blocks).toEqual([
+        {
+          id: "child-page-1",
+          lastEditedTime: "2026-09-23T00:00:00.000Z",
+          type: "child_page",
+          title: "SOP for Internet",
+        },
+      ]);
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to a generic label instead of inventing a title when a child_page block's title is missing", async () => {
+      mockRequest.mockResolvedValueOnce(
+        page([
+          {
+            id: "child-page-1",
+            type: "child_page",
+            has_children: false,
+            child_page: {},
+          },
+        ]),
+      );
+      const client = new NotionClient(credentials);
+
+      const { blocks } = await client.getPageContent("page-1");
+
+      expect(blocks[0]).toEqual(
+        expect.objectContaining({ title: "(untitled page)" }),
+      );
+    });
+
     it("maps an unsupported block type to a safe fallback and never fetches its children even if has_children is true", async () => {
       mockRequest.mockResolvedValueOnce(
         page([{ id: "img-1", type: "image", has_children: true, image: {} }]),

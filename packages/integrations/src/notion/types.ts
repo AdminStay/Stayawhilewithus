@@ -205,7 +205,8 @@ export type NotionSupportedBlockType =
   | "numbered_list_item"
   | "callout"
   | "toggle"
-  | "table";
+  | "table"
+  | "child_page";
 
 interface NotionContentBlockBase {
   id: string;
@@ -278,10 +279,27 @@ export interface NotionTableContentBlock extends NotionContentBlockBase {
   rows: NotionTableRow[];
 }
 
+/**
+ * A `child_page` block — the SOP library's real structure includes several
+ * of these directly under the "SOPs" root page (see HANDOFF.md's SOP
+ * library increment): a link to a genuinely separate Notion page, whose own
+ * real body content is NOT included in this block (Notion's API only ever
+ * returns the child page's title here) — reading it requires a SEPARATE
+ * `getPageContent(id)` call using this block's own `id`, exactly the same
+ * as opening any other page-shaped search result. `title` is Notion's own
+ * plain string for this block type (never rich text here, confirmed via
+ * real discovery) — never fabricated, "(untitled page)" only if genuinely
+ * absent.
+ */
+export interface NotionChildPageContentBlock extends NotionContentBlockBase {
+  type: "child_page";
+  title: string;
+}
+
 /** A block type outside NotionSupportedBlockType (or a table row's own container, which is only ever consumed as part of its parent table) — rendered as a safe, explicit fallback, never silently dropped and never guessed at as some other type. */
 export interface NotionUnsupportedContentBlock extends NotionContentBlockBase {
   type: "unsupported";
-  /** The real Notion block type this V1 doesn't yet render (e.g. "image", "video", "child_page") — shown only as a small descriptive label, never raw block content. */
+  /** The real Notion block type this V1 doesn't yet render (e.g. "image", "video", "link_preview") — shown only as a small descriptive label, never raw block content. */
   originalType: string;
 }
 
@@ -289,6 +307,7 @@ export type NotionContentBlock =
   | NotionTextContentBlock
   | NotionCalloutContentBlock
   | NotionTableContentBlock
+  | NotionChildPageContentBlock
   | NotionUnsupportedContentBlock;
 
 /**

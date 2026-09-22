@@ -10,15 +10,19 @@ import {
 import { NotionListingsSearch } from "@/domains/integrations/components/NotionListingsSearch";
 import { NotionRecentActivity } from "@/domains/integrations/components/NotionRecentActivity";
 import { NotionSearch } from "@/domains/integrations/components/NotionSearch";
+import { NotionSopLibrary } from "@/domains/integrations/components/NotionSopLibrary";
+import { NOTION_SOPS_ROOT_PAGE_ID } from "@/domains/integrations/config/notion-sop-library";
 import {
   buildNotionListingClientDto,
   getConfirmedNotionPropertyAssociations,
   getNotionIntegrationConfigStatus,
+  getNotionPageContent,
   listNotionListings,
   type IntegrationHighlights,
   type NotionListingWithVisibility,
 } from "@/domains/integrations/services/integrations.service";
 import { listRecentNotionActivity } from "@/domains/integrations/services/notion-activity.service";
+import { listEditableNotionBlockIds } from "@/domains/integrations/services/notion-block-edit.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
 export default async function NotionPage() {
@@ -105,6 +109,22 @@ export default async function NotionPage() {
     ? await listRecentNotionActivity(actor)
     : null;
 
+  // The real "browse the whole SOP library" read — a direct fetch of the
+  // "SOPs" root page's own content, server-side, same convention as
+  // listNotionListings() above. Never a hard-coded SOP list: whatever
+  // Notion's real structure is right now is what renders. `editableBlockIds`
+  // reuses the exact same allowlist-derived mechanism as opening a search
+  // result — always [] today except for whatever page the one approved
+  // controlled-test entry actually points at (never this root page).
+  const sopLibraryResult = await getNotionPageContent(
+    actor,
+    NOTION_SOPS_ROOT_PAGE_ID,
+  );
+  const sopLibraryEditableBlockIds = await listEditableNotionBlockIds(
+    actor,
+    NOTION_SOPS_ROOT_PAGE_ID,
+  );
+
   return (
     <div>
       <PageHeader
@@ -119,6 +139,20 @@ export default async function NotionPage() {
             fetchContentAction={fetchNotionPageContentAction}
             updateBlockAction={updateNotionBlockContentAction}
           />
+        </div>
+        <div>
+          <SectionHeader title="SOPs" size="lg" />
+          {sopLibraryResult.configured && sopLibraryResult.ok ? (
+            <NotionSopLibrary
+              rootPageId={NOTION_SOPS_ROOT_PAGE_ID}
+              library={sopLibraryResult.content}
+              rootEditableBlockIds={sopLibraryEditableBlockIds}
+              fetchContentAction={fetchNotionPageContentAction}
+              updateBlockAction={updateNotionBlockContentAction}
+            />
+          ) : sopLibraryResult.configured ? (
+            <p className="text-sm text-error-500">{sopLibraryResult.error}</p>
+          ) : null}
         </div>
         <div>
           <SectionHeader title="Property Listings" size="lg" />

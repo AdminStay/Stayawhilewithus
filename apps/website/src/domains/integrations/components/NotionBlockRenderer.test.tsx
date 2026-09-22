@@ -322,4 +322,64 @@ describe("NotionBlockList", () => {
       expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
     });
   });
+
+  describe("child_page", () => {
+    const childPageBlock: NotionContentBlock = {
+      id: "child-1",
+      lastEditedTime: LAST_EDITED,
+      type: "child_page",
+      title: "SOP for Internet",
+    };
+
+    it("renders a clickable button with the real title when onOpenChildPage is provided, and calls it with the block's id/title on click", () => {
+      const onOpenChildPage = vi.fn();
+      render(
+        <NotionBlockList
+          blocks={[childPageBlock]}
+          onOpenChildPage={onOpenChildPage}
+        />,
+      );
+
+      const button = screen.getByRole("button", { name: "SOP for Internet" });
+      fireEvent.click(button);
+
+      expect(onOpenChildPage).toHaveBeenCalledWith(
+        "child-1",
+        "SOP for Internet",
+      );
+    });
+
+    it("renders as a plain, non-clickable title when no onOpenChildPage handler is given — never a dead click target", () => {
+      render(<NotionBlockList blocks={[childPageBlock]} />);
+
+      expect(screen.getByText("SOP for Internet")).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: "SOP for Internet" }),
+      ).toBeNull();
+    });
+
+    it("threads onOpenChildPage into nested children, so a child_page nested under a toggle is still clickable", () => {
+      const onOpenChildPage = vi.fn();
+      const toggleBlock: NotionContentBlock = {
+        id: "t1",
+        lastEditedTime: LAST_EDITED,
+        type: "toggle",
+        text: [run("Advanced steps")],
+        children: [childPageBlock],
+      };
+      render(
+        <NotionBlockList
+          blocks={[toggleBlock]}
+          onOpenChildPage={onOpenChildPage}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "SOP for Internet" }));
+
+      expect(onOpenChildPage).toHaveBeenCalledWith(
+        "child-1",
+        "SOP for Internet",
+      );
+    });
+  });
 });
