@@ -17,6 +17,7 @@ import type {
   NotionDataSourceRow,
   NotionEditableBlockType,
   NotionHighlight,
+  NotionIntegrationIdentity,
   NotionListingRecord,
   NotionPageContent,
   NotionRichTextRun,
@@ -35,6 +36,7 @@ export type {
   NotionEditableBlockType,
   NotionEditableFieldType,
   NotionHighlight,
+  NotionIntegrationIdentity,
   NotionContentBlock,
   NotionDataSourceQueryResult,
   NotionListingRecord,
@@ -330,6 +332,26 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
 
   async disconnect(): Promise<void> {
     // Integration tokens aren't sessions — nothing to tear down server-side.
+  }
+
+  /**
+   * Real, read-only call to Notion's own `/users/me` — the official
+   * endpoint for an integration to look up its own identity. Returns only
+   * safe, minimal metadata (its configured display name, its own bot id,
+   * and its workspace's display name when Notion exposes one for this
+   * integration's owner type) — never the raw NotionUser response, never
+   * the token, never an Authorization header, never any other workspace
+   * content. Exists solely to answer "which Notion integration does this
+   * credential belong to" from the environment that actually holds it,
+   * without ever needing to reveal the credential's value for comparison.
+   */
+  async getIntegrationIdentity(): Promise<NotionIntegrationIdentity> {
+    const user = await this.http.request<NotionUser>("/users/me");
+    return {
+      botName: user.name ?? null,
+      botId: user.id,
+      workspaceName: user.bot?.workspace_name ?? null,
+    };
   }
 
   async authenticate(): Promise<void> {

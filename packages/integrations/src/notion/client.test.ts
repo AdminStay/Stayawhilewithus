@@ -48,6 +48,56 @@ describe("NotionClient", () => {
     expect(result.connected).toBe(true);
   });
 
+  describe("getIntegrationIdentity", () => {
+    it("returns only safe identity metadata from a real /users/me response", async () => {
+      mockRequest.mockResolvedValueOnce({
+        id: "bot-123",
+        name: "Stay While Operations Platform",
+        type: "bot",
+        bot: {
+          owner: { type: "user" },
+          workspace_name: "Stayawhilewithus",
+        },
+      });
+      const client = new NotionClient(credentials);
+
+      const result = await client.getIntegrationIdentity();
+
+      expect(mockRequest).toHaveBeenCalledWith("/users/me");
+      expect(result).toEqual({
+        botName: "Stay While Operations Platform",
+        botId: "bot-123",
+        workspaceName: "Stayawhilewithus",
+      });
+    });
+
+    it("falls back to null for name/workspace_name when Notion doesn't expose them for this owner type", async () => {
+      mockRequest.mockResolvedValueOnce({
+        id: "bot-456",
+        type: "bot",
+        bot: { owner: { type: "workspace" } },
+      });
+      const client = new NotionClient(credentials);
+
+      const result = await client.getIntegrationIdentity();
+
+      expect(result).toEqual({
+        botName: null,
+        botId: "bot-456",
+        workspaceName: null,
+      });
+    });
+
+    it("propagates a real request failure rather than inventing an identity", async () => {
+      mockRequest.mockRejectedValueOnce(new Error("Request failed with 401"));
+      const client = new NotionClient(credentials);
+
+      await expect(client.getIntegrationIdentity()).rejects.toThrow(
+        "Request failed with 401",
+      );
+    });
+  });
+
   it("validateCredentials() returns invalid with a reason when the request fails", async () => {
     mockRequest.mockRejectedValueOnce(new Error("Request failed with 401"));
     const client = new NotionClient(credentials);

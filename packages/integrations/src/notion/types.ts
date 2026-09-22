@@ -7,6 +7,25 @@ export interface NotionUser {
   id: string;
   name?: string;
   type?: string;
+  /** Present only when `type` is "bot" (an integration token, always true for this app's own credential) — real fields Notion returns for the calling integration's own identity, never any other workspace content. */
+  bot?: {
+    owner?: { type?: string };
+    /** Only populated by Notion for some owner types — absent, not empty-string, when not exposed. */
+    workspace_name?: string;
+  };
+}
+
+/**
+ * Safe, minimal identity metadata about the integration a given
+ * NOTION_API_KEY actually belongs to — deliberately never the raw
+ * NotionUser response (which could grow other fields later), and never
+ * anything that could be mistaken for the token itself. See
+ * NotionClient.getIntegrationIdentity().
+ */
+export interface NotionIntegrationIdentity {
+  botName: string | null;
+  botId: string;
+  workspaceName: string | null;
 }
 
 /** A Notion rich-text run — only the field every result actually needs (the raw text). */

@@ -16,6 +16,7 @@ import {
   buildNotionListingClientDto,
   getConfirmedNotionPropertyAssociations,
   getNotionIntegrationConfigStatus,
+  getNotionIntegrationIdentity,
   getNotionPageContent,
   listNotionListings,
   type IntegrationHighlights,
@@ -125,6 +126,23 @@ export default async function NotionPage() {
     NOTION_SOPS_ROOT_PAGE_ID,
   );
 
+  // Admin/ops-manager-only diagnostic (same integrations:read gate every
+  // other Notion read on this page already requires — see
+  // getNotionIntegrationIdentity()'s own doc comment for why no stricter
+  // permission exists yet). Answers "which Notion integration is THIS
+  // environment's NOTION_API_KEY" directly from the running app itself,
+  // without ever needing the credential's value revealed for comparison.
+  // Never rendered for a user without integrations:read, rather than
+  // rendered empty, so this never implies "not configured" when the real
+  // answer is "no access."
+  const canSeeConnectionDiagnostics = await hasPermission(
+    actor,
+    "integrations:read",
+  );
+  const identityResult = canSeeConnectionDiagnostics
+    ? await getNotionIntegrationIdentity(actor)
+    : null;
+
   return (
     <div>
       <PageHeader
@@ -132,6 +150,32 @@ export default async function NotionPage() {
         subtitle="Real, read-only search across everything shared with the StayWhile Notion integration — properties, procedures, guidebooks, and more."
       />
       <div className="space-y-10">
+        {identityResult !== null && (
+          <div>
+            <SectionHeader title="Connection diagnostics" size="lg" />
+            {identityResult.configured && identityResult.ok ? (
+              <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-sm">
+                <dt className="text-ink-muted">Integration name</dt>
+                <dd className="text-ink">
+                  {identityResult.identity.botName ?? "(not exposed)"}
+                </dd>
+                <dt className="text-ink-muted">Bot ID</dt>
+                <dd className="text-ink">{identityResult.identity.botId}</dd>
+                <dt className="text-ink-muted">Workspace</dt>
+                <dd className="text-ink">
+                  {identityResult.identity.workspaceName ?? "(not exposed)"}
+                </dd>
+              </dl>
+            ) : identityResult.configured ? (
+              <p className="text-sm text-error-500">{identityResult.error}</p>
+            ) : (
+              <p className="text-sm text-ink-muted">
+                Not connected — set{" "}
+                <code className="text-xs">NOTION_API_KEY</code> to enable.
+              </p>
+            )}
+          </div>
+        )}
         <div>
           <SectionHeader title="Search Notion" size="lg" />
           <NotionSearch

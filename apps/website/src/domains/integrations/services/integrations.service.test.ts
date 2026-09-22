@@ -41,6 +41,7 @@ const mockQueryDataSource = vi.fn();
 const mockListDataSourceRecords = vi.fn();
 const mockSearch = vi.fn();
 const mockGetPageContent = vi.fn();
+const mockGetIntegrationIdentity = vi.fn();
 vi.mock("@stayw/integrations/notion", () => ({
   NotionClient: vi.fn().mockImplementation(() => ({
     listRecentlyEdited: mockListRecentlyEdited,
@@ -48,6 +49,7 @@ vi.mock("@stayw/integrations/notion", () => ({
     listDataSourceRecords: mockListDataSourceRecords,
     search: mockSearch,
     getPageContent: mockGetPageContent,
+    getIntegrationIdentity: mockGetIntegrationIdentity,
   })),
 }));
 
@@ -71,6 +73,7 @@ import {
   finishDeviceSync,
   getNotionHighlights,
   getNotionIntegrationConfigStatus,
+  getNotionIntegrationIdentity,
   getNotionListingsAccessProof,
   getNotionPageContent,
   getOwnerRezHighlights,
@@ -1452,5 +1455,72 @@ describe("getNotionIntegrationConfigStatus", () => {
     );
 
     await expect(getNotionIntegrationConfigStatus(actor)).rejects.toThrow();
+  });
+});
+
+describe("getNotionIntegrationIdentity", () => {
+  const originalToken = process.env.NOTION_API_KEY;
+  afterEach(() => {
+    process.env.NOTION_API_KEY = originalToken;
+  });
+
+  it("reports not configured when NOTION_API_KEY is unset, without calling Notion", async () => {
+    delete process.env.NOTION_API_KEY;
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+
+    const result = await getNotionIntegrationIdentity(actor);
+
+    expect(result).toEqual({ configured: false });
+    expect(mockGetIntegrationIdentity).not.toHaveBeenCalled();
+  });
+
+  it("returns only safe identity metadata when configured and the call succeeds", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockGetIntegrationIdentity.mockResolvedValueOnce({
+      botName: "Stay While Operations Platform",
+      botId: "bot-123",
+      workspaceName: "Stayawhilewithus",
+    });
+
+    const result = await getNotionIntegrationIdentity(actor);
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "integrations:read");
+    expect(result).toEqual({
+      configured: true,
+      ok: true,
+      identity: {
+        botName: "Stay While Operations Platform",
+        botId: "bot-123",
+        workspaceName: "Stayawhilewithus",
+      },
+    });
+  });
+
+  it("returns a fixed, sanitized error message rather than a raw provider failure", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    mockGetIntegrationIdentity.mockRejectedValueOnce(
+      new Error("Request failed with 401 — some raw provider detail"),
+    );
+
+    const result = await getNotionIntegrationIdentity(actor);
+
+    expect(result).toEqual({
+      configured: true,
+      ok: false,
+      error:
+        "Couldn't verify the connected Notion integration's identity. Please try again.",
+    });
+  });
+
+  it("propagates denial when the actor lacks integrations:read", async () => {
+    process.env.NOTION_API_KEY = "secret_test";
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(getNotionIntegrationIdentity(actor)).rejects.toThrow();
+    expect(mockGetIntegrationIdentity).not.toHaveBeenCalled();
   });
 });

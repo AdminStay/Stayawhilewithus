@@ -9,6 +9,7 @@ import type {
 import {
   NotionClient,
   type NotionHighlight,
+  type NotionIntegrationIdentity,
   type NotionListingRecord,
   type NotionPageContent,
   type NotionSearchResultItem,
@@ -867,6 +868,60 @@ export async function getNotionIntegrationConfigStatus(
 ): Promise<{ configured: boolean }> {
   await assertPermission(actor, "integrations:read");
   return { configured: Boolean(process.env.NOTION_API_KEY) };
+}
+
+/**
+ * Real, read-only result of asking THIS environment's own NOTION_API_KEY
+ * "which Notion integration are you" — see NotionClient.getIntegrationIdentity()
+ * for exactly what's returned and why it's safe. `error` here is never a raw
+ * provider string, same discipline as getNotionPageContent() above: this
+ * result renders on an admin/ops-manager-only diagnostic surface, but a
+ * fixed message is still simpler to reason about than deciding per-caller
+ * whether a given Notion error string is safe to show.
+ */
+export type NotionIntegrationIdentityResult =
+  | { configured: false }
+  | { configured: true; ok: true; identity: NotionIntegrationIdentity }
+  | { configured: true; ok: false; error: string };
+
+const NOTION_IDENTITY_GENERIC_ERROR =
+  "Couldn't verify the connected Notion integration's identity. Please try again.";
+
+/**
+ * Admin/ops-manager-only diagnostic (gated by the same `integrations:read`
+ * permission every other Notion read in this file already requires — the
+ * narrowest existing gate available for this data, since no more specific
+ * "admin-only" permission exists in this codebase's RBAC catalog yet).
+ *
+ * Calls Notion's own `/users/me` using THIS running environment's actual
+ * NOTION_API_KEY and returns only safe identity metadata (the integration's
+ * configured display name, its bot id, and its workspace's display name if
+ * Notion exposes one for its owner type) — never the token, never an
+ * Authorization header, never any other workspace content. Exists to answer,
+ * from the environment that actually holds the credential (local or
+ * Production), "which Notion integration is this" without the credential's
+ * value ever needing to be revealed for manual comparison.
+ */
+export async function getNotionIntegrationIdentity(
+  actor: AuthContext,
+): Promise<NotionIntegrationIdentityResult> {
+  await assertPermission(actor, "integrations:read");
+
+  const token = process.env.NOTION_API_KEY;
+  if (!token) return { configured: false };
+
+  try {
+    const client = new NotionClient({ token });
+    const identity = await client.getIntegrationIdentity();
+    return { configured: true, ok: true, identity };
+  } catch (err) {
+    console.error("getNotionIntegrationIdentity failed:", err);
+    return {
+      configured: true,
+      ok: false,
+      error: NOTION_IDENTITY_GENERIC_ERROR,
+    };
+  }
 }
 
 export interface NotionPropertyAssociation {
