@@ -1,11 +1,71 @@
 import type {
+  NotionCalloutContentBlock,
   NotionContentBlock,
   NotionRichTextRun,
   NotionTextContentBlock,
 } from "@stayw/integrations/notion";
 import type { ReactNode } from "react";
 
+import type {
+  UpdateNotionBlockActionInput,
+  UpdateNotionBlockActionState,
+} from "../actions";
+
 import { isSafeHttpUrl } from "./notion-link.utils";
+import { NotionBlockEditor } from "./NotionBlockEditor";
+
+/**
+ * Present only when this actor is authorized to edit at least one block on
+ * this page — absent (or `editableBlockIds` empty, today's actual state
+ * since NOTION_BLOCK_EDIT_ALLOWLIST is empty) means every block renders
+ * exactly as it did before block editing existed. `editableBlockIds` is a
+ * UX-only hint (see listEditableNotionBlockIds's own doc comment) — the
+ * real security boundary is updateNotionBlockContent()'s own independent
+ * allowlist/RBAC/page-membership check, unconditionally re-run regardless
+ * of what this context claims.
+ */
+export interface NotionBlockEditContext {
+  pageId: string;
+  editableBlockIds: ReadonlySet<string>;
+  action: (
+    prevState: UpdateNotionBlockActionState,
+    input: UpdateNotionBlockActionInput,
+  ) => Promise<UpdateNotionBlockActionState>;
+}
+
+/**
+ * Wraps a text-bearing block's normal display in `wrap`, or — only when
+ * `editContext` is present AND this exact block id is in its
+ * `editableBlockIds` — renders it through NotionBlockEditor instead. Scoped
+ * to paragraph/heading_1/heading_2/heading_3/callout only, deliberately:
+ * these are the block types that actually make up the real SOP content
+ * confirmed by discovery (see HANDOFF.md), and rendering an inline edit
+ * `<form>` inside a `<summary>` (toggle) or restructuring the shared
+ * `<ul>`/`<ol>` grouping (list items) needs its own careful design, not
+ * bundled into this pass — those two types remain server/write-path
+ * capable (see NotionEditableBlockType/updateBlockContent()) but simply
+ * never render an "Edit" affordance yet.
+ */
+function maybeEditableText(
+  block: NotionTextContentBlock | NotionCalloutContentBlock,
+  editContext: NotionBlockEditContext | null | undefined,
+  wrap: (content: ReactNode) => ReactNode,
+): ReactNode {
+  if (!editContext?.editableBlockIds.has(block.id)) {
+    return wrap(<RichText runs={block.text} />);
+  }
+  return (
+    <NotionBlockEditor
+      pageId={editContext.pageId}
+      blockId={block.id}
+      lastEditedTime={block.lastEditedTime}
+      initialPlainText={block.text.map((run) => run.text).join("")}
+      initialDisplay={<RichText runs={block.text} />}
+      wrap={wrap}
+      action={editContext.action}
+    />
+  );
+}
 
 /**
  * Renders one Notion rich-text run array inline — bold/italic/code
@@ -96,11 +156,17 @@ function groupBlocks(blocks: NotionContentBlock[]): BlockGroup[] {
   return groups;
 }
 
-function NestedChildren({ blocks }: { blocks: NotionContentBlock[] }) {
+function NestedChildren({
+  blocks,
+  editContext,
+}: {
+  blocks: NotionContentBlock[];
+  editContext: NotionBlockEditContext | null | undefined;
+}) {
   if (blocks.length === 0) return null;
   return (
     <div className="mt-1.5 pl-4">
-      <NotionBlockList blocks={blocks} />
+      <NotionBlockList blocks={blocks} editContext={editContext} />
     </div>
   );
 }
@@ -115,38 +181,36 @@ function NestedChildren({ blocks }: { blocks: NotionContentBlock[] }) {
  * means adding a new NotionContentBlock variant without a case here is a
  * compile error, not a silent gap.
  */
-function NotionBlock({ block }: { block: NotionContentBlock }) {
+function NotionBlock({
+  block,
+  editContext,
+}: {
+  block: NotionContentBlock;
+  editContext: NotionBlockEditContext | null | undefined;
+}) {
   switch (block.type) {
     case "heading_1":
-      return (
-        <h2 className="text-lg font-semibold text-ink">
-          <RichText runs={block.text} />
-        </h2>
-      );
+      return maybeEditableText(block, editContext, (content) => (
+        <h2 className="text-lg font-semibold text-ink">{content}</h2>
+      ));
     case "heading_2":
-      return (
-        <h3 className="text-base font-semibold text-ink">
-          <RichText runs={block.text} />
-        </h3>
-      );
+      return maybeEditableText(block, editContext, (content) => (
+        <h3 className="text-base font-semibold text-ink">{content}</h3>
+      ));
     case "heading_3":
-      return (
-        <h4 className="text-sm font-semibold text-ink">
-          <RichText runs={block.text} />
-        </h4>
-      );
+      return maybeEditableText(block, editContext, (content) => (
+        <h4 className="text-sm font-semibold text-ink">{content}</h4>
+      ));
     case "paragraph":
       if (block.text.length === 0 && block.children.length === 0) return null;
-      return (
+      return maybeEditableText(block, editContext, (content) => (
         <div className="text-sm text-ink">
-          <p>
-            <RichText runs={block.text} />
-          </p>
-          <NestedChildren blocks={block.children} />
+          <p>{content}</p>
+          <NestedChildren blocks={block.children} editContext={editContext} />
         </div>
-      );
+      ));
     case "callout":
-      return (
+      return maybeEditableText(block, editContext, (content) => (
         <div className="flex gap-2 rounded-lg bg-surface-muted p-3 text-sm text-ink">
           {block.icon && (
             <span aria-hidden="true" className="shrink-0">
@@ -154,18 +218,23 @@ function NotionBlock({ block }: { block: NotionContentBlock }) {
             </span>
           )}
           <div className="min-w-0 flex-1">
-            <RichText runs={block.text} />
-            <NestedChildren blocks={block.children} />
+            {content}
+            <NestedChildren blocks={block.children} editContext={editContext} />
           </div>
         </div>
-      );
+      ));
     case "toggle":
+      // Server/write-path capable (see NotionEditableBlockType), but
+      // deliberately no edit affordance yet — see maybeEditableText's own
+      // doc comment for why a toggle's summary isn't wired to an inline
+      // edit form in this pass. Its children can still be individually
+      // editable, so editContext is still threaded through.
       return (
         <details className="rounded-lg border border-border/70 p-2.5">
           <summary className="cursor-pointer text-sm font-medium text-ink">
             <RichText runs={block.text} />
           </summary>
-          <NestedChildren blocks={block.children} />
+          <NestedChildren blocks={block.children} editContext={editContext} />
         </details>
       );
     case "table":
@@ -204,7 +273,7 @@ function NotionBlock({ block }: { block: NotionContentBlock }) {
         <ul className="list-disc space-y-1 pl-5 text-sm text-ink">
           <li>
             <RichText runs={block.text} />
-            <NestedChildren blocks={block.children} />
+            <NestedChildren blocks={block.children} editContext={editContext} />
           </li>
         </ul>
       );
@@ -213,7 +282,7 @@ function NotionBlock({ block }: { block: NotionContentBlock }) {
         <ol className="list-decimal space-y-1 pl-5 text-sm text-ink">
           <li>
             <RichText runs={block.text} />
-            <NestedChildren blocks={block.children} />
+            <NestedChildren blocks={block.children} editContext={editContext} />
           </li>
         </ol>
       );
@@ -239,7 +308,14 @@ function NotionBlock({ block }: { block: NotionContentBlock }) {
  * this V1 doesn't support renders its own explicit fallback (see
  * NotionBlock above) rather than being silently dropped or guessed at.
  */
-export function NotionBlockList({ blocks }: { blocks: NotionContentBlock[] }) {
+export function NotionBlockList({
+  blocks,
+  editContext,
+}: {
+  blocks: NotionContentBlock[];
+  /** Absent (or with an empty editableBlockIds) on every real render today — see NotionBlockEditContext's own doc comment. */
+  editContext?: NotionBlockEditContext | null;
+}) {
   if (blocks.length === 0) return null;
   const groups = groupBlocks(blocks);
 
@@ -256,7 +332,10 @@ export function NotionBlockList({ blocks }: { blocks: NotionContentBlock[] }) {
               {group.items.map((item) => (
                 <li key={item.id}>
                   <RichText runs={item.text} />
-                  <NestedChildren blocks={item.children} />
+                  <NestedChildren
+                    blocks={item.children}
+                    editContext={editContext}
+                  />
                 </li>
               ))}
             </ul>
@@ -272,13 +351,22 @@ export function NotionBlockList({ blocks }: { blocks: NotionContentBlock[] }) {
               {group.items.map((item) => (
                 <li key={item.id}>
                   <RichText runs={item.text} />
-                  <NestedChildren blocks={item.children} />
+                  <NestedChildren
+                    blocks={item.children}
+                    editContext={editContext}
+                  />
                 </li>
               ))}
             </ol>
           );
         }
-        return <NotionBlock key={group.block.id} block={group.block} />;
+        return (
+          <NotionBlock
+            key={group.block.id}
+            block={group.block}
+            editContext={editContext}
+          />
+        );
       })}
     </div>
   );

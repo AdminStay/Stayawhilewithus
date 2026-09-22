@@ -23,6 +23,7 @@ afterEach(cleanup);
 
 const noopFormAction = vi.fn();
 const noopFetchContentAction = vi.fn();
+const noopUpdateBlockAction = vi.fn();
 
 function isDisabled(el: HTMLElement): boolean {
   return (el as HTMLButtonElement | HTMLInputElement).disabled;
@@ -40,6 +41,7 @@ describe("NotionSearch", () => {
       <NotionSearch
         action={vi.fn()}
         fetchContentAction={noopFetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
       />,
     );
 
@@ -62,6 +64,7 @@ describe("NotionSearch", () => {
       <NotionSearch
         action={vi.fn()}
         fetchContentAction={noopFetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
       />,
     );
 
@@ -84,6 +87,7 @@ describe("NotionSearch", () => {
       <NotionSearch
         action={vi.fn()}
         fetchContentAction={noopFetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
       />,
     );
 
@@ -107,6 +111,7 @@ describe("NotionSearch", () => {
       <NotionSearch
         action={vi.fn()}
         fetchContentAction={noopFetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
       />,
     );
 
@@ -131,6 +136,7 @@ describe("NotionSearch", () => {
       <NotionSearch
         action={vi.fn()}
         fetchContentAction={noopFetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
       />,
     );
 
@@ -151,6 +157,7 @@ describe("NotionSearch", () => {
       <NotionSearch
         action={vi.fn()}
         fetchContentAction={noopFetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
       />,
     );
 
@@ -184,6 +191,7 @@ describe("NotionSearch", () => {
       <NotionSearch
         action={vi.fn()}
         fetchContentAction={noopFetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
       />,
     );
 
@@ -222,6 +230,7 @@ describe("NotionSearch", () => {
       <NotionSearch
         action={vi.fn()}
         fetchContentAction={noopFetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
       />,
     );
 
@@ -254,6 +263,7 @@ describe("NotionSearch", () => {
       <NotionSearch
         action={vi.fn()}
         fetchContentAction={noopFetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
       />,
     );
 
@@ -274,6 +284,7 @@ describe("NotionSearch", () => {
       <NotionSearch
         action={action}
         fetchContentAction={noopFetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
       />,
     );
 
@@ -311,6 +322,7 @@ describe("NotionSearch", () => {
           action={vi.fn()}
           // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test double narrower than the real action's typed return
           fetchContentAction={fetchContentAction as any}
+          updateBlockAction={noopUpdateBlockAction}
         />,
       );
     }

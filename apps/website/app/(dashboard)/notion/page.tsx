@@ -4,6 +4,7 @@ import { PageHeader, SectionHeader } from "@stayw/ui";
 import {
   fetchNotionPageContentAction,
   searchNotionAction,
+  updateNotionBlockContentAction,
   updateNotionFieldAction,
 } from "@/domains/integrations/actions";
 import { NotionListingsSearch } from "@/domains/integrations/components/NotionListingsSearch";
@@ -116,6 +117,7 @@ export default async function NotionPage() {
           <NotionSearch
             action={searchNotionAction}
             fetchContentAction={fetchNotionPageContentAction}
+            updateBlockAction={updateNotionBlockContentAction}
           />
         </div>
         <div>

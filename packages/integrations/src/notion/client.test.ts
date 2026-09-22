@@ -1129,19 +1129,21 @@ describe("NotionClient", () => {
       return { results, has_more: hasMore, next_cursor: nextCursor };
     }
 
-    it("reads a page's real body content — reading it with a single GET to /blocks/{pageId}/children", async () => {
+    it("reads a page's real body content — reading it with a single GET to /blocks/{pageId}/children, including each block's own last_edited_time", async () => {
       mockRequest.mockResolvedValueOnce(
         page([
           {
             id: "b1",
             type: "heading_2",
             has_children: false,
+            last_edited_time: "2026-09-22T01:00:00.000Z",
             heading_2: { rich_text: [{ plain_text: "Booking Steps" }] },
           },
           {
             id: "b2",
             type: "paragraph",
             has_children: false,
+            last_edited_time: "2026-09-22T01:01:00.000Z",
             paragraph: {
               rich_text: [
                 { plain_text: "Call the guest.", annotations: { bold: true } },
@@ -1152,6 +1154,7 @@ describe("NotionClient", () => {
             id: "b3",
             type: "callout",
             has_children: false,
+            last_edited_time: "2026-09-22T01:02:00.000Z",
             callout: {
               rich_text: [{ plain_text: "Never share the door code by text." }],
               icon: { type: "emoji", emoji: "⚠️" },
@@ -1171,6 +1174,7 @@ describe("NotionClient", () => {
         blocks: [
           {
             id: "b1",
+            lastEditedTime: "2026-09-22T01:00:00.000Z",
             type: "heading_2",
             text: [
               {
@@ -1185,6 +1189,7 @@ describe("NotionClient", () => {
           },
           {
             id: "b2",
+            lastEditedTime: "2026-09-22T01:01:00.000Z",
             type: "paragraph",
             text: [
               {
@@ -1199,6 +1204,7 @@ describe("NotionClient", () => {
           },
           {
             id: "b3",
+            lastEditedTime: "2026-09-22T01:02:00.000Z",
             type: "callout",
             text: [
               {
@@ -1214,6 +1220,26 @@ describe("NotionClient", () => {
           },
         ],
       });
+    });
+
+    it("falls back to an empty string for lastEditedTime rather than fabricating one, when a raw block is missing last_edited_time entirely", async () => {
+      mockRequest.mockResolvedValueOnce(
+        page([
+          {
+            id: "b1",
+            type: "paragraph",
+            has_children: false,
+            paragraph: { rich_text: [{ plain_text: "No timestamp here" }] },
+          },
+        ]),
+      );
+      const client = new NotionClient(credentials);
+
+      const { blocks } = await client.getPageContent("page-1");
+
+      expect(blocks[0]).toEqual(
+        expect.objectContaining({ lastEditedTime: "" }),
+      );
     });
 
     it("maps bulleted_list_item and numbered_list_item blocks", async () => {
@@ -1335,6 +1361,7 @@ describe("NotionClient", () => {
 
       expect(blocks[0]).toEqual({
         id: "table-1",
+        lastEditedTime: "",
         type: "table",
         tableWidth: 2,
         hasColumnHeader: true,
@@ -1376,7 +1403,12 @@ describe("NotionClient", () => {
       const { blocks } = await client.getPageContent("page-1");
 
       expect(blocks).toEqual([
-        { id: "img-1", type: "unsupported", originalType: "image" },
+        {
+          id: "img-1",
+          lastEditedTime: "",
+          type: "unsupported",
+          originalType: "image",
+        },
       ]);
       expect(mockRequest).toHaveBeenCalledTimes(1);
     });
@@ -1439,6 +1471,227 @@ describe("NotionClient", () => {
         expect(path).toMatch(/^\/blocks\//);
         expect(init).toBeUndefined();
       }
+    });
+  });
+
+  describe("updateBlockContent", () => {
+    it("reads the block first, then PATCHes using its OWN current type — never a caller's assumption", async () => {
+      mockRequest
+        .mockResolvedValueOnce({ id: "b1", type: "paragraph" })
+        .mockResolvedValueOnce({
+          id: "b1",
+          type: "paragraph",
+          last_edited_time: "2026-09-22T02:00:00.000Z",
+          paragraph: { rich_text: [{ plain_text: "Updated text" }] },
+        });
+      const client = new NotionClient(credentials);
+
+      const result = await client.updateBlockContent("b1", "Updated text");
+
+      expect(mockRequest).toHaveBeenNthCalledWith(1, "/blocks/b1");
+      expect(mockRequest).toHaveBeenNthCalledWith(2, "/blocks/b1", {
+        method: "PATCH",
+        body: JSON.stringify({
+          paragraph: {
+            rich_text: [{ type: "text", text: { content: "Updated text" } }],
+          },
+        }),
+      });
+      expect(result).toEqual({
+        lastEditedTime: "2026-09-22T02:00:00.000Z",
+        text: [
+          {
+            text: "Updated text",
+            href: null,
+            bold: false,
+            italic: false,
+            code: false,
+          },
+        ],
+      });
+    });
+
+    it("shapes each editable block type's PATCH body under its own real type key", async () => {
+      for (const type of [
+        "heading_1",
+        "heading_2",
+        "heading_3",
+        "bulleted_list_item",
+        "numbered_list_item",
+        "toggle",
+        "callout",
+      ]) {
+        mockRequest.mockReset();
+        mockRequest
+          .mockResolvedValueOnce({ id: "b1", type })
+          .mockResolvedValueOnce({
+            id: "b1",
+            type,
+            last_edited_time: "2026-09-22T02:00:00.000Z",
+            [type]: { rich_text: [{ plain_text: "x" }] },
+          });
+        const client = new NotionClient(credentials);
+
+        await client.updateBlockContent("b1", "x");
+
+        expect(mockRequest).toHaveBeenNthCalledWith(2, "/blocks/b1", {
+          method: "PATCH",
+          body: JSON.stringify({
+            [type]: { rich_text: [{ type: "text", text: { content: "x" } }] },
+          }),
+        });
+      }
+    });
+
+    it("writes an empty rich_text array for an empty string, never a one-item array with empty content", async () => {
+      mockRequest
+        .mockResolvedValueOnce({ id: "b1", type: "paragraph" })
+        .mockResolvedValueOnce({
+          id: "b1",
+          type: "paragraph",
+          last_edited_time: "2026-09-22T02:00:00.000Z",
+          paragraph: { rich_text: [] },
+        });
+      const client = new NotionClient(credentials);
+
+      await client.updateBlockContent("b1", "");
+
+      expect(mockRequest).toHaveBeenNthCalledWith(2, "/blocks/b1", {
+        method: "PATCH",
+        body: JSON.stringify({ paragraph: { rich_text: [] } }),
+      });
+    });
+
+    it("refuses to guess a PATCH shape and throws for a block type outside the editable set (e.g. table)", async () => {
+      mockRequest.mockResolvedValueOnce({ id: "b1", type: "table" });
+      const client = new NotionClient(credentials);
+
+      await expect(client.updateBlockContent("b1", "x")).rejects.toThrow(
+        /not supported for content editing/,
+      );
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses to guess a PATCH shape and throws for a block type this client doesn't otherwise support at all", async () => {
+      mockRequest.mockResolvedValueOnce({ id: "b1", type: "image" });
+      const client = new NotionClient(credentials);
+
+      await expect(client.updateBlockContent("b1", "x")).rejects.toThrow(
+        /not supported for content editing/,
+      );
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+    });
+
+    it("propagates a real request failure (e.g. 404/401) untouched rather than swallowing it", async () => {
+      mockRequest.mockRejectedValueOnce(
+        new Error("Request to /blocks/b1 failed with 404"),
+      );
+      const client = new NotionClient(credentials);
+
+      await expect(client.updateBlockContent("b1", "x")).rejects.toThrow(
+        "failed with 404",
+      );
+    });
+
+    it("never puts the credential token anywhere in the PATCH request body", async () => {
+      mockRequest
+        .mockResolvedValueOnce({ id: "b1", type: "paragraph" })
+        .mockResolvedValueOnce({
+          id: "b1",
+          type: "paragraph",
+          last_edited_time: "2026-09-22T02:00:00.000Z",
+          paragraph: { rich_text: [{ plain_text: "x" }] },
+        });
+      const client = new NotionClient(credentials);
+
+      await client.updateBlockContent("b1", "x");
+
+      const patchCall = mockRequest.mock.calls[1] as [string, { body: string }];
+      expect(patchCall[1].body).not.toContain(credentials.token);
+    });
+
+    it("makes only GET-then-PATCH calls against /blocks/{id} — never a create/delete/archive call", async () => {
+      mockRequest
+        .mockResolvedValueOnce({ id: "b1", type: "paragraph" })
+        .mockResolvedValueOnce({
+          id: "b1",
+          type: "paragraph",
+          last_edited_time: "2026-09-22T02:00:00.000Z",
+          paragraph: { rich_text: [] },
+        });
+      const client = new NotionClient(credentials);
+
+      await client.updateBlockContent("b1", "x");
+
+      for (const call of mockRequest.mock.calls) {
+        const [path, init] = call as [string, { method?: string } | undefined];
+        expect(path).toBe("/blocks/b1");
+        expect(init === undefined || init.method === "PATCH").toBe(true);
+      }
+    });
+  });
+
+  describe("getBlockContent", () => {
+    it("reads one block with a single real GET — the independent verification read a block-content write requires", async () => {
+      mockRequest.mockResolvedValueOnce({
+        id: "b1",
+        type: "paragraph",
+        last_edited_time: "2026-09-22T03:00:00.000Z",
+        paragraph: { rich_text: [{ plain_text: "Confirmed text" }] },
+      });
+      const client = new NotionClient(credentials);
+
+      const result = await client.getBlockContent("b1");
+
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(mockRequest).toHaveBeenCalledWith("/blocks/b1");
+      expect(result).toEqual({
+        type: "paragraph",
+        lastEditedTime: "2026-09-22T03:00:00.000Z",
+        text: [
+          {
+            text: "Confirmed text",
+            href: null,
+            bold: false,
+            italic: false,
+            code: false,
+          },
+        ],
+      });
+    });
+
+    it("falls back to empty/blank values rather than throwing when fields are missing", async () => {
+      mockRequest.mockResolvedValueOnce({ id: "b1" });
+      const client = new NotionClient(credentials);
+
+      const result = await client.getBlockContent("b1");
+
+      expect(result).toEqual({ type: "", lastEditedTime: "", text: [] });
+    });
+
+    it("propagates a real read failure (e.g. 404) untouched rather than swallowing it", async () => {
+      mockRequest.mockRejectedValueOnce(
+        new Error("Request to /blocks/b1 failed with 404"),
+      );
+      const client = new NotionClient(credentials);
+
+      await expect(client.getBlockContent("b1")).rejects.toThrow(
+        "failed with 404",
+      );
+    });
+
+    it("makes only a bare GET — no method override, never a write", async () => {
+      mockRequest.mockResolvedValueOnce({ id: "b1", type: "paragraph" });
+      const client = new NotionClient(credentials);
+
+      await client.getBlockContent("b1");
+
+      const [path, init] = mockRequest.mock.calls[0] as [
+        string,
+        { method?: string } | undefined,
+      ];
+      expect(path).toBe("/blocks/b1");
+      expect(init).toBeUndefined();
     });
   });
 });

@@ -16,6 +16,11 @@ import {
   type NotionSearchState,
 } from "./services/integrations.service";
 import {
+  listEditableNotionBlockIds,
+  updateNotionBlockContent,
+  type NotionBlockEditResult,
+} from "./services/notion-block-edit.service";
+import {
   updateNotionField,
   type NotionEditResult,
 } from "./services/notion-edit.service";
@@ -197,7 +202,12 @@ export async function searchNotionAction(
  */
 export type NotionPageContentActionState =
   | { status: "idle" }
-  | { status: "success"; content: NotionPageContent }
+  | {
+      status: "success";
+      content: NotionPageContent;
+      /** UX-only hint (see listEditableNotionBlockIds's own doc comment) — which of this page's real block ids to render an "Edit" affordance for. Always [] today (NOTION_BLOCK_EDIT_ALLOWLIST is empty); updateNotionBlockContentAction() independently re-verifies everything regardless of this list. */
+      editableBlockIds: string[];
+    }
   | { status: "not_configured" }
   | { status: "error"; error: string };
 
@@ -227,12 +237,60 @@ export async function fetchNotionPageContentAction(
     const result = await getNotionPageContent(actor, pageId);
     if (!result.configured) return { status: "not_configured" };
     if (!result.ok) return { status: "error", error: result.error };
-    return { status: "success", content: result.content };
+    const editableBlockIds = await listEditableNotionBlockIds(actor, pageId);
+    return { status: "success", content: result.content, editableBlockIds };
   } catch (err) {
     console.error("fetchNotionPageContentAction failed:", err);
     return {
       status: "error",
       error: FETCH_NOTION_PAGE_CONTENT_GENERIC_ERROR,
+    };
+  }
+}
+
+export type UpdateNotionBlockActionState =
+  { status: "idle" } | NotionBlockEditResult;
+
+export interface UpdateNotionBlockActionInput {
+  pageId: string;
+  blockId: string;
+  expectedLastEditedTime: string;
+  text: string;
+}
+
+/** The only text an unexpected (non-updateNotionBlockContent) failure in this action is ever allowed to surface — see updateNotionBlockContentAction()'s own doc comment. */
+const UPDATE_NOTION_BLOCK_GENERIC_ERROR =
+  "Something went wrong saving this change. Please try again.";
+
+/**
+ * The single entry point for the (currently unreachable, allowlist-empty)
+ * block-content-edit foundation — see notion-block-edit.service.ts's own
+ * doc comment for why every real call today resolves to "not_editable"
+ * before any Notion API call happens. Same conventions as
+ * updateNotionFieldAction(): takes a plain typed object (not FormData, no
+ * `<form>` involved), never throws to the caller for an expected
+ * per-request outcome, and — per the read path's own hardening — never
+ * lets a raw provider/internal error string escape this action's own
+ * top-level catch either (logged server-side, fixed generic message
+ * returned). `updateNotionBlockContent()`'s own `provider_error` message is
+ * already a fixed, safe constant and is passed through unchanged.
+ */
+export async function updateNotionBlockContentAction(
+  _prevState: UpdateNotionBlockActionState,
+  input: UpdateNotionBlockActionInput,
+): Promise<UpdateNotionBlockActionState> {
+  try {
+    const actor = await getCurrentUser();
+    const result = await updateNotionBlockContent(actor, input);
+    if (result.status === "success") {
+      revalidatePath("/notion");
+    }
+    return result;
+  } catch (err) {
+    console.error("updateNotionBlockContentAction failed:", err);
+    return {
+      status: "provider_error",
+      message: UPDATE_NOTION_BLOCK_GENERIC_ERROR,
     };
   }
 }

@@ -15,6 +15,7 @@ import type {
   NotionDataSourceQueryPage,
   NotionDataSourceQueryResult,
   NotionDataSourceRow,
+  NotionEditableBlockType,
   NotionHighlight,
   NotionListingRecord,
   NotionPageContent,
@@ -29,6 +30,8 @@ import type {
 } from "./types";
 
 export type {
+  NotionCalloutContentBlock,
+  NotionEditableBlockType,
   NotionEditableFieldType,
   NotionHighlight,
   NotionContentBlock,
@@ -259,6 +262,18 @@ const TEXT_BLOCK_TYPES = new Set<NotionTextContentBlock["type"]>([
   "bulleted_list_item",
   "numbered_list_item",
   "toggle",
+]);
+
+/** The only block types updateBlockContent() will ever write to — mirrors NotionEditableBlockType (types.ts). Checked against the block's own freshly-read `type`, never the caller's assumption. */
+const EDITABLE_BLOCK_TYPES = new Set<NotionEditableBlockType>([
+  "paragraph",
+  "heading_1",
+  "heading_2",
+  "heading_3",
+  "bulleted_list_item",
+  "numbered_list_item",
+  "toggle",
+  "callout",
 ]);
 
 // Two independent, belt-and-suspenders safety caps on a single
@@ -690,6 +705,8 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
     const type = typeof raw.type === "string" ? raw.type : "";
     const hasChildren = raw.has_children === true;
     const body = isPlainObject(raw[type]) ? raw[type] : {};
+    const lastEditedTime =
+      typeof raw.last_edited_time === "string" ? raw.last_edited_time : "";
 
     if (type === "table") {
       let rows: NotionTableRow[] = [];
@@ -703,6 +720,7 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
       }
       return {
         id,
+        lastEditedTime,
         type: "table",
         tableWidth: typeof body.table_width === "number" ? body.table_width : 0,
         hasColumnHeader: body.has_column_header === true,
@@ -714,6 +732,7 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
     if (type === "callout") {
       const calloutBlock: NotionCalloutContentBlock = {
         id,
+        lastEditedTime,
         type: "callout",
         text: mapRichTextRuns(body.rich_text),
         icon: extractCalloutIcon(body.icon),
@@ -736,6 +755,7 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
     if (TEXT_BLOCK_TYPES.has(type as NotionTextContentBlock["type"])) {
       const textBlock: NotionTextContentBlock = {
         id,
+        lastEditedTime,
         type: type as NotionTextContentBlock["type"],
         text: mapRichTextRuns(body.rich_text),
         children: [],
@@ -750,7 +770,12 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
       return textBlock;
     }
 
-    return { id, type: "unsupported", originalType: type || "(unknown)" };
+    return {
+      id,
+      lastEditedTime,
+      type: "unsupported",
+      originalType: type || "(unknown)",
+    };
   }
 
   /** Fetches one block's children and maps every one of them — the shared recursive step both getPageContent() (depth 0, blockId = the page itself — a page's top-level content IS its "children" in Notion's block model) and mapRawBlock() (deeper levels) call. */
@@ -780,6 +805,110 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
     const budget: BlockFetchBudget = { calls: 0, truncated: false };
     const blocks = await this.buildBlockTree(pageId, 0, budget);
     return { blocks, truncated: budget.truncated };
+  }
+
+  /**
+   * Real, read-verify-then-write update of one block's plain text content —
+   * `PATCH /v1/blocks/{blockId}`. Deliberately narrower than
+   * updatePageProperty(): only ever replaces a block's `rich_text` with a
+   * SINGLE plain-text run (no per-run bold/italic/link editing in this V1 —
+   * matching the "support only explicitly implemented block types/shapes"
+   * safety requirement), and only for the closed NotionEditableBlockType set
+   * (see types.ts and EDITABLE_BLOCK_TYPES above). A block whose real,
+   * freshly-read type isn't in that set (e.g. "table", or anything this
+   * client doesn't otherwise support) throws rather than guessing a PATCH
+   * shape — the same fail-closed discipline as updatePageProperty()'s
+   * "unsupported property type" guard.
+   *
+   * Reads the block fresh via GET immediately before writing — never trusts
+   * a caller-supplied "this is definitely a paragraph" assumption, since
+   * Notion's PATCH body shape is keyed by the block's OWN real type
+   * (`{ [type]: { rich_text: [...] } }`); a stale/wrong assumed type would
+   * silently PATCH the wrong key. This method does NOT verify the block
+   * belongs to any particular page, does not check an allowlist, and does
+   * not do conflict detection — those are the caller's job (see
+   * updateNotionBlockContent() in apps/website's notion-block-edit.service.ts,
+   * which re-fetches the whole page tree via getPageContent() for exactly
+   * that purpose before ever calling this method). This method's own fresh
+   * GET exists only to learn the one block's current real type immediately
+   * before the PATCH that depends on it — genuine defense in depth, not a
+   * substitute for the caller's own page-membership/allowlist/conflict
+   * checks.
+   *
+   * Returns the value Notion's own PATCH response echoed back — but per the
+   * caller's own required write lifecycle, this echo is deliberately NOT
+   * treated as sufficient confirmation on its own: the caller (see
+   * updateNotionBlockContent() in apps/website's notion-block-edit.service.ts)
+   * must follow this with a SEPARATE, independent getBlockContent() call and
+   * only report success once that second read confirms the saved value —
+   * this method's return value exists for logging/diagnostic purposes only,
+   * never as the final "it saved" signal.
+   */
+  async updateBlockContent(
+    blockId: string,
+    newText: string,
+  ): Promise<{ lastEditedTime: string; text: NotionRichTextRun[] }> {
+    const block = await this.http.request<Record<string, unknown>>(
+      `/blocks/${blockId}`,
+    );
+    const type = typeof block.type === "string" ? block.type : "";
+    if (!EDITABLE_BLOCK_TYPES.has(type as NotionEditableBlockType)) {
+      throw new Error(
+        `Notion block ${blockId} has type "${type || "(unknown)"}", which is not supported for content editing.`,
+      );
+    }
+
+    const updated = await this.http.request<Record<string, unknown>>(
+      `/blocks/${blockId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          [type]: {
+            rich_text:
+              newText === ""
+                ? []
+                : [{ type: "text", text: { content: newText } }],
+          },
+        }),
+      },
+    );
+
+    const updatedLastEditedTime =
+      typeof updated.last_edited_time === "string"
+        ? updated.last_edited_time
+        : "";
+    const updatedBody = isPlainObject(updated[type]) ? updated[type] : {};
+    return {
+      lastEditedTime: updatedLastEditedTime,
+      text: mapRichTextRuns(updatedBody.rich_text),
+    };
+  }
+
+  /**
+   * Real, read-only, single-block `GET /v1/blocks/{blockId}` — the
+   * independent "second GET" a block-content write's verification step
+   * requires (see updateBlockContent()'s own doc comment). Deliberately not
+   * a full getPageContent() tree walk: by the time this is called, the
+   * caller has already proven the block's page membership in its own
+   * pre-write preflight read — this call's only job is to learn the one
+   * block's current real type/text/lastEditedTime, as cheaply and directly
+   * as possible, immediately after a PATCH. Never writes anything.
+   */
+  async getBlockContent(
+    blockId: string,
+  ): Promise<{
+    type: string;
+    text: NotionRichTextRun[];
+    lastEditedTime: string;
+  }> {
+    const raw = await this.http.request<Record<string, unknown>>(
+      `/blocks/${blockId}`,
+    );
+    const type = typeof raw.type === "string" ? raw.type : "";
+    const body = isPlainObject(raw[type]) ? raw[type] : {};
+    const lastEditedTime =
+      typeof raw.last_edited_time === "string" ? raw.last_edited_time : "";
+    return { type, text: mapRichTextRuns(body.rich_text), lastEditedTime };
   }
 }
 

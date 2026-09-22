@@ -4,13 +4,20 @@ import { Badge, Button, EmptyState, Input, StatusIndicator } from "@stayw/ui";
 import { Search } from "lucide-react";
 import { useActionState, useRef, useState } from "react";
 
-import type { NotionPageContentActionState } from "../actions";
+import type {
+  NotionPageContentActionState,
+  UpdateNotionBlockActionInput,
+  UpdateNotionBlockActionState,
+} from "../actions";
 import type {
   NotionSearchResultCard,
   NotionSearchState,
 } from "../services/integrations.service";
 
-import { NotionBlockList } from "./NotionBlockRenderer";
+import {
+  NotionBlockList,
+  type NotionBlockEditContext,
+} from "./NotionBlockRenderer";
 import { NotionDetailView } from "./NotionDetailView";
 import { isSafeHttpUrl } from "./notion-link.utils";
 
@@ -43,10 +50,16 @@ type PageContentViewState =
 export function NotionSearch({
   action,
   fetchContentAction,
+  updateBlockAction,
 }: {
   action: (prevState: ActionState, formData: FormData) => Promise<ActionState>;
   /** Fetches one result's real page-body content on demand — see fetchNotionPageContentAction's own doc comment for why this is a plain callable action, not a useActionState-bound form. Passed down from the page (a Server Component) rather than imported directly, same "use server" module-boundary reason as every other action prop in this domain. */
   fetchContentAction: (pageId: string) => Promise<NotionPageContentActionState>;
+  /** Saves one block's edited content — see updateNotionBlockContentAction's own doc comment. Passed down the same way as fetchContentAction, for the same "use server" module-boundary reason. */
+  updateBlockAction: (
+    prevState: UpdateNotionBlockActionState,
+    input: UpdateNotionBlockActionInput,
+  ) => Promise<UpdateNotionBlockActionState>;
 }) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_STATE);
   const [query, setQuery] = useState("");
@@ -245,7 +258,13 @@ export function NotionSearch({
                     ]
                   : []
               }
-              bodyContent={<PageContentBody state={contentState} />}
+              bodyContent={
+                <PageContentBody
+                  state={contentState}
+                  pageId={openResult?.id ?? null}
+                  updateBlockAction={updateBlockAction}
+                />
+              }
               lastEditedTime={openResult?.lastEditedTime ?? null}
               notionUrl={openResult?.url ?? null}
               propertyContext={null}
@@ -267,7 +286,18 @@ export function NotionSearch({
  * for a result type with no page-body content to fetch (see
  * CONTENT_FETCHABLE_TYPES) or before a result has been opened at all.
  */
-function PageContentBody({ state }: { state: PageContentViewState }) {
+function PageContentBody({
+  state,
+  pageId,
+  updateBlockAction,
+}: {
+  state: PageContentViewState;
+  pageId: string | null;
+  updateBlockAction: (
+    prevState: UpdateNotionBlockActionState,
+    input: UpdateNotionBlockActionInput,
+  ) => Promise<UpdateNotionBlockActionState>;
+}) {
   if (state.status === "idle") return null;
 
   if (state.status === "loading") {
@@ -287,7 +317,21 @@ function PageContentBody({ state }: { state: PageContentViewState }) {
     );
   }
 
-  const { content } = state;
+  const { content, editableBlockIds } = state;
+  // Absent (not just an empty set) whenever there's no page id to submit an
+  // edit against — NotionBlockList/NotionBlock/maybeEditableText already
+  // treat a missing editContext as "render exactly as before block editing
+  // existed", so this is never a behavior change on its own; it only
+  // matters once editableBlockIds is actually non-empty for some page,
+  // which requires an explicit NOTION_BLOCK_EDIT_ALLOWLIST entry.
+  const editContext: NotionBlockEditContext | null = pageId
+    ? {
+        pageId,
+        editableBlockIds: new Set(editableBlockIds),
+        action: updateBlockAction,
+      }
+    : null;
+
   return (
     <div className="space-y-3 border-b border-border pb-4">
       <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-faint">
@@ -298,7 +342,7 @@ function PageContentBody({ state }: { state: PageContentViewState }) {
           No readable content on this page yet.
         </p>
       ) : (
-        <NotionBlockList blocks={content.blocks} />
+        <NotionBlockList blocks={content.blocks} editContext={editContext} />
       )}
       {content.truncated && (
         <p className="text-xs italic text-ink-faint">

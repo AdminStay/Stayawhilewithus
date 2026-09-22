@@ -209,7 +209,38 @@ export type NotionSupportedBlockType =
 
 interface NotionContentBlockBase {
   id: string;
+  /**
+   * Notion's own real per-block `last_edited_time` — present on every real
+   * block object, same as a page's. Needed for optimistic-concurrency
+   * conflict detection on a future block edit (compare against the value a
+   * dashboard editor started from, immediately before writing — same
+   * pattern already used for page-property edits, see
+   * notion-edit.service.ts), and kept on every variant (including
+   * "unsupported"/"table") for consistency rather than only the editable
+   * ones. Empty string only in the pathological case of a malformed raw
+   * block missing the field entirely — never fabricated.
+   */
+  lastEditedTime: string;
 }
+
+/**
+ * The subset of NotionSupportedBlockType whose real Notion PATCH shape is
+ * identical — `{ [type]: { rich_text: [...] } }`, replacing only the
+ * block's plain text content (see NotionClient.updateBlockContent()).
+ * Deliberately excludes "table" (a materially different, per-cell shape
+ * that would need its own, separately-designed write path) — matching the
+ * "support only explicitly implemented block types" safety requirement for
+ * block editing.
+ */
+export type NotionEditableBlockType =
+  | "paragraph"
+  | "heading_1"
+  | "heading_2"
+  | "heading_3"
+  | "bulleted_list_item"
+  | "numbered_list_item"
+  | "toggle"
+  | "callout";
 
 /** paragraph/heading/list-item/toggle all share this exact shape (text + optionally-nested children) — callout is its own type only because it also carries an icon. */
 export interface NotionTextContentBlock extends NotionContentBlockBase {
