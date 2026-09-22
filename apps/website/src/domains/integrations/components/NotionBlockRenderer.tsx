@@ -101,7 +101,6 @@ function RichText({ runs }: { runs: NotionRichTextRun[] }) {
             </a>
           );
         }
-        // eslint-disable-next-line react/no-array-index-key -- rich-text runs have no stable id of their own; index is stable within one static block render
         return <span key={index}>{node}</span>;
       })}
     </>
@@ -251,7 +250,6 @@ function NotionBlock({
                     const CellTag = isHeaderRow || isHeaderCol ? "th" : "td";
                     return (
                       <CellTag
-                        // eslint-disable-next-line react/no-array-index-key -- a table_row's cells have no id of their own in Notion's API
                         key={cellIndex}
                         className="border border-border/70 px-2 py-1 text-left align-top font-normal"
                       >
@@ -325,7 +323,6 @@ export function NotionBlockList({
         if (group.kind === "bulleted_list") {
           return (
             <ul
-              // eslint-disable-next-line react/no-array-index-key -- a group has no id of its own; stable within one static render
               key={index}
               className="list-disc space-y-1 pl-5 text-sm text-ink"
             >
@@ -344,7 +341,6 @@ export function NotionBlockList({
         if (group.kind === "numbered_list") {
           return (
             <ol
-              // eslint-disable-next-line react/no-array-index-key -- a group has no id of its own; stable within one static render
               key={index}
               className="list-decimal space-y-1 pl-5 text-sm text-ink"
             >

@@ -7073,3 +7073,119 @@ Reviewed against the real Production-relevant facts already on record in this fi
 ### Files changed this increment
 
 `apps/website/src/domains/integrations/config/notion-block-edit-allowlist.ts` (the one entry added), `HANDOFF.md`. No other file touched. No commit, no push, no deploy, no Production change, no provider write, no local user/role change, no Ecobee action, no Resources change.
+
+## Increment 128 — 2026-09-23: Notion-only Production release PUSHED (`1e38c08`, fast-forward from `d69e975`) — deployment liveness checked read-only, exact-commit fingerprint NOT independently provable via unauthenticated means this time; STOPPED for the user's own controlled Production UI test, exactly as planned. MASTER PRIORITY recorded: finish Notion in Production before any August work; full August client-feedback list (Kenny/Michelle) preserved verbatim below, untouched, no investigation started; Ecobee remains PAUSED pending a remote-access-continuity discussion.
+
+### A. Isolated Notion-only commit (local `main`)
+
+`a671443` — "feat: add Notion block-content editing with provider-verified writes" — the local block-edit write path + second-GET verification + the one approved test-block allowlist entry, staged as an explicit file list (never `git add -A`/`.`/`-a`). `main`'s full working tree (Ecobee, `_tmp-*`, database scripts, Increments 117/121) preserved and restored afterward byte-for-byte (verified via reconstruction diff).
+
+### B. Isolated release branch, built without touching `main`
+
+`git worktree add -b notion-production-release <path> origin/main` (based on `origin/main` at `d69e975`, confirmed unchanged via a fresh `git fetch` immediately before) → cherry-picked `e5c7c7c` → `3635344`, `f4f9b58` → `0535926` (one real `HANDOFF.md` merge conflict, caused by Resources' Increment 120 text bleeding into the reconstructed 3-way-merge context since `3c6abd1` is absent on this branch — resolved by keeping only the genuine Notion Increment 123/124 content and discarding the Resources text; verified byte-exact), `a671443` → `1e38c08` (clean).
+
+Pre-push verification, all confirmed: fast-forward from current `origin/main`; `apps/website/src/domains/resources/` doesn't exist on this branch at all; zero diff under `packages/integrations/src/ecobee/`; zero diff under `packages/integrations/src/august/`/`apps/website/src/domains/smart-devices/`; zero diff under `packages/database/`; `NOTION_EDIT_ALLOWLIST` (property-level) still `[]`; `NOTION_BLOCK_EDIT_ALLOWLIST` contains exactly the one approved test entry. Fresh `pnpm install` + `prisma generate` in the worktree, then re-ran both suites from the isolated checkout: `packages/integrations` — `tsc --noEmit` clean, 245/245 tests pass (19 fewer than `main`'s count, exactly matching the untracked-only `ecobee/client.test.ts` correctly absent from a clean worktree); `apps/website` — `tsc --noEmit` clean, `vitest run src/domains/integrations` — 316/316 pass, identical to `main`.
+
+### C. Push — executed and confirmed at the remote
+
+```
+git push -u origin notion-production-release:main
+```
+
+Result: `d69e975..1e38c08  notion-production-release -> main`, no force, no rejection. Re-confirmed independently via a fresh `git fetch origin main` immediately after: `origin/main` now resolves to `1e38c08` — not just a local success message, the remote itself was queried.
+
+### D. Deployment-liveness check — read-only, unauthenticated, honest about its limits
+
+Checked `GET /api/health` (real StayWhile Production URL, already documented elsewhere in this file) twice, ~6 minutes apart: `200 {"status":"ok","timestamp":...}` both times, timestamp matching real request time — the app is up and responding. Checked unauthenticated `GET /` and `GET /notion`: both `404` via Clerk's `protect-rewrite` (`x-clerk-auth-status: signed-out`) — the same pre-existing, documented auth-boundary behavior as every prior increment, no regression.
+
+**Explicit limitation, stated rather than glossed over**: unlike Increment 90's deployment check (which had a genuinely new, distinctively-behaving webhook route to fingerprint), this release adds no new API route — every change is inside existing Server Actions/components, invisible to an unauthenticated request. The cached `404` response's `ETag`/`Last-Modified` stayed identical across both checks, which is NOT meaningful either way (the 404 page's own markup wasn't touched by this release, so an identical ETag is expected even on a fresh deployment, not evidence of a stale one). **I cannot independently prove via unauthenticated means alone that commit `1e38c08` specifically is what's now serving traffic** — no public endpoint exposes the deployed git SHA, and Vercel CLI/`gh` remain off-limits. What IS confirmed: the push landed for real on GitHub, the site is live with no regression, and enough time (~6 minutes) has passed for a typical Vercel monorepo build to complete. The real, authoritative confirmation is the user's own planned authenticated click-through — which doubles as the deployment-liveness proof, exactly as this file's own established precedent (Increment 90 Step 5) already treats an authenticated pass as the thing Claude cannot substitute for.
+
+### E. STOPPED here, per instruction — no Notion PATCH performed
+
+No write attempted. Waiting for the user to confirm the live dashboard looks ready, then perform the real controlled write themselves through the Production UI (not localhost, not a script).
+
+### F. MASTER PRIORITY recorded — Notion must fully complete in Production before August starts
+
+Explicit standing instruction, recorded verbatim in substance: do not bounce between integrations. Notion is the current active priority and stays so until the complete workflow (search → open → view real content → authorized Edit → Save → real PATCH → independent second-GET verification → updated content displayed) is proven on the **live Production dashboard**, not merely passing local code/tests. Remaining Notion completion gates, in order: (1) user's controlled write test — original → verified, independently confirmed via provider re-fetch + AuditLog; (2) restore — verified → original, independently confirmed the same way; (3) a small Notion-only follow-up commit removing the temporary test-block allowlist entry, restoring the fail-closed empty default (unless the user explicitly says otherwise); (4) final live-experience acceptance from Michelle/Kenny's actual perspective. Only after all four does Notion count as complete and development move to August.
+
+### G. August — Kenny/Michelle's new client feedback, preserved verbatim, NOT investigated or actioned this increment
+
+Recorded here exactly as reported, to prevent loss/dilution before Notion completes:
+
+1. Lock/Unlock is not working as expected.
+2. Removed/replaced locks remain visible.
+3. Sync messages/counts are not correct.
+4. Battery percentages do not match the August app.
+5. Most locks show `Unknown` for status/state.
+6. Kenny questions whether manual property mapping should be required at all.
+7. Michelle reports only Aqua Palm, Bonjour Front Door, Bonjour NIL, and Orion's as online/active; most others show `Unknown`.
+8. Royal Eden Front Door shows 19% in StayWhile vs. 28% in the real August app.
+9. Majestic Isla still shows the legacy "Majestic Isla - Front Door" lock alongside its replacement, "MJ - Front Door".
+10. Lock replacement happens frequently; adding a replacement and retiring the old lock needs a much smoother workflow than exists today.
+
+**Investigation plan for when August becomes active** (recorded now, not started):
+
+- **A. Unknown status/state**: compare provider truth vs. Production DB state vs. sync behavior vs. dashboard rendering; determine whether `Unknown` comes from missing provider telemetry, a parsing gap, stale DB data, an access-tier limitation, connectivity logic, or something else. **Missing Bridge data must NOT automatically mean offline.**
+- **B. Battery discrepancy**: Royal Eden Front Door specifically, StayWhile 19% vs. August app 28% — determine the real provider value/timestamp, the stored DB value, sync timing, and whether stale/incorrect telemetry is in play.
+- **C. Replacement/removal**: Majestic Isla as the concrete case — determine how an old/replaced lock should be explicitly retired/unmapped without any dangerous automatic deletion.
+- **D. Sync reporting**: reconcile provider inventory vs. mapped/unmapped/newly-discovered/updated/stale/legacy-replaced device counts and the exact Sync Now messaging.
+- **E. Lock/Unlock**: **no physical command during investigation.** Review why controls are presented where operability/authorization isn't verified. Preserve known MJ evidence: its real command reached August and returned `HTTP 403` while its authenticated relationship was `UserType: "user"`; Aqua Palm was `superuser`.
+- **F. Property mapping**: do NOT simply remove mapping because Kenny questioned it — determine what safety guarantee exact mapping currently provides, and design a lower-friction workflow for new/replacement locks. Provider/property data may SUGGEST a match for human confirmation; never introduce unsafe fuzzy automatic mapping.
+
+**August safety, standing, until explicitly approved**: NO Lock/Unlock commands, NO PIN/access-code operations, NO device deletion, NO mapping changes, NO August allowlist changes, NO automatic retirement.
+
+### H. Ecobee — remains PAUSED, unchanged this increment
+
+Pending tomorrow's meeting. Michelle's real concern is operational continuity — how the team remotely accesses thermostats if removed from the consumer Ecobee account; ecobee Support confirming settings "remain" does not by itself establish remote-access continuity during/after migration. Standing, until explicitly approved: do NOT remove thermostats from the consumer account, do NOT enroll/migrate thermostats, do NOT make any Ecobee API/device/configuration change, keep the owner's personal thermostat excluded.
+
+### Files changed this increment
+
+`HANDOFF.md` only. `packages/integrations/src/notion/scripts/inspect-sop-and-library-structure.ts` remains uncommitted/untracked, untouched. No Ecobee/Resources/August file touched. Local `main` unchanged throughout (still `a671443`) — the release branch/worktree was the only thing built on top of `origin/main`, never merged back into local `main`. No Notion write, no Vercel CLI, no ambient `gh`.
+
+## Increment 129 — 2026-09-23: Real Production deployment failure for `1e38c08` diagnosed and root-caused — a 4-line comment-only fix built, tested, and confirmed via a real local reproduction of the actual Production build command; NOT yet committed to `main`/pushed, per explicit instruction
+
+### A. User-reported failure
+
+The user checked the Vercel dashboard directly: the deployment for `1e38c08` ("feat: add Notion block-content editing with provider-verified writes") shows **Status: Error**. Explicitly noted: the earlier `/api/health` 200 response was from the still-running PRIOR successful deployment, not confirmation of this one — Vercel keeps serving the last successful deployment when a new one fails to build, so liveness alone never proved the new code was live. Correct call; recorded here so this distinction isn't lost.
+
+### B. Reproduction — the real Production build command, run for real
+
+Worked from the existing `notion-production-release` worktree (already sitting at `1e38c08` exactly, confirmed via `git log -1`), copied a local `.env.local`/`packages/database/.env` into it (target confirmed local dev, `127.0.0.1:5432`, never Production — checked before any DB-touching step), ran `pnpm exec prisma generate`, then the actual root `build` script (`turbo run build`, the same command a Vercel monorepo build with Root Directory = `apps/website` and Turborepo auto-detection would run). This is the first time this exact command had been run against this exact commit — `next build` includes a real ESLint pass as part of the build, so a `next build`-only failure was a real, previously-unexercised code path (typecheck alone, run repeatedly earlier, does not invoke ESLint at all).
+
+**Result: real failure, reproduced exactly.** `pnpm run build` exited 1 with `website#build` failing.
+
+### C. Root cause — exact, isolated to one file
+
+```
+./src/domains/integrations/components/NotionBlockRenderer.tsx
+104:9   Error: Definition for rule 'react/no-array-index-key' was not found.  react/no-array-index-key
+254:25  Error: Definition for rule 'react/no-array-index-key' was not found.  react/no-array-index-key
+328:15  Error: Definition for rule 'react/no-array-index-key' was not found.  react/no-array-index-key
+347:15  Error: Definition for rule 'react/no-array-index-key' was not found.  react/no-array-index-key
+```
+
+Four `// eslint-disable-next-line react/no-array-index-key -- ...` comments, added when `NotionBlockRenderer.tsx` was first written (Increment 123), reference an ESLint rule that **does not exist anywhere in this project's actual configuration**. Confirmed two ways: (1) `packages/config/eslint-config/{base,next}.js` — the shared flat-config this whole monorepo builds on — contain zero `react/*` rule references at all; (2) two pre-existing, unrelated components (`LockBulkRefreshPanel.tsx`, `Skeleton.tsx`) already use an array index as a React `key` with **no disable comment at all** and have shipped to Production before without incident — direct proof this pattern was never actually flagged by this project's real lint rules. In this project's ESLint setup (flat config), a disable comment naming an unregistered rule is itself a hard lint **error**, not a no-op — and `next build`'s own built-in lint step fails the build on any ESLint error. `tsc --noEmit` never exercises ESLint at all, which is exactly why this had passed every typecheck run so far without ever surfacing.
+
+**In plain terms**: I invented a plausible-sounding ESLint rule name for a suppression comment without verifying it against this project's real, configured rule set. The comments were always unnecessary (the underlying pattern was never actually linted here) and, worse, actively broke the build the moment `next build`'s real lint pass ran against them for the first time.
+
+### D. Fix — minimal, comment-only, zero behavior change
+
+Deleted exactly the 4 offending comment lines from `NotionBlockRenderer.tsx`. The `key={...}` usage on each line is completely unchanged — nothing about rendering, keys, or component behavior changed; only the invalid suppression comments were removed. Confirmed via `grep` that no other file anywhere in the repo references `react/no-array-index-key` or any other `react/*` rule — this was an isolated, one-file, one-time mistake, not a pattern to hunt down elsewhere.
+
+### E. Full verification after the fix
+
+- **Real Production build, re-run**: `pnpm run build` from the isolated worktree — **exit code 0**. All 28 routes built successfully, including `/notion` (7 kB route). (One separate, pre-existing, unrelated local-only gap surfaced along the way and was worked around for verification purposes only, never touching Production or the codebase: my personal `apps/website/.env.local` in that scratch worktree copy had a malformed `N8N_BASE_URL` — missing its closing quote — and was missing `N8N_WEBHOOK_SHARED_SECRET`/`N8N_INBOUND_WEBHOOK_SHARED_SECRET` entirely, tripping `env.ts`'s zod validation. Supplied local placeholder values in that scratch copy only, purely to exercise the build; Production's real Vercel env vars are unaffected and already correct — VA Schedule's live n8n integration proves that.)
+- `packages/integrations`: `tsc --noEmit` clean, `vitest run` — 264/264 pass (unchanged).
+- `apps/website`: `tsc --noEmit` clean, `vitest run src/domains/integrations` — 316/316 pass (unchanged) — this fix touches only comments, so an unchanged test count/result is expected, not a gap in coverage.
+
+### F. Scope discipline
+
+`git status` reconfirmed: only `apps/website/src/domains/integrations/components/NotionBlockRenderer.tsx` (4-line comment removal) plus this `HANDOFF.md` entry changed. Ecobee/Resources/dashboard-layout/`_tmp-*`/database-diagnostic files all remain exactly as pre-existing-dirty as before. No database change, no allowlist change (`NOTION_BLOCK_EDIT_ALLOWLIST` untouched, still the one approved test entry), no Notion write, no Vercel CLI, no ambient `gh`.
+
+### G. Not yet committed or pushed — stopped for approval
+
+Per explicit instruction, this fix is applied to the working tree only. It still needs: (1) an isolated Notion-only commit on local `main` (same explicit-file-staging discipline as every prior commit this session), (2) cherry-picking that one commit onto the `notion-production-release` worktree (currently at `1e38c08`) and re-verifying the real build succeeds there too (confirmed already, §E — same worktree, same fix applied), (3) the user's explicit approval before any push. **No push has been made.**
+
+### Files changed this increment
+
+`apps/website/src/domains/integrations/components/NotionBlockRenderer.tsx`, `HANDOFF.md`. No other file touched. No commit yet (pending explicit go-ahead on the commit step), no push, no deploy, no Production change, no Notion write, no Ecobee/Resources/August action, no Vercel CLI, no ambient `gh`.
