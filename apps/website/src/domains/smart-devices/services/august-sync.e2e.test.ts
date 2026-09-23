@@ -32,6 +32,11 @@ vi.mock("@stayw/database", () => ({
     smartDevice: {
       upsert: vi.fn().mockResolvedValue({}),
       deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+      // Nothing pre-existing in this fixture's DB — every device this file
+      // syncs is treated as brand-new (2026-09-23 release-review Fix 3:
+      // syncAugustDevices() now reads existing metadata before upserting,
+      // to merge fresh telemetry onto it rather than replacing it).
+      findUnique: vi.fn().mockResolvedValue(null),
     },
     // Nothing already mapped via ProviderDevice in this fixture — matches
     // this file's existing "unmapped lock" test, which asserts a plain

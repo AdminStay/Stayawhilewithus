@@ -617,6 +617,166 @@ describe("syncAugustDevices", () => {
     expect(prisma.smartDevice.upsert).toHaveBeenCalledTimes(1);
     expect(prisma.smartDevice.deleteMany).not.toHaveBeenCalled();
   });
+
+  describe("RETIREMENT-SAFETY (2026-09-23 release-review Fix 3): merges fresh telemetry onto existing metadata instead of replacing it", () => {
+    it("preserves a legacy mapped device's existing retiredAt while fresh telemetry still updates", async () => {
+      setConfigured();
+      process.env.AUGUST_PROPERTY_MAP = JSON.stringify({
+        "house-1": "property-1",
+      });
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      mockListLocks.mockResolvedValueOnce([
+        { id: "lock-1", name: "Front Door", houseId: "house-1" },
+      ]);
+      mockGetLockDetail.mockResolvedValueOnce({
+        id: "lock-1",
+        name: "Front Door",
+        houseId: "house-1",
+        batteryLevel: 72,
+        connectivity: "ONLINE",
+        lockState: "locked",
+        telemetryUpdatedAt: "2026-08-19T18:00:00.000Z",
+        seenAt: "2026-08-19T19:00:00.000Z",
+      });
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce({
+        metadata: {
+          retiredAt: "2026-09-20T00:00:00.000Z",
+          batteryLevel: 10,
+        },
+      } as never);
+
+      const result = await syncAugustDevices(actor);
+
+      expect(result).toEqual({ synced: 1, skippedExternalIds: [] });
+      expect(prisma.smartDevice.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          update: expect.objectContaining({
+            metadata: expect.objectContaining({
+              // The retirement marker survives, unchanged.
+              retiredAt: "2026-09-20T00:00:00.000Z",
+              // Fresh telemetry still updates correctly.
+              batteryLevel: 72,
+              lockState: "locked",
+              telemetryUpdatedAt: "2026-08-19T18:00:00.000Z",
+            }),
+          }),
+        }),
+      );
+    });
+
+    it("preserves an unrelated, unrecognized existing metadata key — a general merge, not a retiredAt special case", async () => {
+      setConfigured();
+      process.env.AUGUST_PROPERTY_MAP = JSON.stringify({
+        "house-1": "property-1",
+      });
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      mockListLocks.mockResolvedValueOnce([
+        { id: "lock-1", name: "Front Door", houseId: "house-1" },
+      ]);
+      mockGetLockDetail.mockResolvedValueOnce({
+        id: "lock-1",
+        name: "Front Door",
+        houseId: "house-1",
+        batteryLevel: 50,
+        connectivity: "ONLINE",
+        lockState: null,
+        telemetryUpdatedAt: null,
+        seenAt: null,
+      });
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce({
+        metadata: { someFutureField: "keep-me" },
+      } as never);
+
+      await syncAugustDevices(actor);
+
+      expect(prisma.smartDevice.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          update: expect.objectContaining({
+            metadata: expect.objectContaining({
+              someFutureField: "keep-me",
+              batteryLevel: 50,
+            }),
+          }),
+        }),
+      );
+    });
+
+    it("a brand-new legacy-mapped SmartDevice (no existing row) still creates correctly, with no retiredAt fabricated", async () => {
+      setConfigured();
+      process.env.AUGUST_PROPERTY_MAP = JSON.stringify({
+        "house-1": "property-1",
+      });
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      mockListLocks.mockResolvedValueOnce([
+        { id: "lock-1", name: "Front Door", houseId: "house-1" },
+      ]);
+      mockGetLockDetail.mockResolvedValueOnce({
+        id: "lock-1",
+        name: "Front Door",
+        houseId: "house-1",
+        batteryLevel: 72,
+        connectivity: "ONLINE",
+        lockState: "locked",
+        telemetryUpdatedAt: "2026-08-19T18:00:00.000Z",
+        seenAt: "2026-08-19T19:00:00.000Z",
+      });
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(null);
+
+      const result = await syncAugustDevices(actor);
+
+      expect(result).toEqual({ synced: 1, skippedExternalIds: [] });
+      expect(prisma.smartDevice.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({
+            metadata: {
+              batteryLevel: 72,
+              lockState: "locked",
+              telemetryUpdatedAt: "2026-08-19T18:00:00.000Z",
+            },
+          }),
+        }),
+      );
+      const upsertArgs = vi.mocked(prisma.smartDevice.upsert).mock.calls[0]![0];
+      expect(Object.keys(upsertArgs.create.metadata as object)).not.toContain(
+        "retiredAt",
+      );
+    });
+
+    it("performs a pure metadata read-then-upsert for a retired device — no retirement/unretirement side effect, and structurally cannot reach a lock/unlock/unlatch call (this file's own AugustClient mock exposes only listLocks/getLockDetail)", async () => {
+      setConfigured();
+      process.env.AUGUST_PROPERTY_MAP = JSON.stringify({
+        "house-1": "property-1",
+      });
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      mockListLocks.mockResolvedValueOnce([
+        { id: "lock-1", name: "Front Door", houseId: "house-1" },
+      ]);
+      mockGetLockDetail.mockResolvedValueOnce({
+        id: "lock-1",
+        name: "Front Door",
+        houseId: "house-1",
+        batteryLevel: 72,
+        connectivity: "ONLINE",
+        lockState: "locked",
+        telemetryUpdatedAt: "2026-08-19T18:00:00.000Z",
+        seenAt: "2026-08-19T19:00:00.000Z",
+      });
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce({
+        metadata: { retiredAt: "2026-09-20T00:00:00.000Z" },
+      } as never);
+
+      const result = await syncAugustDevices(actor);
+
+      // The retirement marker is preserved (not touched in either
+      // direction) — this sync neither erases nor intentionally clears it.
+      const upsertArgs = vi.mocked(prisma.smartDevice.upsert).mock.calls[0]![0];
+      expect(
+        (upsertArgs.update as { metadata: Record<string, unknown> }).metadata
+          .retiredAt,
+      ).toBe("2026-09-20T00:00:00.000Z");
+      expect(result).toEqual({ synced: 1, skippedExternalIds: [] });
+    });
+  });
 });
 
 describe("syncCieloDevices", () => {

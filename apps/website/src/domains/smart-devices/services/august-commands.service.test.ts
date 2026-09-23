@@ -711,6 +711,135 @@ describe("sendAugustLockCommand", () => {
     expect(updatedMetadata?.batteryLevel).toBe(77);
   });
 
+  describe("RETIREMENT-SAFETY (2026-09-23 release-review Fix 4): post-command confirmation write merges onto existing metadata instead of replacing it", () => {
+    it("preserves an existing retiredAt in the confirmation write itself, while fresh battery/lockState/telemetry fields still update — a write-primitive test, not an assertion that Production should permit commands against retired devices (existing guards remain fail-closed and are untouched)", async () => {
+      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+        EXTERNAL_ID,
+      ]);
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice({
+          metadata: {
+            lockState: "unlocked",
+            retiredAt: "2026-09-20T00:00:00.000Z",
+          },
+        }) as never,
+      );
+      allowTransaction();
+      mockGetLockDetail
+        .mockResolvedValueOnce(freshDetail({ lockState: "unlocked" }))
+        .mockResolvedValueOnce(
+          freshDetail({
+            lockState: "locked",
+            batteryLevel: 77,
+            telemetryUpdatedAt: "2026-09-18T01:23:45.000Z",
+          }),
+        );
+      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result).toEqual({ status: "success", lockState: "locked" });
+      const metadataUpdateCall = vi
+        .mocked(prisma.smartDevice.update)
+        .mock.calls.find((call) => "metadata" in (call[0]?.data ?? {}));
+      const updatedMetadata = metadataUpdateCall?.[0].data.metadata as Record<
+        string,
+        unknown
+      >;
+      expect(updatedMetadata.retiredAt).toBe("2026-09-20T00:00:00.000Z");
+      expect(updatedMetadata.lockState).toBe("locked");
+      expect(updatedMetadata.batteryLevel).toBe(77);
+      expect(updatedMetadata.telemetryUpdatedAt).toBe(
+        "2026-09-18T01:23:45.000Z",
+      );
+    });
+
+    it("preserves an unrelated, unrecognized existing metadata key — a general merge, not a retiredAt special case", async () => {
+      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+        EXTERNAL_ID,
+      ]);
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice({
+          metadata: { lockState: "unlocked", someFutureField: "keep-me" },
+        }) as never,
+      );
+      allowTransaction();
+      mockGetLockDetail
+        .mockResolvedValueOnce(freshDetail({ lockState: "unlocked" }))
+        .mockResolvedValueOnce(freshDetail({ lockState: "locked" }));
+      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+
+      await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      const metadataUpdateCall = vi
+        .mocked(prisma.smartDevice.update)
+        .mock.calls.find((call) => "metadata" in (call[0]?.data ?? {}));
+      const updatedMetadata = metadataUpdateCall?.[0].data.metadata as Record<
+        string,
+        unknown
+      >;
+      expect(updatedMetadata.someFutureField).toBe("keep-me");
+      expect(updatedMetadata.lockState).toBe("locked");
+    });
+
+    it("existing command guards remain fail-closed and untouched: a disabled ProviderDevice is still rejected before any command or write, even with retiredAt present", async () => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice({
+          metadata: { retiredAt: "2026-09-20T00:00:00.000Z" },
+          providerDevice: {
+            enabled: false,
+            propertyId: PROPERTY_ID,
+            externalDeviceId: EXTERNAL_ID,
+            rawMetadata: {},
+          },
+        }) as never,
+      );
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason:
+          "This device is not enabled for control — map and enable it from Discovered Devices first.",
+      });
+      expect(mockGetLockDetail).not.toHaveBeenCalled();
+      expect(mockLock).not.toHaveBeenCalled();
+      expect(prisma.smartDevice.update).not.toHaveBeenCalled();
+    });
+
+    it("existing command guards remain fail-closed and untouched: a legacy device with no ProviderDevice link at all is still rejected before any command or write", async () => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice({
+          metadata: { retiredAt: "2026-09-20T00:00:00.000Z" },
+          providerDevice: null,
+        }) as never,
+      );
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason:
+          "This device is not enabled for control — map and enable it from Discovered Devices first.",
+      });
+      expect(mockGetLockDetail).not.toHaveBeenCalled();
+      expect(mockLock).not.toHaveBeenCalled();
+      expect(prisma.smartDevice.update).not.toHaveBeenCalled();
+    });
+  });
+
   it("successful command audit entry: records actor/property/device/provider/operation/result and the confirmed (not guessed) resulting lock state", async () => {
     process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
       EXTERNAL_ID,

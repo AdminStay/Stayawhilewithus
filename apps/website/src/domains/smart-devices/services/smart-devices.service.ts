@@ -245,19 +245,42 @@ export async function syncAugustDevices(
     // names, or anything from the account/auth surface of the raw
     // response, even though those live right alongside these fields in
     // August's actual API payload.
+    const freshMetadata = {
+      ...(detail.batteryLevel != null && {
+        batteryLevel: detail.batteryLevel,
+      }),
+      ...(detail.telemetryUpdatedAt != null && {
+        telemetryUpdatedAt: detail.telemetryUpdatedAt,
+      }),
+      ...(detail.lockState != null && { lockState: detail.lockState }),
+    };
+
+    // Existing metadata this legacy sync doesn't own is preserved, merged
+    // rather than replaced (2026-09-23 release-review fix) — in particular
+    // item C's `retiredAt`. A legacy AUGUST_PROPERTY_MAP-mapped SmartDevice
+    // can be explicitly retired by retireSmartDevice() while its houseId
+    // stays in AUGUST_PROPERTY_MAP; the very next "Sync Now" must not
+    // silently un-retire it. General merge, same principle as
+    // mergeAugustLockMetadata() (lock-refresh.service.ts) — not a
+    // retiredAt-specific carve-out. `null` for a brand-new device (nothing
+    // to merge with), so create behavior is unchanged from before this fix.
+    const existingSmartDevice = await prisma.smartDevice.findUnique({
+      where: {
+        provider_externalDeviceId: {
+          provider: "AUGUST",
+          externalDeviceId: detail.id,
+        },
+      },
+      select: { metadata: true },
+    });
+    const existingMetadata =
+      (existingSmartDevice?.metadata as Record<string, unknown> | null) ?? {};
+
     const data = {
       propertyId,
       name: detail.name,
       status: detail.connectivity,
-      metadata: {
-        ...(detail.batteryLevel != null && {
-          batteryLevel: detail.batteryLevel,
-        }),
-        ...(detail.telemetryUpdatedAt != null && {
-          telemetryUpdatedAt: detail.telemetryUpdatedAt,
-        }),
-        ...(detail.lockState != null && { lockState: detail.lockState }),
-      },
+      metadata: { ...existingMetadata, ...freshMetadata },
       // seenAt only exists for the lock generation that gives August's own
       // real-time-confirmed timestamp (LockStatus.dateTime) — never
       // backfilled from telemetry or our own sync time for the rest, per
@@ -275,6 +298,13 @@ export async function syncAugustDevices(
       update: data,
       create: {
         ...data,
+        // A brand-new row has no existing metadata to merge with — fresh
+        // fields only, exactly as before this fix. (`data.metadata` above
+        // already equals `freshMetadata` in this case, since
+        // `existingMetadata` is `{}`, but this is spelled out explicitly
+        // here so a future edit to `data` can't accidentally carry a
+        // merge artifact into a genuinely new device's very first row.)
+        metadata: freshMetadata,
         provider: "AUGUST",
         deviceType: "LOCK",
         externalDeviceId: detail.id,

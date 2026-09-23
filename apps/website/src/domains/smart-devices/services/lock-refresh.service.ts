@@ -80,12 +80,18 @@ export function logLockRefresh(
  * simply keeps whatever telemetryUpdatedAt (or absence of one) it already
  * had, exactly like every other field this function doesn't touch.
  *
- * Exported (2026-09-18) so august-commands.service.ts's post-command
- * confirmation read reuses this exact same semantic — a real physical
- * command's own confirmation read is the same kind of fact as a refresh's
- * read (proves StayWhile reached August just now, not that August itself
- * has fresh telemetry), so it needs this function, not
- * toAugustSmartDeviceMetadata()'s always-stamp variant.
+ * Originally exported (2026-09-18) so august-commands.service.ts's
+ * post-command confirmation write could reuse this exact telemetry-shaping
+ * semantic (proves StayWhile reached August just now, not that August
+ * itself has fresh telemetry — the same reasoning as this function's own
+ * doc comment above, as opposed to toAugustSmartDeviceMetadata()'s
+ * always-stamp variant). As of 2026-09-23's release-review Fix 4, that
+ * call site moved to mergeAugustLockMetadata() below instead (a full
+ * replace there could silently erase item C's `retiredAt`) — this
+ * function itself is unchanged and still correct on its own terms, just
+ * no longer called anywhere in this app as of this fix. Kept rather than
+ * deleted since removing it wasn't asked for as part of this fix; flagged
+ * here so it isn't mistaken for still being load-bearing.
  */
 export function toAugustLockMetadata(
   lock: AugustLockDetail,
@@ -95,6 +101,54 @@ export function toAugustLockMetadata(
     ...(lock.lockState != null && { lockState: lock.lockState }),
     ...(lock.telemetryUpdatedAt != null && {
       telemetryUpdatedAt: lock.telemetryUpdatedAt,
+    }),
+  };
+}
+
+/**
+ * Merges only the telemetry keys a fresh August read actually included on
+ * top of a row's EXISTING metadata — an omitted field keeps its last known
+ * value, and any key this refresh doesn't own (2026-09-23, item C's release
+ * review: `retiredAt`, the explicit-retirement marker — but written this
+ * way generically, not as a `retiredAt` special case, so it also protects
+ * any other future non-telemetry key the same way) survives untouched.
+ * Moved here (2026-09-23) from lock-spot-refresh.service.ts, which
+ * originally kept it private specifically because runAugustTelemetryRefresh()
+ * below used to do a full replace via toAugustLockMetadata() instead — that
+ * was the real gap: a whole-fleet refresh run (manual "Refresh all" or
+ * item B's automatic tick) could silently erase item C's `retiredAt` for any
+ * device whose retirement raced with that run. Both refresh entry points
+ * now use this same merge function; lock-spot-refresh.service.ts imports it
+ * from here rather than keeping its own copy.
+ *
+ * A distinct function from toAugustLockMetadata() above (kept, not merged
+ * into one), since that one's fresh-replacement shape was still a
+ * deliberate design choice when it was written and remains a valid choice
+ * in general — it's simply not correct for any of the five real August
+ * write sites this app currently has, all five of which have since been
+ * moved onto this merge function instead: this refresh (Fix 1),
+ * lock-spot-refresh.service.ts's spot refresh (already safe before this
+ * round), setProviderDeviceEnabled() (Fix 2, provider-devices.service.ts),
+ * syncAugustDevices() (Fix 3, smart-devices.service.ts), and
+ * sendAugustLockCommand()'s confirmation write (Fix 4,
+ * august-commands.service.ts). As of Fix 4, no August SmartDevice write
+ * path in this app still uses toAugustLockMetadata() — see this fix's own
+ * written report for the complete inventory.
+ */
+export function mergeAugustLockMetadata(
+  existing: Record<string, unknown>,
+  fresh: {
+    batteryLevel: number | null;
+    lockState: string | null;
+    telemetryUpdatedAt: string | null;
+  },
+): Record<string, unknown> {
+  return {
+    ...existing,
+    ...(fresh.batteryLevel != null && { batteryLevel: fresh.batteryLevel }),
+    ...(fresh.lockState != null && { lockState: fresh.lockState }),
+    ...(fresh.telemetryUpdatedAt != null && {
+      telemetryUpdatedAt: fresh.telemetryUpdatedAt,
     }),
   };
 }
@@ -166,7 +220,16 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshResult> {
       smartDeviceId: { not: null },
       integrationConnection: { provider: "AUGUST" },
     },
-    select: { id: true, externalDeviceId: true, smartDeviceId: true },
+    select: {
+      id: true,
+      externalDeviceId: true,
+      smartDeviceId: true,
+      // Existing metadata, so the per-device write below can merge fresh
+      // telemetry onto it instead of replacing it wholesale — see
+      // mergeAugustLockMetadata()'s own doc comment for why (2026-09-23
+      // release-review fix).
+      smartDevice: { select: { metadata: true } },
+    },
   });
   logLockRefresh("august_eligible_rows", {
     eligibleCount: eligibleDevices.length,
@@ -232,12 +295,27 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshResult> {
       // mirrors syncAugustDevices()'s own field exactly: August's real
       // LockStatus.dateTime when validly reported, null otherwise — never
       // this refresh's own execution time.
+      //
+      // metadata is MERGED (mergeAugustLockMetadata), not replaced
+      // (2026-09-23 release-review fix) — onto whatever this same query
+      // already read for this device, above. A full replace here could
+      // silently erase item C's `retiredAt` (or any other non-telemetry
+      // key) for a device whose retirement happened after this run's
+      // eligibility query but before this specific write — see
+      // mergeAugustLockMetadata()'s own doc comment for the full history.
       writes.push(
         prisma.smartDevice.update({
           where: { id: device.smartDeviceId },
           data: {
             status: detail.connectivity,
-            metadata: toAugustLockMetadata(detail) as Prisma.InputJsonValue,
+            metadata: mergeAugustLockMetadata(
+              (device.smartDevice?.metadata as Record<string, unknown>) ?? {},
+              {
+                batteryLevel: detail.batteryLevel,
+                lockState: detail.lockState,
+                telemetryUpdatedAt: detail.telemetryUpdatedAt,
+              },
+            ) as Prisma.InputJsonValue,
             lastSeenAt: detail.seenAt ? new Date(detail.seenAt) : null,
           },
         }),

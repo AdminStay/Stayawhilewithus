@@ -576,6 +576,20 @@ export async function unmapProviderDevice(
  * note above, an already-created SmartDevice row isn't retroactively
  * removed. Transactional so the ProviderDevice/SmartDevice pair never goes
  * out of sync with each other.
+ *
+ * Re-enabling an EXISTING SmartDevice merges freshly-computed
+ * provider-derived fields onto its current metadata rather than replacing
+ * it wholesale (2026-09-23 release-review fix) — specifically so
+ * re-enabling an August lock that item C previously retired
+ * (retireSmartDevice(), smart-devices.service.ts) does not silently erase
+ * its `retiredAt` marker as a side effect. Enable/Disable and
+ * Retire/Restore are different administrative concepts; this function
+ * still has no opinion about retirement at all (it neither reads nor
+ * clears `retiredAt`) — it only stops being destructive toward metadata
+ * it doesn't own. There is no automatic "restore" here: a re-enabled
+ * device that still carries `retiredAt` stays excluded from /locks
+ * (isLockVisible()) until a human explicitly un-retires it, if/when that
+ * action is ever built.
  */
 export async function setProviderDeviceEnabled(
   actor: AuthContext,
@@ -603,6 +617,37 @@ export async function setProviderDeviceEnabled(
 
   const updated = await prisma.$transaction(async (tx) => {
     if (input.enabled && smartDeviceProvider && providerDevice.propertyId) {
+      const freshMetadata = computeEnabledSmartDeviceMetadata(
+        providerDevice.integrationConnection.provider,
+        providerDevice.rawMetadata,
+        providerDevice.lastSeenAt,
+      );
+
+      // Preserve any existing SmartDevice metadata this action doesn't own
+      // (2026-09-23 release-review fix) — in particular item C's
+      // `retiredAt`. Enabling a ProviderDevice and retiring/restoring a
+      // SmartDevice are different administrative concepts; enabling must
+      // never silently reverse a retirement as a side effect. A general
+      // merge — same principle as mergeAugustLockMetadata()
+      // (lock-refresh.service.ts) — not a retiredAt-specific carve-out, so
+      // any other future non-provider-owned key survives the same way. A
+      // brand-new SmartDevice (this ProviderDevice's first-ever enable) has
+      // no existing row to merge with, so `existingMetadata` is `{}` and
+      // this is a no-op for that case — identical to the prior behavior.
+      const existingSmartDevice = smartDeviceProvider
+        ? await tx.smartDevice.findUnique({
+            where: {
+              provider_externalDeviceId: {
+                provider: smartDeviceProvider,
+                externalDeviceId: providerDevice.externalDeviceId,
+              },
+            },
+            select: { metadata: true },
+          })
+        : null;
+      const existingMetadata =
+        (existingSmartDevice?.metadata as Record<string, unknown> | null) ?? {};
+
       const smartDeviceData = {
         propertyId: providerDevice.propertyId,
         name: providerDevice.discoveredName,
@@ -612,11 +657,10 @@ export async function setProviderDeviceEnabled(
         // provider API calls). Passing the real snapshot time keeps the
         // dashboard's "Last telemetry" column honest instead of claiming a
         // reading taken at discovery time is fresh at enable time.
-        metadata: computeEnabledSmartDeviceMetadata(
-          providerDevice.integrationConnection.provider,
-          providerDevice.rawMetadata,
-          providerDevice.lastSeenAt,
-        ) as Prisma.InputJsonValue,
+        metadata: {
+          ...existingMetadata,
+          ...freshMetadata,
+        } as Prisma.InputJsonValue,
       };
 
       const smartDevice = await tx.smartDevice.upsert({

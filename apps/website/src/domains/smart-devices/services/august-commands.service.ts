@@ -9,7 +9,7 @@ import {
 } from "@stayw/integrations/august";
 import { HttpRequestError } from "@stayw/integrations/core";
 
-import { toAugustLockMetadata } from "./lock-refresh.service";
+import { mergeAugustLockMetadata } from "./lock-refresh.service";
 
 import { recordAudit } from "@/platform/audit/record-audit";
 
@@ -454,7 +454,27 @@ export async function sendAugustLockCommand(
     // Confirmation — read what August actually reports now, never assume
     // the command produced exactly the requested state.
     const confirmed = await client.getLockDetail(externalDeviceId);
-    const confirmedMetadata = toAugustLockMetadata(confirmed);
+    // Merged onto previousMetadata (captured above, before this command
+    // ever ran) rather than replaced wholesale (2026-09-23 release-review
+    // Fix 4) — this write is structurally unreachable for a currently
+    // retired device today (the `providerDevice.enabled` check earlier in
+    // this same function already rejects both a disabled ProviderDevice-
+    // backed retirement and a legacy no-ProviderDevice one), but that
+    // invariant must not depend on a future developer remembering that an
+    // unrelated command guard happens to protect metadata — the write
+    // itself is now safe on its own terms, the same general merge as
+    // Fix 1/2/3 (mergeAugustLockMetadata, lock-refresh.service.ts), not a
+    // retiredAt-specific carve-out. Every existing command guard (enabled/
+    // mapping/property/capability/allowlist/positive-verification) above
+    // this point is unchanged.
+    const confirmedMetadata = mergeAugustLockMetadata(
+      (previousMetadata as Record<string, unknown> | null) ?? {},
+      {
+        batteryLevel: confirmed.batteryLevel,
+        lockState: confirmed.lockState,
+        telemetryUpdatedAt: confirmed.telemetryUpdatedAt,
+      },
+    );
 
     await prisma.smartDevice.update({
       where: { id: smartDevice.id },

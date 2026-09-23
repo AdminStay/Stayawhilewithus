@@ -9,6 +9,7 @@ import {
   type RefreshAugustSpotInput,
 } from "../schemas/lock-spot-refresh.schema";
 
+import { mergeAugustLockMetadata } from "./lock-refresh.service";
 import { AUGUST_DETAIL_CONCURRENCY, chunk } from "./provider-devices.service";
 import { isDemoSmartDevice } from "./smart-devices.service";
 
@@ -32,13 +33,20 @@ import { recordAudit } from "@/platform/audit/record-audit";
  * that client's own doc comment). Only ever writes status/metadata/
  * lastSeenAt on rows that already exist, by their own id.
  *
- * Unlike every other provider-metadata write in this codebase,
  * `metadata` is MERGED with the row's existing value, not replaced — a
  * momentary missing field in one device's API response must not erase a
  * previously-known reading for a hand-picked troubleshooting tool like this
- * one. (refreshAugustTelemetry()/refreshNestTelemetry() intentionally still
- * do a full replace; that's correct for a whole-fleet pass where a provider
- * genuinely stopped reporting a field, and is left unchanged.)
+ * one. Uses mergeAugustLockMetadata() (lock-refresh.service.ts), the same
+ * shared function every other real August SmartDevice metadata write in
+ * this app now uses as of the 2026-09-23 release-review fixes
+ * (refreshAugustTelemetry()'s whole-fleet pass, setProviderDeviceEnabled(),
+ * syncAugustDevices(), and sendAugustLockCommand()'s confirmation write —
+ * all of them used to do a full replace, which could silently erase item
+ * C's `retiredAt`; see mergeAugustLockMetadata()'s own doc comment for the
+ * full history and complete write-path inventory). Nest's
+ * refreshNestTelemetry() is unaffected by this and still does a full
+ * replace — out of scope, since `retiredAt` can only ever exist on an
+ * August SmartDevice's metadata (retireSmartDevice() is August-only).
  *
  * Each requested id is resolved and refreshed independently — one device's
  * provider-call failure never affects another's result.
@@ -99,32 +107,6 @@ function getAugustClientFromEnv(): AugustClient {
     accessToken,
     brand: brand && isAugustBrand(brand) ? brand : "august",
   });
-}
-
-/**
- * Merges only the keys August's response actually included this call on
- * top of the row's existing metadata — an omitted field keeps its last
- * known value instead of being dropped. Deliberately the opposite of
- * toAugustLockMetadata() (lock-refresh.service.ts), which builds a fresh
- * replacement object every time; that difference is the entire reason this
- * function lives in its own file rather than extending that one.
- */
-function mergeAugustLockMetadata(
-  existing: Record<string, unknown>,
-  fresh: {
-    batteryLevel: number | null;
-    lockState: string | null;
-    telemetryUpdatedAt: string | null;
-  },
-): Record<string, unknown> {
-  return {
-    ...existing,
-    ...(fresh.batteryLevel != null && { batteryLevel: fresh.batteryLevel }),
-    ...(fresh.lockState != null && { lockState: fresh.lockState }),
-    ...(fresh.telemetryUpdatedAt != null && {
-      telemetryUpdatedAt: fresh.telemetryUpdatedAt,
-    }),
-  };
 }
 
 export async function refreshAugustTelemetryForSelectedLocks(

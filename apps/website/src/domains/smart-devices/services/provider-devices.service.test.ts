@@ -856,7 +856,10 @@ describe("setProviderDeviceEnabled", () => {
     });
     mockTransaction.mockImplementationOnce(async (fn) =>
       fn({
-        smartDevice: { upsert: mockUpsert },
+        smartDevice: {
+          upsert: mockUpsert,
+          findUnique: vi.fn().mockResolvedValue(null),
+        },
         providerDevice: { update: mockUpdate },
       }),
     );
@@ -924,7 +927,10 @@ describe("setProviderDeviceEnabled", () => {
     });
     mockTransaction.mockImplementationOnce(async (fn) =>
       fn({
-        smartDevice: { upsert: mockUpsert },
+        smartDevice: {
+          upsert: mockUpsert,
+          findUnique: vi.fn().mockResolvedValue(null),
+        },
         providerDevice: { update: mockUpdate },
       }),
     );
@@ -954,6 +960,180 @@ describe("setProviderDeviceEnabled", () => {
       "2026-08-20T12:00:00.000Z",
     );
     expect(upsertArgs.create.deviceType).toBe("LOCK");
+  });
+
+  it("RETIREMENT-SAFETY (2026-09-23 release-review fix): re-enabling a ProviderDevice linked to a retired August SmartDevice preserves retiredAt while provider telemetry still updates — Enable never silently un-retires", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.providerDevice.findUniqueOrThrow).mockResolvedValueOnce({
+      id: "11111111-1111-1111-1111-111111111111",
+      propertyId: "22222222-2222-2222-2222-222222222222",
+      externalDeviceId: "lock-1",
+      discoveredName: "Front Door",
+      connectivityStatus: "ONLINE",
+      deviceType: "LOCK",
+      rawMetadata: {
+        id: "lock-1",
+        name: "Front Door",
+        houseId: "house-1",
+        batteryLevel: 92,
+        connectivity: "ONLINE",
+        lockState: "locked",
+        telemetryUpdatedAt: "2026-08-20T00:00:00.000Z",
+        seenAt: "2026-08-20T00:00:00.000Z",
+      },
+      lastSeenAt: new Date("2026-08-20T12:00:00.000Z"),
+      integrationConnection: { provider: "AUGUST" },
+    } as never);
+
+    const mockFindUnique = vi.fn().mockResolvedValueOnce({
+      metadata: {
+        retiredAt: "2026-09-20T00:00:00.000Z",
+        batteryLevel: 10,
+      },
+    });
+    const mockUpsert = vi.fn().mockResolvedValue({ id: "sd-lock-1" });
+    const mockUpdate = vi.fn().mockResolvedValue({
+      id: "11111111-1111-1111-1111-111111111111",
+      enabled: true,
+    });
+    mockTransaction.mockImplementationOnce(async (fn) =>
+      fn({
+        smartDevice: { upsert: mockUpsert, findUnique: mockFindUnique },
+        providerDevice: { update: mockUpdate },
+      }),
+    );
+
+    await setProviderDeviceEnabled(actor, {
+      providerDeviceId: "11111111-1111-1111-1111-111111111111",
+      enabled: true,
+    });
+
+    const upsertArgs = mockUpsert.mock.calls[0]![0];
+    // The retirement marker survives, unchanged.
+    expect(upsertArgs.update.metadata.retiredAt).toBe(
+      "2026-09-20T00:00:00.000Z",
+    );
+    // Fresh provider-derived telemetry still updates correctly.
+    expect(upsertArgs.update.metadata.batteryLevel).toBe(92);
+    expect(upsertArgs.update.metadata.lockState).toBe("locked");
+    // Existing enable-audit behavior is unchanged.
+    expect(mockUpdate).toHaveBeenCalledWith({
+      where: { id: "11111111-1111-1111-1111-111111111111" },
+      data: { enabled: true, smartDeviceId: "sd-lock-1" },
+    });
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "provider_device.enabled" }),
+    );
+  });
+
+  it("preserves an unrelated, unrecognized existing metadata key on re-enable — a general merge, not a retiredAt special case", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.providerDevice.findUniqueOrThrow).mockResolvedValueOnce({
+      id: "11111111-1111-1111-1111-111111111111",
+      propertyId: "22222222-2222-2222-2222-222222222222",
+      externalDeviceId: "d1",
+      discoveredName: "Living Room",
+      connectivityStatus: "ONLINE",
+      deviceType: "THERMOSTAT",
+      rawMetadata: { ambientTemperatureCelsius: 21 },
+      lastSeenAt: new Date("2026-08-20T12:00:00.000Z"),
+      integrationConnection: { provider: "NEST" },
+    } as never);
+
+    const mockFindUnique = vi.fn().mockResolvedValueOnce({
+      metadata: { someFutureField: "keep-me" },
+    });
+    const mockUpsert = vi.fn().mockResolvedValue({ id: "sd-1" });
+    const mockUpdate = vi.fn().mockResolvedValue({
+      id: "11111111-1111-1111-1111-111111111111",
+      enabled: true,
+    });
+    mockTransaction.mockImplementationOnce(async (fn) =>
+      fn({
+        smartDevice: { upsert: mockUpsert, findUnique: mockFindUnique },
+        providerDevice: { update: mockUpdate },
+      }),
+    );
+
+    await setProviderDeviceEnabled(actor, {
+      providerDeviceId: "11111111-1111-1111-1111-111111111111",
+      enabled: true,
+    });
+
+    const upsertArgs = mockUpsert.mock.calls[0]![0];
+    expect(upsertArgs.update.metadata.someFutureField).toBe("keep-me");
+    expect(upsertArgs.update.metadata.currentTemperature).toBeCloseTo(70, 0);
+  });
+
+  it("a brand-new SmartDevice (first-ever enable, no existing row) is unaffected by the merge — behavior identical to before this fix", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.providerDevice.findUniqueOrThrow).mockResolvedValueOnce({
+      id: "11111111-1111-1111-1111-111111111111",
+      propertyId: "22222222-2222-2222-2222-222222222222",
+      externalDeviceId: "d1",
+      discoveredName: "Living Room",
+      connectivityStatus: "ONLINE",
+      deviceType: "THERMOSTAT",
+      rawMetadata: { ambientTemperatureCelsius: 21 },
+      lastSeenAt: new Date("2026-08-20T12:00:00.000Z"),
+      integrationConnection: { provider: "NEST" },
+    } as never);
+
+    const mockFindUnique = vi.fn().mockResolvedValueOnce(null);
+    const mockUpsert = vi.fn().mockResolvedValue({ id: "sd-1" });
+    const mockUpdate = vi.fn().mockResolvedValue({
+      id: "11111111-1111-1111-1111-111111111111",
+      enabled: true,
+    });
+    mockTransaction.mockImplementationOnce(async (fn) =>
+      fn({
+        smartDevice: { upsert: mockUpsert, findUnique: mockFindUnique },
+        providerDevice: { update: mockUpdate },
+      }),
+    );
+
+    await setProviderDeviceEnabled(actor, {
+      providerDeviceId: "11111111-1111-1111-1111-111111111111",
+      enabled: true,
+    });
+
+    const upsertArgs = mockUpsert.mock.calls[0]![0];
+    expect(upsertArgs.create.metadata.currentTemperature).toBeCloseTo(70, 0);
+    expect(Object.keys(upsertArgs.create.metadata)).not.toContain("retiredAt");
+  });
+
+  it("disabling remains completely unchanged by this fix — never calls smartDevice.findUnique or .upsert at all", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.providerDevice.findUniqueOrThrow).mockResolvedValueOnce({
+      id: "11111111-1111-1111-1111-111111111111",
+      propertyId: "22222222-2222-2222-2222-222222222222",
+      integrationConnection: { provider: "NEST" },
+    } as never);
+
+    const mockFindUnique = vi.fn();
+    const mockUpsert = vi.fn();
+    const mockUpdate = vi.fn().mockResolvedValue({
+      id: "11111111-1111-1111-1111-111111111111",
+      enabled: false,
+    });
+    mockTransaction.mockImplementationOnce(async (fn) =>
+      fn({
+        smartDevice: { upsert: mockUpsert, findUnique: mockFindUnique },
+        providerDevice: { update: mockUpdate },
+      }),
+    );
+
+    await setProviderDeviceEnabled(actor, {
+      providerDeviceId: "11111111-1111-1111-1111-111111111111",
+      enabled: false,
+    });
+
+    expect(mockFindUnique).not.toHaveBeenCalled();
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(mockUpdate).toHaveBeenCalledWith({
+      where: { id: "11111111-1111-1111-1111-111111111111" },
+      data: { enabled: false },
+    });
   });
 
   it("disabling only flips the flag — never touches the SmartDevice row", async () => {

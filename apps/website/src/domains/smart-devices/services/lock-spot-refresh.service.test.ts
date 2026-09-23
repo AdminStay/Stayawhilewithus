@@ -177,6 +177,12 @@ describe("source-level guarantees", () => {
     expect(importedSymbols.some((s) => s.includes("isDemoSmartDevice"))).toBe(
       true,
     );
+    // 2026-09-23 release-review fix: this file no longer defines its own
+    // merge helper — it reuses lock-refresh.service.ts's, now that that
+    // file's own whole-fleet refresh merges too.
+    expect(
+      importedSymbols.some((s) => s.includes("mergeAugustLockMetadata")),
+    ).toBe(true);
   });
 
   it("never imports anything beyond the exact expected module set", () => {
@@ -186,6 +192,7 @@ describe("source-level guarantees", () => {
       "@stayw/database",
       "@stayw/integrations/august",
       "../schemas/lock-spot-refresh.schema",
+      "./lock-refresh.service",
       "./provider-devices.service",
       "./smart-devices.service",
       "@/platform/audit/record-audit",

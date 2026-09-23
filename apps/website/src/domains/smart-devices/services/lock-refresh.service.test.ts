@@ -120,6 +120,7 @@ import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
 
 import {
+  mergeAugustLockMetadata,
   refreshAugustTelemetry,
   refreshAugustTelemetryAutomatic,
 } from "./lock-refresh.service";
@@ -271,7 +272,12 @@ describe("refreshAugustTelemetry", () => {
         smartDeviceId: { not: null },
         integrationConnection: { provider: "AUGUST" },
       },
-      select: { id: true, externalDeviceId: true, smartDeviceId: true },
+      select: {
+        id: true,
+        externalDeviceId: true,
+        smartDeviceId: true,
+        smartDevice: { select: { metadata: true } },
+      },
     });
   });
 
@@ -325,6 +331,78 @@ describe("refreshAugustTelemetry", () => {
       refreshed: 1,
       notReturnedByProvider: 0,
     });
+  });
+
+  it("RETIREMENT-SAFETY (2026-09-23 release-review fix): merges fresh telemetry onto existing metadata instead of replacing it — a device whose existing metadata already carries a valid retiredAt (item C) keeps it, while telemetry fields still update correctly", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      {
+        ...eligibleProviderDevice("pd-1", "lock-1", "sd-1"),
+        smartDevice: {
+          metadata: {
+            retiredAt: "2026-09-20T00:00:00.000Z",
+            batteryLevel: 40,
+          },
+        },
+      },
+    ] as never);
+    mockGetLockDetail.mockResolvedValueOnce(
+      augustLockDetail("lock-1", {
+        connectivity: "ONLINE",
+        batteryLevel: 87,
+        lockState: "locked",
+      }),
+    );
+
+    const result = await refreshAugustTelemetry(actor);
+
+    expect(prisma.smartDevice.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "sd-1" },
+        data: expect.objectContaining({
+          status: "ONLINE",
+          metadata: expect.objectContaining({
+            // The pre-existing retirement marker survives, unchanged.
+            retiredAt: "2026-09-20T00:00:00.000Z",
+            // Fresh telemetry still updates correctly.
+            batteryLevel: 87,
+            lockState: "locked",
+            telemetryUpdatedAt: expect.any(String),
+          }),
+        }),
+      }),
+    );
+    expect(result).toEqual({
+      status: "completed",
+      refreshed: 1,
+      notReturnedByProvider: 0,
+    });
+  });
+
+  it("preserves an unrelated, unrecognized existing metadata key that this refresh doesn't itself own — a general merge, not a retiredAt special case", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      {
+        ...eligibleProviderDevice("pd-1", "lock-1", "sd-1"),
+        smartDevice: {
+          metadata: { someFutureField: "keep-me" },
+        },
+      },
+    ] as never);
+    mockGetLockDetail.mockResolvedValueOnce(
+      augustLockDetail("lock-1", { connectivity: "ONLINE", batteryLevel: 50 }),
+    );
+
+    await refreshAugustTelemetry(actor);
+
+    expect(prisma.smartDevice.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          metadata: expect.objectContaining({
+            someFutureField: "keep-me",
+            batteryLevel: 50,
+          }),
+        }),
+      }),
+    );
   });
 
   it("TIMESTAMP-CORRECTNESS: writes August's own telemetryUpdatedAt value into SmartDevice.metadata exactly — never fabricates it from this refresh's own execution time, even though the API call itself succeeds 'now'", async () => {
@@ -979,5 +1057,76 @@ describe("refreshAugustTelemetry vs. refreshAugustTelemetryAutomatic — same-fi
 
     await expect(refreshAugustTelemetry(actor)).rejects.toThrow();
     expect(mockSyncLogFindFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe("mergeAugustLockMetadata — CROSS-PATH RETIREMENT-STICKINESS (2026-09-23 release-review, Fixes 1/2/3/4)", () => {
+  // This is the one real function every August metadata-preservation fix
+  // routes through: runAugustTelemetryRefresh() (Fix 1, this file),
+  // refreshAugustTelemetryForSelectedLocks() (already-safe spot refresh,
+  // lock-spot-refresh.service.ts), setProviderDeviceEnabled() (Fix 2,
+  // provider-devices.service.ts), syncAugustDevices() (Fix 3,
+  // smart-devices.service.ts), and sendAugustLockCommand()'s confirmation
+  // write (Fix 4, august-commands.service.ts) — all five now merge fresh
+  // telemetry through this exact function rather than each carrying its
+  // own copy-pasted merge logic. Proving retiredAt survives here, against
+  // every shape of "fresh" data those five real call sites can actually
+  // produce, is a single, deliberately small proof that the retirement
+  // invariant holds structurally across all of them — not five separate,
+  // narrower re-implementations of the same assertion, and not a new fake
+  // shared-DB architecture (explicitly not wanted for this check).
+  const RETIRED_METADATA = {
+    retiredAt: "2026-09-20T00:00:00.000Z",
+    batteryLevel: 5,
+    lockState: "unlocked",
+    telemetryUpdatedAt: "2026-09-01T00:00:00.000Z",
+  };
+
+  it("a fully-populated fresh reading (the shape every one of the five real call sites passes) still preserves retiredAt while overwriting every provider-owned field", () => {
+    const result = mergeAugustLockMetadata(RETIRED_METADATA, {
+      batteryLevel: 88,
+      lockState: "locked",
+      telemetryUpdatedAt: "2026-09-23T09:00:00.000Z",
+    });
+
+    expect(result.retiredAt).toBe("2026-09-20T00:00:00.000Z");
+    expect(result.batteryLevel).toBe(88);
+    expect(result.lockState).toBe("locked");
+    expect(result.telemetryUpdatedAt).toBe("2026-09-23T09:00:00.000Z");
+  });
+
+  it("a fresh reading with every field null/absent (the real shape when August reports nothing new) still preserves retiredAt AND every previously-known telemetry field — a genuinely no-op merge, never a blank-out", () => {
+    const result = mergeAugustLockMetadata(RETIRED_METADATA, {
+      batteryLevel: null,
+      lockState: null,
+      telemetryUpdatedAt: null,
+    });
+
+    expect(result).toEqual(RETIRED_METADATA);
+  });
+
+  it("a partially-populated fresh reading updates only the fields August actually reported, leaving retiredAt and every other untouched field exactly as they were", () => {
+    const result = mergeAugustLockMetadata(RETIRED_METADATA, {
+      batteryLevel: 42,
+      lockState: null,
+      telemetryUpdatedAt: null,
+    });
+
+    expect(result.retiredAt).toBe("2026-09-20T00:00:00.000Z");
+    expect(result.batteryLevel).toBe(42);
+    expect(result.lockState).toBe("unlocked");
+    expect(result.telemetryUpdatedAt).toBe("2026-09-01T00:00:00.000Z");
+  });
+
+  it("only an explicit future Restore/Unretire operation should ever remove retiredAt — this function has no code path that clears it, since it only ever spreads existing keys forward and conditionally overwrites battery/lockState/telemetryUpdatedAt, never retiredAt itself", () => {
+    const result = mergeAugustLockMetadata(RETIRED_METADATA, {
+      batteryLevel: 1,
+      lockState: "locked",
+      telemetryUpdatedAt: "2026-09-23T09:00:00.000Z",
+    });
+
+    expect(Object.prototype.hasOwnProperty.call(result, "retiredAt")).toBe(
+      true,
+    );
   });
 });
