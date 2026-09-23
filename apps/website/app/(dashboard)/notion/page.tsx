@@ -12,6 +12,7 @@ import { NotionListingsSearch } from "@/domains/integrations/components/NotionLi
 import { NotionRecentActivity } from "@/domains/integrations/components/NotionRecentActivity";
 import { NotionSearch } from "@/domains/integrations/components/NotionSearch";
 import { NotionSopLibrary } from "@/domains/integrations/components/NotionSopLibrary";
+import { NotionWorkspaceTabs } from "@/domains/integrations/components/NotionWorkspaceTabs";
 import { NOTION_SOPS_ROOT_PAGE_ID } from "@/domains/integrations/config/notion-sop-library";
 import {
   buildNotionListingClientDto,
@@ -191,46 +192,45 @@ export default async function NotionPage() {
           </div>
         )}
         <div>
-          <SectionHeader title="Search Notion" size="lg" />
+          <SectionHeader title="Search All Notion" size="lg" />
           <NotionSearch
             action={searchNotionAction}
             fetchContentAction={fetchNotionPageContentAction}
             updateBlockAction={updateNotionBlockContentAction}
           />
         </div>
-        <div>
-          <SectionHeader title="SOPs" size="lg" />
-          {sopLibraryResult.configured && sopLibraryResult.ok ? (
-            <NotionSopLibrary
-              rootPageId={NOTION_SOPS_ROOT_PAGE_ID}
-              library={sopLibraryResult.content}
-              rootEditableBlockIds={sopLibraryEditableBlockIds}
-              fetchContentAction={fetchNotionPageContentAction}
-              updateBlockAction={updateNotionBlockContentAction}
+        <NotionWorkspaceTabs
+          sopsContent={
+            sopLibraryResult.configured && sopLibraryResult.ok ? (
+              <NotionSopLibrary
+                rootPageId={NOTION_SOPS_ROOT_PAGE_ID}
+                library={sopLibraryResult.content}
+                rootEditableBlockIds={sopLibraryEditableBlockIds}
+                fetchContentAction={fetchNotionPageContentAction}
+                updateBlockAction={updateNotionBlockContentAction}
+              />
+            ) : sopLibraryResult.configured ? (
+              <p className="text-sm text-error-500">{sopLibraryResult.error}</p>
+            ) : null
+          }
+          libraryContent={
+            libraryResult.configured && libraryResult.ok ? (
+              <NotionLibraryBrowser
+                entries={libraryResult.items}
+                fetchContentAction={fetchNotionPageContentAction}
+                updateBlockAction={updateNotionBlockContentAction}
+              />
+            ) : libraryResult.configured ? (
+              <p className="text-sm text-error-500">{libraryResult.error}</p>
+            ) : null
+          }
+          listingsContent={
+            <NotionListingsSearch
+              listings={listingsWithVisibility}
+              updateFieldAction={updateNotionFieldAction}
             />
-          ) : sopLibraryResult.configured ? (
-            <p className="text-sm text-error-500">{sopLibraryResult.error}</p>
-          ) : null}
-        </div>
-        <div>
-          <SectionHeader title="Library" size="lg" />
-          {libraryResult.configured && libraryResult.ok ? (
-            <NotionLibraryBrowser
-              entries={libraryResult.items}
-              fetchContentAction={fetchNotionPageContentAction}
-              updateBlockAction={updateNotionBlockContentAction}
-            />
-          ) : libraryResult.configured ? (
-            <p className="text-sm text-error-500">{libraryResult.error}</p>
-          ) : null}
-        </div>
-        <div>
-          <SectionHeader title="Property Listings" size="lg" />
-          <NotionListingsSearch
-            listings={listingsWithVisibility}
-            updateFieldAction={updateNotionFieldAction}
-          />
-        </div>
+          }
+        />
         {recentActivity !== null && (
           <NotionRecentActivity items={recentActivity} />
         )}

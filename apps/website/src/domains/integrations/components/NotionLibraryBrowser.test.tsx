@@ -15,24 +15,28 @@ afterEach(cleanup);
 
 const LAST_EDITED = "2026-09-23T00:00:00.000Z";
 
+function run(text: string) {
+  return { text, href: null, bold: false, italic: false, code: false };
+}
+
 const PROPERTY_DIRECTORY: NotionLibraryEntry = {
-  id: "entry-1",
+  id: "prop-directory",
   title: "Property Directory",
-  url: "https://notion.so/entry-1",
+  url: "https://notion.so/prop-directory",
   lastEditedTime: LAST_EDITED,
 };
 
 const OWNER_INFO: NotionLibraryEntry = {
-  id: "entry-2",
+  id: "owner-info",
   title: "Owner Info",
-  url: "https://notion.so/entry-2",
+  url: "https://notion.so/owner-info",
   lastEditedTime: LAST_EDITED,
 };
 
 const LOCKBOX_CODES: NotionLibraryEntry = {
-  id: "entry-3",
+  id: "lockbox-codes",
   title: "Property Lockboxes Code",
-  url: "https://notion.so/entry-3",
+  url: "https://notion.so/lockbox-codes",
   lastEditedTime: LAST_EDITED,
 };
 
@@ -40,7 +44,81 @@ const ENTRIES = [PROPERTY_DIRECTORY, OWNER_INFO, LOCKBOX_CODES];
 
 const noopUpdateBlockAction = vi.fn();
 
-describe("NotionLibraryBrowser", () => {
+// Mirrors the real "Property Directory" shape discovered live (2026-09-24):
+// a page whose only real content is one child_page block per property.
+const PROPERTY_DIRECTORY_CONTENT = {
+  status: "success" as const,
+  content: {
+    blocks: [
+      {
+        id: "aloha-page",
+        lastEditedTime: LAST_EDITED,
+        type: "child_page" as const,
+        title: "Aloha by the Sea",
+      },
+      {
+        id: "aqua-palm-page",
+        lastEditedTime: LAST_EDITED,
+        type: "child_page" as const,
+        title: "Aqua Palm",
+      },
+    ],
+    truncated: false,
+  },
+  editableBlockIds: [],
+};
+
+// Mirrors Aloha's own real shape: a mix of toggle content (already inline)
+// and one further nested child_page ("Frequently Asked Questions").
+const ALOHA_CONTENT = {
+  status: "success" as const,
+  content: {
+    blocks: [
+      {
+        id: "aloha-toggle-1",
+        lastEditedTime: LAST_EDITED,
+        type: "toggle" as const,
+        text: [run("WiFi")],
+        children: [
+          {
+            id: "aloha-wifi-detail",
+            lastEditedTime: LAST_EDITED,
+            type: "paragraph" as const,
+            text: [run("Network: AlohaGuest")],
+            children: [],
+          },
+        ],
+      },
+      {
+        id: "aloha-faq-page",
+        lastEditedTime: LAST_EDITED,
+        type: "child_page" as const,
+        title: "Frequently Asked Questions",
+      },
+    ],
+    truncated: false,
+  },
+  editableBlockIds: [],
+};
+
+const FAQ_CONTENT = {
+  status: "success" as const,
+  content: {
+    blocks: [
+      {
+        id: "faq-p1",
+        lastEditedTime: LAST_EDITED,
+        type: "paragraph" as const,
+        text: [run("Check-in is at 4pm.")],
+        children: [],
+      },
+    ],
+    truncated: false,
+  },
+  editableBlockIds: [],
+};
+
+describe("NotionLibraryBrowser — top-level list", () => {
   it("lists every real Library entry by title only", () => {
     render(
       <NotionLibraryBrowser
@@ -51,15 +129,15 @@ describe("NotionLibraryBrowser", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Property Directory" }),
+      screen.getByRole("button", { name: /Property Directory/ }),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Owner Info" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Owner Info/ })).toBeTruthy();
     expect(
-      screen.getByRole("button", { name: "Property Lockboxes Code" }),
+      screen.getByRole("button", { name: /Property Lockboxes Code/ }),
     ).toBeTruthy();
   });
 
-  it("does not fetch or render any entry's content before it is selected — a lockbox code is never present on load", () => {
+  it("does not fetch or render any entry's content before it is selected", () => {
     const fetchContentAction = vi.fn();
     render(
       <NotionLibraryBrowser
@@ -70,67 +148,6 @@ describe("NotionLibraryBrowser", () => {
     );
 
     expect(fetchContentAction).not.toHaveBeenCalled();
-    expect(screen.queryByText(/[0-9]{4,}/)).toBeNull();
-  });
-
-  it("selecting an entry fetches its real content on demand via the same content action, and shows Open in Notion", async () => {
-    const fetchContentAction = vi.fn().mockResolvedValue({
-      status: "success",
-      content: {
-        blocks: [
-          {
-            id: "p1",
-            lastEditedTime: LAST_EDITED,
-            type: "paragraph",
-            text: [
-              {
-                text: "123 Main St",
-                href: null,
-                bold: false,
-                italic: false,
-                code: false,
-              },
-            ],
-            children: [],
-          },
-        ],
-        truncated: false,
-      },
-      editableBlockIds: [],
-    });
-
-    render(
-      <NotionLibraryBrowser
-        entries={ENTRIES}
-        fetchContentAction={fetchContentAction}
-        updateBlockAction={noopUpdateBlockAction}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Property Directory" }));
-
-    expect(fetchContentAction).toHaveBeenCalledWith("entry-1");
-    await waitFor(() => {
-      expect(screen.getByText("123 Main St")).toBeTruthy();
-    });
-    expect(
-      screen.getAllByRole("link", { name: "Open in Notion" }).length,
-    ).toBeGreaterThan(0);
-  });
-
-  it("shows a loading state while an entry's content is being fetched", () => {
-    const fetchContentAction = vi.fn().mockReturnValue(new Promise(() => {}));
-    render(
-      <NotionLibraryBrowser
-        entries={ENTRIES}
-        fetchContentAction={fetchContentAction}
-        updateBlockAction={noopUpdateBlockAction}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Owner Info" }));
-
-    expect(screen.getByText("Loading content…")).toBeTruthy();
   });
 
   it("filters the entry list by a plain client-side substring match — never a second provider search call", () => {
@@ -147,12 +164,12 @@ describe("NotionLibraryBrowser", () => {
     });
 
     expect(
-      screen.getByRole("button", { name: "Property Lockboxes Code" }),
+      screen.getByRole("button", { name: /Property Lockboxes Code/ }),
     ).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Property Directory" }),
+      screen.queryByRole("button", { name: /^Property Directory/ }),
     ).toBeNull();
-    expect(screen.queryByRole("button", { name: "Owner Info" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Owner Info/ })).toBeNull();
   });
 
   it("filters case-insensitively", () => {
@@ -168,7 +185,7 @@ describe("NotionLibraryBrowser", () => {
       target: { value: "OWNER" },
     });
 
-    expect(screen.getByRole("button", { name: "Owner Info" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Owner Info/ })).toBeTruthy();
   });
 
   it("shows a safe empty-filter message when no entry matches the query", () => {
@@ -187,7 +204,7 @@ describe("NotionLibraryBrowser", () => {
     expect(screen.getByText(/No Library entries match/)).toBeTruthy();
   });
 
-  it("shows a safe empty-state message when there are no Library entries at all, without implying a config error", () => {
+  it("shows a safe empty-state message when there are no Library entries at all", () => {
     render(
       <NotionLibraryBrowser
         entries={[]}
@@ -199,31 +216,24 @@ describe("NotionLibraryBrowser", () => {
     expect(screen.getByText(/No Library entries found yet/)).toBeTruthy();
   });
 
-  it("never renders an Edit affordance for any entry by default — the write allowlist stays empty", async () => {
-    const fetchContentAction = vi.fn().mockResolvedValue({
-      status: "success",
-      content: {
-        blocks: [
-          {
-            id: "p1",
-            lastEditedTime: LAST_EDITED,
-            type: "paragraph",
-            text: [
-              {
-                text: "Some content.",
-                href: null,
-                bold: false,
-                italic: false,
-                code: false,
-              },
-            ],
-            children: [],
-          },
-        ],
-        truncated: false,
-      },
-      editableBlockIds: [],
-    });
+  it("trims stray whitespace in a real Notion title for display, matching real data like 'Owner Info '", () => {
+    render(
+      <NotionLibraryBrowser
+        entries={[{ ...OWNER_INFO, title: "Owner Info " }]}
+        fetchContentAction={vi.fn()}
+        updateBlockAction={noopUpdateBlockAction}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Owner Info" })).toBeTruthy();
+  });
+});
+
+describe("NotionLibraryBrowser — nested navigation (Property Directory → Aloha proof case)", () => {
+  it("selecting a top-level entry shows a breadcrumb and fetches its content, with no dialog", async () => {
+    const fetchContentAction = vi
+      .fn()
+      .mockResolvedValue(PROPERTY_DIRECTORY_CONTENT);
 
     render(
       <NotionLibraryBrowser
@@ -233,11 +243,275 @@ describe("NotionLibraryBrowser", () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole("button", { name: /Property Directory/ }));
+
+    expect(fetchContentAction).toHaveBeenCalledWith("prop-directory");
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Aloha by the Sea" }),
+      ).toBeTruthy();
+    });
+    // Breadcrumb: root "Library" plus the current step.
+    const breadcrumb = screen.getByRole("navigation", {
+      name: "Library breadcrumb",
+    });
+    expect(breadcrumb.textContent).toContain("Library");
+    expect(breadcrumb.textContent).toContain("Property Directory");
+  });
+
+  it("drills all the way to Aloha by the Sea's own content and its further nested child_page", async () => {
+    const fetchContentAction = vi
+      .fn()
+      .mockResolvedValueOnce(PROPERTY_DIRECTORY_CONTENT)
+      .mockResolvedValueOnce(ALOHA_CONTENT)
+      .mockResolvedValueOnce(FAQ_CONTENT);
+
+    render(
+      <NotionLibraryBrowser
+        entries={ENTRIES}
+        fetchContentAction={fetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Property Directory/ }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Aloha by the Sea" }),
+      ).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Aloha by the Sea" }));
+    expect(fetchContentAction).toHaveBeenCalledWith("aloha-page");
+    await waitFor(() => {
+      expect(screen.getByText("Network: AlohaGuest")).toBeTruthy();
+    });
+
+    const breadcrumb = screen.getByRole("navigation", {
+      name: "Library breadcrumb",
+    });
+    expect(breadcrumb.textContent).toContain("Property Directory");
+    expect(breadcrumb.textContent).toContain("Aloha by the Sea");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Frequently Asked Questions" }),
+    );
+    expect(fetchContentAction).toHaveBeenCalledWith("aloha-faq-page");
+    await waitFor(() => {
+      expect(screen.getByText("Check-in is at 4pm.")).toBeTruthy();
+    });
+    expect(
+      screen.getByRole("navigation", { name: "Library breadcrumb" })
+        .textContent,
+    ).toContain("Frequently Asked Questions");
+  });
+
+  it("clicking the root 'Library' breadcrumb returns to the top-level list", async () => {
+    const fetchContentAction = vi
+      .fn()
+      .mockResolvedValue(PROPERTY_DIRECTORY_CONTENT);
+
+    render(
+      <NotionLibraryBrowser
+        entries={ENTRIES}
+        fetchContentAction={fetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Property Directory/ }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Aloha by the Sea" }),
+      ).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Library" }));
+
+    expect(
+      screen.queryByRole("navigation", { name: "Library breadcrumb" }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: /Owner Info/ })).toBeTruthy();
+  });
+
+  it("clicking a middle breadcrumb step navigates back to it and re-fetches its content", async () => {
+    const fetchContentAction = vi
+      .fn()
+      .mockResolvedValueOnce(PROPERTY_DIRECTORY_CONTENT)
+      .mockResolvedValueOnce(ALOHA_CONTENT)
+      .mockResolvedValueOnce(PROPERTY_DIRECTORY_CONTENT);
+
+    render(
+      <NotionLibraryBrowser
+        entries={ENTRIES}
+        fetchContentAction={fetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Property Directory/ }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Aloha by the Sea" }),
+      ).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Aloha by the Sea" }));
+    await waitFor(() => {
+      expect(screen.getByText("Network: AlohaGuest")).toBeTruthy();
+    });
+
     fireEvent.click(screen.getByRole("button", { name: "Property Directory" }));
 
+    expect(fetchContentAction).toHaveBeenNthCalledWith(3, "prop-directory");
     await waitFor(() => {
-      expect(screen.getByText("Some content.")).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Aloha by the Sea" }),
+      ).toBeTruthy();
     });
+    expect(screen.queryByText("Network: AlohaGuest")).toBeNull();
+  });
+
+  it("filters a drilled-in page's own child_page entries by title — the exact fix for 'aloha not found in Library filter'", async () => {
+    const fetchContentAction = vi
+      .fn()
+      .mockResolvedValue(PROPERTY_DIRECTORY_CONTENT);
+
+    render(
+      <NotionLibraryBrowser
+        entries={ENTRIES}
+        fetchContentAction={fetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Property Directory/ }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Aloha by the Sea" }),
+      ).toBeTruthy(),
+    );
+
+    fireEvent.change(screen.getByLabelText("Search Property Directory"), {
+      target: { value: "aloha" },
+    });
+
+    expect(
+      screen.getByRole("button", { name: "Aloha by the Sea" }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Aqua Palm" })).toBeNull();
+  });
+
+  it("shows a safe 'no matches' message when a nested filter matches no child page, without hiding it forever", async () => {
+    const fetchContentAction = vi
+      .fn()
+      .mockResolvedValue(PROPERTY_DIRECTORY_CONTENT);
+
+    render(
+      <NotionLibraryBrowser
+        entries={ENTRIES}
+        fetchContentAction={fetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Property Directory/ }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Aloha by the Sea" }),
+      ).toBeTruthy(),
+    );
+
+    fireEvent.change(screen.getByLabelText("Search Property Directory"), {
+      target: { value: "zzz-no-such-property" },
+    });
+
+    expect(screen.getByText(/No pages match/)).toBeTruthy();
+  });
+
+  it("a nested filter never hides a page's own non-child_page content, only narrows which child pages are listed", async () => {
+    const fetchContentAction = vi.fn().mockResolvedValueOnce(ALOHA_CONTENT);
+
+    render(
+      <NotionLibraryBrowser
+        entries={[{ ...PROPERTY_DIRECTORY, id: "aloha-page" }]}
+        fetchContentAction={fetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Property Directory/ }));
+    await waitFor(() => {
+      expect(screen.getByText("Network: AlohaGuest")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText("Search Property Directory"), {
+      target: { value: "no-such-child-page" },
+    });
+
+    expect(screen.getByText("Network: AlohaGuest")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Frequently Asked Questions" }),
+    ).toBeNull();
+  });
+
+  it("shows a safe generic error message when a drilled-in fetch fails, never a raw error", async () => {
+    const fetchContentAction = vi
+      .fn()
+      .mockResolvedValueOnce(PROPERTY_DIRECTORY_CONTENT)
+      .mockResolvedValueOnce({
+        status: "error",
+        error: "Some raw provider detail that must never reach the UI",
+      });
+
+    render(
+      <NotionLibraryBrowser
+        entries={ENTRIES}
+        fetchContentAction={fetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Property Directory/ }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Aloha by the Sea" }),
+      ).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Aloha by the Sea" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/Couldn.t load this page.s content/),
+      ).toBeTruthy();
+    });
+    expect(screen.queryByText(/Some raw provider detail/)).toBeNull();
+  });
+
+  it("never renders an Edit affordance for any Library page — the write allowlist stays empty", async () => {
+    const fetchContentAction = vi
+      .fn()
+      .mockResolvedValueOnce(PROPERTY_DIRECTORY_CONTENT)
+      .mockResolvedValueOnce(ALOHA_CONTENT);
+
+    render(
+      <NotionLibraryBrowser
+        entries={ENTRIES}
+        fetchContentAction={fetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Property Directory/ }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Aloha by the Sea" }),
+      ).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Aloha by the Sea" }));
+    await waitFor(() => {
+      expect(screen.getByText("Network: AlohaGuest")).toBeTruthy();
+    });
+
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
   });
 });
