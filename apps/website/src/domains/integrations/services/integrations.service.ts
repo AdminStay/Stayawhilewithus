@@ -913,6 +913,127 @@ export async function listNotionLibraryEntries(
 }
 
 /**
+ * One Library search match — either a top-level LIBRARY row itself
+ * (`parentEntryId`/`parentEntryTitle` both null), or a page nested one
+ * level under a top-level LIBRARY row (e.g. "Aloha by the Sea" under
+ * "Property Directory") — never a page found anywhere else in the
+ * workspace. Only id/title/parent-entry id+title, same minimal shape
+ * discipline as NotionLibraryEntry — a match's own page BODY content is
+ * only ever fetched separately, on demand, via getNotionPageContent().
+ */
+export interface NotionLibrarySearchMatch {
+  id: string;
+  title: string;
+  parentEntryId: string | null;
+  parentEntryTitle: string | null;
+}
+
+export type NotionLibrarySearchState =
+  | { configured: false }
+  | {
+      configured: true;
+      ok: true;
+      query: string;
+      results: NotionLibrarySearchMatch[];
+    }
+  | { configured: true; ok: false; query: string; error: string };
+
+// Same discipline as LIVE_SEARCH_MAX_PAGES above — a live, user-typed Library
+// search only needs Notion's own relevance-ranked top results, not an
+// exhaustive workspace crawl.
+const LIBRARY_SEARCH_MAX_PAGES = 3;
+
+/**
+ * Makes the Library tab's own search box find a page nested under a
+ * top-level LIBRARY entry (e.g. "Aloha by the Sea" under "Property
+ * Directory") even though the top-level LIBRARY query alone only ever
+ * returns the ~38 top-level rows themselves — the gap Michelle's
+ * Production report identified (2026-09-24): "Library" search for "aloha"
+ * found nothing because Aloha is not itself a top-level row.
+ *
+ * Never crawls the workspace and never duplicates Notion content into
+ * StayWhile's own database (Notion stays source of truth): this combines
+ * two real, read-only reads already used elsewhere on this page —
+ * `listDataSourceEntries()` (the same top-level LIBRARY read the Library
+ * tab already does on load) and `search()` (the same general Notion
+ * search "Search All Notion" already uses) — and matches a general
+ * result to a LIBRARY ancestor only via that result's OWN `parentPageId`
+ * (Notion's `/search` already returns this on every page result), never a
+ * second lookup, a title guess, or a fuzzy match. A result whose parent
+ * isn't one of the known top-level LIBRARY ids is not a Library match and
+ * is dropped — this deliberately only recognizes one level of nesting
+ * under a top-level entry (proven sufficient for the real structure found:
+ * Property Directory's own properties, Service Providers List's own
+ * regions), not the deeper "grandchild" pages a property page can itself
+ * further nest (e.g. Aloha's own "Frequently Asked Questions" page) —
+ * those remain findable only by browsing, not by this search, and are
+ * never silently mislabeled as belonging to the wrong ancestor.
+ */
+export async function searchNotionLibraryContent(
+  actor: AuthContext,
+  rawQuery: string,
+): Promise<NotionLibrarySearchState> {
+  await assertPermission(actor, "integrations:read");
+
+  const token = process.env.NOTION_API_KEY;
+  if (!token) return { configured: false };
+
+  const query = rawQuery.trim();
+  if (!query) return { configured: true, ok: true, query, results: [] };
+
+  try {
+    const client = new NotionClient({ token });
+    const topLevelEntries = await client.listDataSourceEntries(
+      NOTION_LIBRARY_DATA_SOURCE_ID,
+    );
+    const topLevelTitleById = new Map(
+      topLevelEntries.map((entry) => [entry.id, entry.title]),
+    );
+
+    const lowerQuery = query.toLowerCase();
+    const results: NotionLibrarySearchMatch[] = [];
+
+    for (const entry of topLevelEntries) {
+      if (!entry.title.toLowerCase().includes(lowerQuery)) continue;
+      results.push({
+        id: entry.id,
+        title: entry.title,
+        parentEntryId: null,
+        parentEntryTitle: null,
+      });
+    }
+
+    const generalResults = await client.search({
+      query,
+      maxPages: LIBRARY_SEARCH_MAX_PAGES,
+    });
+    const seenIds = new Set(results.map((r) => r.id));
+    for (const result of generalResults) {
+      if (result.sourceType !== "page" || !result.parentPageId) continue;
+      const parentTitle = topLevelTitleById.get(result.parentPageId);
+      if (parentTitle === undefined) continue;
+      if (seenIds.has(result.id)) continue;
+      seenIds.add(result.id);
+      results.push({
+        id: result.id,
+        title: result.title,
+        parentEntryId: result.parentPageId,
+        parentEntryTitle: parentTitle,
+      });
+    }
+
+    return { configured: true, ok: true, query, results };
+  } catch (err) {
+    return {
+      configured: true,
+      ok: false,
+      query,
+      error: err instanceof Error ? err.message : "Library search failed.",
+    };
+  }
+}
+
+/**
  * Non-network, config-only status for the dedicated Notion page. Deliberately
  * does NOT call the live queryDataSource() proof (getNotionListingsAccessProof
  * above) on every render — that's a real Notion API call, and this status is

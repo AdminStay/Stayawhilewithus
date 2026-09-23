@@ -527,6 +527,10 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
             sourceType === "database_row"
               ? (result.parent?.database_id ?? null)
               : null,
+          parentPageId:
+            sourceType === "page" && result.parent?.type === "page_id"
+              ? (result.parent.page_id ?? null)
+              : null,
         });
       }
 

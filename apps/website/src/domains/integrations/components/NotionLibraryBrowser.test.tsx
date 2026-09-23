@@ -43,6 +43,9 @@ const LOCKBOX_CODES: NotionLibraryEntry = {
 const ENTRIES = [PROPERTY_DIRECTORY, OWNER_INFO, LOCKBOX_CODES];
 
 const noopUpdateBlockAction = vi.fn();
+const noopSearchAction = vi
+  .fn()
+  .mockResolvedValue({ configured: true, ok: true, query: "", results: [] });
 
 // Mirrors the real "Property Directory" shape discovered live (2026-09-24):
 // a page whose only real content is one child_page block per property.
@@ -125,6 +128,7 @@ describe("NotionLibraryBrowser — top-level list", () => {
         entries={ENTRIES}
         fetchContentAction={vi.fn()}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -144,6 +148,7 @@ describe("NotionLibraryBrowser — top-level list", () => {
         entries={ENTRIES}
         fetchContentAction={fetchContentAction}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -156,6 +161,7 @@ describe("NotionLibraryBrowser — top-level list", () => {
         entries={ENTRIES}
         fetchContentAction={vi.fn()}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -178,6 +184,7 @@ describe("NotionLibraryBrowser — top-level list", () => {
         entries={ENTRIES}
         fetchContentAction={vi.fn()}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -188,12 +195,13 @@ describe("NotionLibraryBrowser — top-level list", () => {
     expect(screen.getByRole("button", { name: /Owner Info/ })).toBeTruthy();
   });
 
-  it("shows a safe empty-filter message when no entry matches the query", () => {
+  it("shows a safe empty-filter message when no entry matches the query, once the hierarchy search also comes back empty", async () => {
     render(
       <NotionLibraryBrowser
         entries={ENTRIES}
         fetchContentAction={vi.fn()}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -201,7 +209,12 @@ describe("NotionLibraryBrowser — top-level list", () => {
       target: { value: "zzz-no-match" },
     });
 
-    expect(screen.getByText(/No Library entries match/)).toBeTruthy();
+    await waitFor(
+      () => {
+        expect(screen.getByText(/No Library entries match/)).toBeTruthy();
+      },
+      { timeout: 2000 },
+    );
   });
 
   it("shows a safe empty-state message when there are no Library entries at all", () => {
@@ -210,6 +223,7 @@ describe("NotionLibraryBrowser — top-level list", () => {
         entries={[]}
         fetchContentAction={vi.fn()}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -222,6 +236,7 @@ describe("NotionLibraryBrowser — top-level list", () => {
         entries={[{ ...OWNER_INFO, title: "Owner Info " }]}
         fetchContentAction={vi.fn()}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -240,6 +255,7 @@ describe("NotionLibraryBrowser — nested navigation (Property Directory → Alo
         entries={ENTRIES}
         fetchContentAction={fetchContentAction}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -271,6 +287,7 @@ describe("NotionLibraryBrowser — nested navigation (Property Directory → Alo
         entries={ENTRIES}
         fetchContentAction={fetchContentAction}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -316,6 +333,7 @@ describe("NotionLibraryBrowser — nested navigation (Property Directory → Alo
         entries={ENTRIES}
         fetchContentAction={fetchContentAction}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -346,6 +364,7 @@ describe("NotionLibraryBrowser — nested navigation (Property Directory → Alo
         entries={ENTRIES}
         fetchContentAction={fetchContentAction}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -381,6 +400,7 @@ describe("NotionLibraryBrowser — nested navigation (Property Directory → Alo
         entries={ENTRIES}
         fetchContentAction={fetchContentAction}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -411,6 +431,7 @@ describe("NotionLibraryBrowser — nested navigation (Property Directory → Alo
         entries={ENTRIES}
         fetchContentAction={fetchContentAction}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -436,6 +457,7 @@ describe("NotionLibraryBrowser — nested navigation (Property Directory → Alo
         entries={[{ ...PROPERTY_DIRECTORY, id: "aloha-page" }]}
         fetchContentAction={fetchContentAction}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -468,6 +490,7 @@ describe("NotionLibraryBrowser — nested navigation (Property Directory → Alo
         entries={ENTRIES}
         fetchContentAction={fetchContentAction}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -498,6 +521,7 @@ describe("NotionLibraryBrowser — nested navigation (Property Directory → Alo
         entries={ENTRIES}
         fetchContentAction={fetchContentAction}
         updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
       />,
     );
 
@@ -513,5 +537,192 @@ describe("NotionLibraryBrowser — nested navigation (Property Directory → Alo
     });
 
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  });
+});
+
+describe("NotionLibraryBrowser — searching across the hierarchy (Production acceptance case)", () => {
+  it('Library search "Aloha" finds the nested Aloha entry, labels it under Property Directory, and opening it renders its safe content through the existing renderer', async () => {
+    const searchAction = vi.fn().mockResolvedValue({
+      configured: true,
+      ok: true,
+      query: "aloha",
+      results: [
+        {
+          id: "aloha-page",
+          title: "Aloha by the Sea",
+          parentEntryId: "prop-directory",
+          parentEntryTitle: "Property Directory",
+        },
+      ],
+    });
+    const fetchContentAction = vi.fn().mockResolvedValue(ALOHA_CONTENT);
+
+    render(
+      <NotionLibraryBrowser
+        entries={ENTRIES}
+        fetchContentAction={fetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
+        searchAction={searchAction}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Search Library"), {
+      target: { value: "Aloha" },
+    });
+
+    // Debounced — the search action fires once, with the trimmed query.
+    await waitFor(() => {
+      expect(searchAction).toHaveBeenCalledWith("Aloha");
+    });
+
+    // Found, and its location is made clear ("Library / Property Directory"),
+    // never requiring the user to already know Aloha lives there.
+    const result = await screen.findByRole("button", {
+      name: /Aloha by the Sea/,
+    });
+    expect(result.textContent).toContain("Library / Property Directory");
+
+    fireEvent.click(result);
+
+    // Opens directly into that nested Library content, real breadcrumb and
+    // all — no dead end, no separate "go find it yourself" step.
+    expect(fetchContentAction).toHaveBeenCalledWith("aloha-page");
+    const breadcrumb = await screen.findByRole("navigation", {
+      name: "Library breadcrumb",
+    });
+    expect(breadcrumb.textContent).toContain("Property Directory");
+    expect(breadcrumb.textContent).toContain("Aloha by the Sea");
+
+    // Its real (safe, non-sensitive) content renders through the same
+    // NotionFetchedPageContent/NotionBlockList renderer used everywhere else.
+    await waitFor(() => {
+      expect(screen.getByText("Network: AlohaGuest")).toBeTruthy();
+    });
+  });
+
+  it("also still supports normal manual browsing — Library → Property Directory → Aloha by the Sea — without ever using search", async () => {
+    const fetchContentAction = vi
+      .fn()
+      .mockResolvedValueOnce(PROPERTY_DIRECTORY_CONTENT)
+      .mockResolvedValueOnce(ALOHA_CONTENT);
+
+    render(
+      <NotionLibraryBrowser
+        entries={ENTRIES}
+        fetchContentAction={fetchContentAction}
+        updateBlockAction={noopUpdateBlockAction}
+        searchAction={noopSearchAction}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Property Directory/ }));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Aloha by the Sea" }),
+      ).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Aloha by the Sea" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Network: AlohaGuest")).toBeTruthy();
+    });
+    expect(noopSearchAction).not.toHaveBeenCalled();
+  });
+
+  it("debounces the hierarchy search — does not fire once per keystroke", async () => {
+    const searchAction = vi.fn().mockResolvedValue({
+      configured: true,
+      ok: true,
+      query: "aloha",
+      results: [],
+    });
+
+    render(
+      <NotionLibraryBrowser
+        entries={ENTRIES}
+        fetchContentAction={vi.fn()}
+        updateBlockAction={noopUpdateBlockAction}
+        searchAction={searchAction}
+      />,
+    );
+
+    const input = screen.getByLabelText("Search Library");
+    fireEvent.change(input, { target: { value: "a" } });
+    fireEvent.change(input, { target: { value: "al" } });
+    fireEvent.change(input, { target: { value: "alo" } });
+    fireEvent.change(input, { target: { value: "aloha" } });
+
+    await waitFor(() => {
+      expect(searchAction).toHaveBeenCalledTimes(1);
+    });
+    expect(searchAction).toHaveBeenCalledWith("aloha");
+  });
+
+  it("shows a safe generic error message when the hierarchy search fails, never a raw error, and still shows top-level matches", async () => {
+    const searchAction = vi.fn().mockResolvedValue({
+      configured: true,
+      ok: false,
+      query: "aloha",
+      error: "Something went wrong searching the Library. Please try again.",
+    });
+
+    render(
+      <NotionLibraryBrowser
+        entries={ENTRIES}
+        fetchContentAction={vi.fn()}
+        updateBlockAction={noopUpdateBlockAction}
+        searchAction={searchAction}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Search Library"), {
+      target: { value: "aloha" },
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "Something went wrong searching the Library. Please try again.",
+        ),
+      ).toBeTruthy();
+    });
+  });
+
+  it("never leaks anything beyond id/title/parent-entry fields for a hierarchy search match", async () => {
+    const searchAction = vi.fn().mockResolvedValue({
+      configured: true,
+      ok: true,
+      query: "aloha",
+      results: [
+        {
+          id: "aloha-page",
+          title: "Aloha by the Sea",
+          parentEntryId: "prop-directory",
+          parentEntryTitle: "Property Directory",
+        },
+      ],
+    });
+
+    render(
+      <NotionLibraryBrowser
+        entries={ENTRIES}
+        fetchContentAction={vi.fn()}
+        updateBlockAction={noopUpdateBlockAction}
+        searchAction={searchAction}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Search Library"), {
+      target: { value: "aloha" },
+    });
+
+    const result = await screen.findByRole("button", {
+      name: /Aloha by the Sea/,
+    });
+    // Only the title and its Library location ever render — no raw ids,
+    // no page content, nothing beyond what the match itself carries.
+    expect(result.textContent).toBe(
+      "Aloha by the SeaLibrary / Property Directory",
+    );
   });
 });

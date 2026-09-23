@@ -4,6 +4,7 @@ import { PageHeader, SectionHeader } from "@stayw/ui";
 import {
   fetchNotionPageContentAction,
   searchNotionAction,
+  searchNotionLibraryAction,
   updateNotionBlockContentAction,
   updateNotionFieldAction,
 } from "@/domains/integrations/actions";
@@ -219,6 +220,7 @@ export default async function NotionPage() {
                 entries={libraryResult.items}
                 fetchContentAction={fetchNotionPageContentAction}
                 updateBlockAction={updateNotionBlockContentAction}
+                searchAction={searchNotionLibraryAction}
               />
             ) : libraryResult.configured ? (
               <p className="text-sm text-error-500">{libraryResult.error}</p>

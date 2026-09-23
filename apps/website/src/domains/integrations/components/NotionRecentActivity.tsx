@@ -1,5 +1,4 @@
-import { Badge, Card, EmptyState, SectionHeader } from "@stayw/ui";
-import { Activity } from "lucide-react";
+import { Badge, Card, SectionHeader } from "@stayw/ui";
 
 import type { NotionActivityItem } from "../services/notion-activity.service";
 
@@ -53,16 +52,29 @@ function labelForEventType(eventType: string): string {
  *
  * Wrapped in its own Card so it reads as a distinct operational section
  * rather than loose text under the listings table — matching every other
- * bordered/carded section on this page. The empty-state copy is
- * deliberately explicit that monitoring isn't active yet (webhook
- * registration is intentionally withheld) — this must never read as "no
- * activity happened," which would imply monitoring IS running.
+ * bordered/carded section on this page, but ONLY once there's real activity
+ * to show. While monitoring isn't active yet (webhook registration is
+ * intentionally withheld), rendering the full SectionHeader + Card +
+ * EmptyState treatment was a large, mostly-empty block taking up real
+ * screen space on an already-organized page (Production feedback,
+ * 2026-09-24) — this now collapses to one small, unobtrusive status line
+ * instead. This is a display change only: the underlying monitoring
+ * feature/data path is untouched, and the moment `items` is non-empty this
+ * renders the exact same full card it always did.
  */
 export function NotionRecentActivity({
   items,
 }: {
   items: NotionActivityItem[];
 }) {
+  if (items.length === 0) {
+    return (
+      <p className="text-xs text-ink-faint">
+        Notion change monitoring isn&apos;t active in Production yet.
+      </p>
+    );
+  }
+
   return (
     <div>
       <SectionHeader
@@ -72,35 +84,27 @@ export function NotionRecentActivity({
       />
 
       <Card noPadding>
-        {items.length === 0 ? (
-          <EmptyState
-            icon={Activity}
-            title="No recent activity"
-            description="Notion change monitoring isn't active in Production yet — this section will populate once it is."
-          />
-        ) : (
-          <ul className="divide-y divide-border">
-            {items.map((item) => (
-              <li key={item.id} className="px-4 py-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium text-ink">
-                    {labelForEventType(item.eventType)}
-                  </span>
-                  <Badge tone="neutral">{item.entityType}</Badge>
-                  {item.changedFieldCount > 0 && (
-                    <Badge tone="neutral">
-                      {item.changedFieldCount} field
-                      {item.changedFieldCount === 1 ? "" : "s"} changed
-                    </Badge>
-                  )}
-                </div>
-                <p className="mt-1 text-xs text-ink-faint">
-                  {formatTimestamp(item.occurredAt)}
-                </p>
-              </li>
-            ))}
-          </ul>
-        )}
+        <ul className="divide-y divide-border">
+          {items.map((item) => (
+            <li key={item.id} className="px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium text-ink">
+                  {labelForEventType(item.eventType)}
+                </span>
+                <Badge tone="neutral">{item.entityType}</Badge>
+                {item.changedFieldCount > 0 && (
+                  <Badge tone="neutral">
+                    {item.changedFieldCount} field
+                    {item.changedFieldCount === 1 ? "" : "s"} changed
+                  </Badge>
+                )}
+              </div>
+              <p className="mt-1 text-xs text-ink-faint">
+                {formatTimestamp(item.occurredAt)}
+              </p>
+            </li>
+          ))}
+        </ul>
       </Card>
     </div>
   );

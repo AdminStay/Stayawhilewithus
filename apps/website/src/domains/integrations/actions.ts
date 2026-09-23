@@ -13,6 +13,8 @@ import {
   finishDeviceSync,
   getNotionPageContent,
   searchNotionContent,
+  searchNotionLibraryContent,
+  type NotionLibrarySearchState,
   type NotionSearchState,
 } from "./services/integrations.service";
 import {
@@ -186,6 +188,38 @@ export async function searchNotionAction(
   if (!parsed.success) return { status: "idle" };
 
   return searchNotionContent(actor, parsed.data.query);
+}
+
+/** The only text an unexpected (non-searchNotionLibraryContent) failure in this action is ever allowed to surface. */
+const SEARCH_NOTION_LIBRARY_GENERIC_ERROR =
+  "Something went wrong searching the Library. Please try again.";
+
+/**
+ * Bound directly (not via useActionState) since the Library tab's own
+ * search box triggers this on a short debounce as the user types, not a
+ * form submission — see NotionLibraryBrowser.tsx. Same double-sanitization
+ * convention as fetchNotionPageContentAction(): searchNotionLibraryContent()
+ * already sanitizes any real Notion/provider/network failure (its `error`
+ * is safe to pass straight through), and this action's own catch is a
+ * separate boundary for anything else that could throw here
+ * (getCurrentUser(), an RBAC denial) — no path through this action can hand
+ * a raw internal error string to the client.
+ */
+export async function searchNotionLibraryAction(
+  query: string,
+): Promise<NotionLibrarySearchState> {
+  try {
+    const actor = await getCurrentUser();
+    return await searchNotionLibraryContent(actor, query);
+  } catch (err) {
+    console.error("searchNotionLibraryAction failed:", err);
+    return {
+      configured: true,
+      ok: false,
+      query,
+      error: SEARCH_NOTION_LIBRARY_GENERIC_ERROR,
+    };
+  }
 }
 
 /**

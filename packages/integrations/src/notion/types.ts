@@ -110,6 +110,19 @@ export interface NotionSearchResultItem {
    * "database" and "page" results.
    */
   parentDatabaseId: string | null;
+  /**
+   * The id of the page this result is a direct child_page of, when
+   * `sourceType` is "page" and Notion's own `parent.type` on this result is
+   * "page_id" — Notion's /search already returns this on every such result,
+   * so no extra lookup is needed. Used to recognize a page nested one level
+   * under a known LIBRARY entry (e.g. "Aloha by the Sea" under "Property
+   * Directory") without crawling the workspace: a caller who already knows
+   * a set of page ids (the LIBRARY database's own top-level rows) can match
+   * this field against that set directly. Always null for "database" and
+   * "database_row" results, and for any "page" result whose real parent is
+   * a workspace root or a database, not another page.
+   */
+  parentPageId: string | null;
 }
 
 /** Result of a one-row proof read against a specific data source — never the row's full content. */

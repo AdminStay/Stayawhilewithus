@@ -21,9 +21,18 @@ function activity(overrides: Partial<NotionActivityItem>): NotionActivityItem {
 }
 
 describe("NotionRecentActivity", () => {
-  it("shows an empty state when there is no activity yet", () => {
-    render(<NotionRecentActivity items={[]} />);
-    expect(screen.getByText("No recent activity")).toBeTruthy();
+  it("shows a small, unobtrusive status line — never the large empty-state card — when there is no activity yet", () => {
+    const { container } = render(<NotionRecentActivity items={[]} />);
+    expect(
+      screen.getByText(
+        "Notion change monitoring isn't active in Production yet.",
+      ),
+    ).toBeTruthy();
+    // No big section header or card wrapper while empty — this must stay a
+    // small status line, not a large empty-state block (Production
+    // feedback, 2026-09-24: it took up a large amount of screen space).
+    expect(screen.queryByText("Recent Notion Activity")).toBeNull();
+    expect(container.querySelector(".divide-y")).toBeNull();
   });
 
   it("renders a human-readable label for a known event type", () => {

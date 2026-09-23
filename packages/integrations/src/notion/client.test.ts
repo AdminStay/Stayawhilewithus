@@ -278,6 +278,7 @@ describe("NotionClient", () => {
         lastEditedTime: "2026-08-01T00:00:00.000Z",
         sourceType: "database",
         parentDatabaseId: null,
+        parentPageId: null,
       });
     });
 
@@ -323,6 +324,34 @@ describe("NotionClient", () => {
 
       const [result] = await client.search();
 
+      expect(result?.parentDatabaseId).toBeNull();
+      expect(result?.parentPageId).toBeNull();
+    });
+
+    it("captures parentPageId for a page whose parent is another page — e.g. a property page nested under a LIBRARY entry like 'Property Directory'", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          {
+            id: "aloha-page",
+            object: "page",
+            parent: { type: "page_id", page_id: "property-directory-page" },
+            properties: {
+              Name: {
+                type: "title",
+                title: [{ plain_text: "Aloha by the Sea" }],
+              },
+            },
+          },
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const [result] = await client.search();
+
+      expect(result?.sourceType).toBe("page");
+      expect(result?.parentPageId).toBe("property-directory-page");
       expect(result?.parentDatabaseId).toBeNull();
     });
 

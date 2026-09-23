@@ -3,19 +3,24 @@
 import type { NotionLibraryEntry } from "@stayw/integrations/notion";
 import { Input } from "@stayw/ui";
 import { ChevronRight, Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type {
   NotionPageContentActionState,
   UpdateNotionBlockActionInput,
   UpdateNotionBlockActionState,
 } from "../actions";
+import type { NotionLibrarySearchState } from "../services/integrations.service";
 
 import {
   NotionFetchedPageContent,
   type NotionFetchedPageContentState,
 } from "./NotionBlockRenderer";
 import { isSafeHttpUrl } from "./notion-link.utils";
+
+// A live, user-typed Library search debounces before calling the server —
+// every keystroke would otherwise fire a real Notion search request.
+const LIBRARY_SEARCH_DEBOUNCE_MS = 300;
 
 /** One step in the current drill-down path — never the root ("Library" itself, which has no id to fetch). */
 interface NavStep {
@@ -111,9 +116,21 @@ function LibraryBreadcrumb({
  *
  * A drilled-in page's own child_page entries can be filtered by title (see
  * `nestedQuery`) — this is exactly what makes "Property Directory → Aloha
- * by the Sea" findable by typing "aloha" once inside Property Directory,
- * the missing piece the top-level Library filter alone could never provide
- * (Aloha isn't a top-level LIBRARY row, so it was never in `entries`).
+ * by the Sea" findable by typing "aloha" once inside Property Directory.
+ *
+ * The TOP-LEVEL "Search Library" box goes further still (2026-09-24,
+ * Production follow-up: searching "aloha" there returned "No Library
+ * entries match" even though Aloha is real Library content, just not a
+ * top-level row) — it now ALSO calls `searchAction` (debounced), which
+ * finds a page nested one level under a top-level entry via Notion's own
+ * real search plus that result's own returned parent id (see
+ * searchNotionLibraryContent()'s doc comment for exactly how — never a
+ * crawl, never data duplicated into StayWhile's own database). A match
+ * found this way is labeled with its real location ("Library / Property
+ * Directory") and, when clicked, jumps directly to that nested page —
+ * pushing both the ancestor and the target step onto the breadcrumb in one
+ * go — and fetches its real content the same way any other page here does.
+ *
  * Filtering only ever hides/shows `child_page` blocks — every other block
  * on the same page (a table of lockbox codes, a paragraph of owner info)
  * always renders in full regardless of the filter text, so a query never
@@ -123,6 +140,7 @@ export function NotionLibraryBrowser({
   entries,
   fetchContentAction,
   updateBlockAction,
+  searchAction,
 }: {
   /** The real LIBRARY database's own top-level entries — already fetched server-side (see the /notion page). title/id/url only. */
   entries: NotionLibraryEntry[];
@@ -131,12 +149,26 @@ export function NotionLibraryBrowser({
     prevState: UpdateNotionBlockActionState,
     input: UpdateNotionBlockActionInput,
   ) => Promise<UpdateNotionBlockActionState>;
+  /** Searches across the Library hierarchy, not just its top-level rows — see searchNotionLibraryContent()'s own doc comment. */
+  searchAction: (query: string) => Promise<NotionLibrarySearchState>;
 }) {
   const [query, setQuery] = useState("");
   const [path, setPath] = useState<NavStep[]>([]);
   const [contentState, setContentState] =
     useState<NotionFetchedPageContentState>({ status: "idle" });
   const [nestedQuery, setNestedQuery] = useState("");
+  const [nestedMatches, setNestedMatches] = useState<
+    {
+      id: string;
+      title: string;
+      parentEntryId: string;
+      parentEntryTitle: string;
+    }[]
+  >([]);
+  const [searchStatus, setSearchStatus] = useState<
+    "idle" | "loading" | "error"
+  >("idle");
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   const filteredEntries = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -146,11 +178,78 @@ export function NotionLibraryBrowser({
     );
   }, [entries, query]);
 
+  // Only searches the hierarchy while the top-level list is showing — once
+  // drilled in, the per-level filter above already covers finding a page
+  // within that specific opened page.
+  useEffect(() => {
+    if (path.length > 0) return;
+    const trimmed = query.trim();
+    if (trimmed === "") {
+      setNestedMatches([]);
+      setSearchStatus("idle");
+      setSearchError(null);
+      return;
+    }
+    let cancelled = false;
+    setSearchStatus("loading");
+    const timer = setTimeout(() => {
+      searchAction(trimmed).then((state) => {
+        if (cancelled) return;
+        if (!state.configured || !state.ok) {
+          setNestedMatches([]);
+          setSearchStatus(state.configured && !state.ok ? "error" : "idle");
+          setSearchError(state.configured && !state.ok ? state.error : null);
+          return;
+        }
+        setNestedMatches(
+          state.results
+            .filter(
+              (
+                r,
+              ): r is typeof r & {
+                parentEntryId: string;
+                parentEntryTitle: string;
+              } => r.parentEntryId !== null && r.parentEntryTitle !== null,
+            )
+            .map((r) => ({
+              id: r.id,
+              title: r.title,
+              parentEntryId: r.parentEntryId,
+              parentEntryTitle: r.parentEntryTitle,
+            })),
+        );
+        setSearchStatus("idle");
+        setSearchError(null);
+      });
+    }, LIBRARY_SEARCH_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query, path.length, searchAction]);
+
   function openPage(id: string, title: string) {
     setPath((prev) => [...prev, { id, title }]);
     setNestedQuery("");
     setContentState({ status: "loading" });
     fetchContentAction(id).then(setContentState);
+  }
+
+  /** Jumps straight to a Library-search hit found nested under a top-level entry — pushes both the ancestor and the target onto the breadcrumb in one step, rather than requiring the user to first open the ancestor themselves. */
+  function openNestedMatch(match: {
+    id: string;
+    title: string;
+    parentEntryId: string;
+    parentEntryTitle: string;
+  }) {
+    setPath([
+      { id: match.parentEntryId, title: match.parentEntryTitle },
+      { id: match.id, title: match.title },
+    ]);
+    setQuery("");
+    setNestedQuery("");
+    setContentState({ status: "loading" });
+    fetchContentAction(match.id).then(setContentState);
   }
 
   function goToRoot() {
@@ -242,11 +341,7 @@ export function NotionLibraryBrowser({
           />
         </div>
 
-        {filteredEntries.length === 0 ? (
-          <p className="text-sm text-ink-muted">
-            No Library entries match &ldquo;{query}&rdquo;.
-          </p>
-        ) : (
+        {filteredEntries.length > 0 && (
           <ul className="space-y-2">
             {filteredEntries.map((entry) => (
               <li key={entry.id}>
@@ -267,6 +362,49 @@ export function NotionLibraryBrowser({
             ))}
           </ul>
         )}
+
+        {query.trim() !== "" && searchStatus === "loading" && (
+          <p className="text-sm text-ink-muted">Searching Library…</p>
+        )}
+
+        {query.trim() !== "" && searchStatus === "error" && searchError && (
+          <p className="text-sm text-error-500">{searchError}</p>
+        )}
+
+        {nestedMatches.length > 0 && (
+          <ul className="space-y-2">
+            {nestedMatches.map((match) => (
+              <li key={match.id}>
+                <button
+                  type="button"
+                  onClick={() => openNestedMatch(match)}
+                  className="flex w-full items-center justify-between rounded-lg border border-border/70 px-3 py-2 text-left text-sm font-medium text-ink transition-colors hover:bg-surface-muted"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{match.title}</span>
+                    <span className="block truncate text-xs font-normal text-ink-faint">
+                      Library / {displayTitle(match.parentEntryTitle)}
+                    </span>
+                  </span>
+                  <ChevronRight
+                    className="h-4 w-4 shrink-0 text-ink-faint"
+                    aria-hidden="true"
+                  />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {query.trim() !== "" &&
+          searchStatus !== "loading" &&
+          filteredEntries.length === 0 &&
+          nestedMatches.length === 0 &&
+          searchStatus !== "error" && (
+            <p className="text-sm text-ink-muted">
+              No Library entries match &ldquo;{query}&rdquo;.
+            </p>
+          )}
       </div>
     );
   }
