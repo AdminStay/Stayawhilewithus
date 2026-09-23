@@ -37,7 +37,11 @@ function successMessage(state: {
     );
   }
   if (state.skipped > 0) {
-    notes.push(`${state.skipped} discovered but skipped — no property mapping`);
+    // "found," not "discovered" — this legacy sync's own count has nothing
+    // to do with the separate Discover-Devices flow's own "Discovered N
+    // devices" counter (DiscoverDevicesButton.tsx); reusing that word here
+    // read as if the two were the same number.
+    notes.push(`${state.skipped} found but skipped — no property mapping`);
   }
   const suffix = notes.length > 0 ? ` (${notes.join("; ")})` : "";
 

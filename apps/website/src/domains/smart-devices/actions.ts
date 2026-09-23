@@ -81,6 +81,8 @@ export type DiscoverActionState =
       discovered: number;
       enriched?: number;
       detailFailures?: number;
+      /** August-only (item D) — see DiscoverySyncResult.noLongerReturnedExternalIds. Undefined for Nest and for an August run with nothing to report. */
+      noLongerReturnedExternalIds?: string[];
     }
   | { status: "failure"; error: string };
 
@@ -90,10 +92,14 @@ export type DiscoverActionState =
  * ProviderDevice upsert logic they call are completely unchanged by this;
  * this is purely the "catch and report" wrapper so a thrown error becomes
  * a renderable state instead of crashing to the page-level error boundary.
- * enriched/detailFailures are passed through only when the discover call
- * actually returned them (August's two-phase discovery) — Nest's discovery
- * never sets them, so they stay undefined and the button renders its plain
- * discovered-count message unchanged.
+ * enriched/detailFailures/noLongerReturnedExternalIds are passed through
+ * only when the discover call actually returned them (August's discovery
+ * only) — Nest's discovery never sets them, so they stay undefined and the
+ * button renders its plain discovered-count message unchanged. A thrown
+ * discovery error (e.g. August auth failure) is caught below and reported
+ * as "failure" — it can never reach the noLongerReturnedExternalIds logic
+ * inside discoverAugustDevices() at all, so a failed run can never be
+ * misreported as a mass "no longer returned" result.
  */
 async function runDiscovery(
   discover: (actor: AuthContext) => Promise<DiscoverySyncResult>,
@@ -107,6 +113,7 @@ async function runDiscovery(
       discovered: result.discovered,
       enriched: result.enriched,
       detailFailures: result.detailFailures,
+      noLongerReturnedExternalIds: result.noLongerReturnedExternalIds,
     };
   } catch (err) {
     return {

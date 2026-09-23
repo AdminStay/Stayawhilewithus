@@ -16,6 +16,7 @@ import { NestClient, type NestDevice } from "@stayw/integrations/nest";
 
 export type { ProviderDevice };
 
+import { findNoLongerReturnedExternalIds } from "../lib/discovered-device";
 import { celsiusToFahrenheit } from "../lib/temperature";
 import {
   mapProviderDeviceToPropertySchema,
@@ -34,6 +35,19 @@ export interface DiscoverySyncResult {
   /** August-only today — Nest's listDevices() already returns full detail in one call, so it has nothing to separately "enrich." Omitted (not zero) when not applicable. */
   enriched?: number;
   detailFailures?: number;
+  /**
+   * August-only (2026-09-23, item D). Exact external device ids of
+   * ProviderDevice rows that existed BEFORE this discovery run but were
+   * absent from this run's fresh, successfully-completed
+   * `client.listLocks()` response — see findNoLongerReturnedExternalIds()
+   * (discovered-device.ts) for the exact comparison. Omitted (not an empty
+   * array) when there's nothing to report, matching
+   * DeviceSyncResult.alreadyMappedExternalIds' own convention.
+   *
+   * Reporting only — never causes any retire/disable/unmap/delete. Review
+   * is the operator's job, via item C's explicit Retire action.
+   */
+  noLongerReturnedExternalIds?: string[];
 }
 
 /**
@@ -316,6 +330,14 @@ export const AUGUST_DETAIL_CONCURRENCY = 5;
  * alongside the existing AUGUST_PROPERTY_MAP-driven syncAugustDevices() —
  * it does not read that env var, does not call it, and does not affect any
  * SmartDevice row that sync already created.
+ *
+ * Also reports DiscoverySyncResult.noLongerReturnedExternalIds (item D,
+ * 2026-09-23) — see that field's own doc comment and
+ * findNoLongerReturnedExternalIds() (discovered-device.ts) for the exact
+ * comparison. Reporting only: this function still never deletes, disables,
+ * unmaps, or retires anything on its own — a previously-known
+ * ProviderDevice row simply keeps existing with its last-known data,
+ * exactly as before, whether or not it's still returned.
  */
 export async function discoverAugustDevices(
   actor: AuthContext,
@@ -346,6 +368,26 @@ export async function discoverAugustDevices(
 
   // Phase 1: fast base inventory. One HTTP call, one batched DB write.
   const locks = await client.listLocks();
+
+  // Item D (2026-09-23): captured BEFORE Phase 1's own upsert below writes
+  // anything, so this is genuinely "what StayWhile knew before this run" —
+  // every August ProviderDevice row for this connection, regardless of its
+  // mapped/enabled state (comparison rule: only August ProviderDevices
+  // participate, exact id match, no other filter). This can only run here,
+  // after `listLocks()` has already resolved successfully — if it had
+  // thrown (auth failure, timeout, malformed response), execution would
+  // never reach this line at all, so a failed/partial discovery can never
+  // be miscounted as "every device disappeared." See
+  // findNoLongerReturnedExternalIds() (discovered-device.ts) for the exact,
+  // deliberately non-inferential comparison itself.
+  const previouslyKnown = await prisma.providerDevice.findMany({
+    where: { integrationConnectionId: connection.id },
+    select: { externalDeviceId: true },
+  });
+  const noLongerReturned = findNoLongerReturnedExternalIds(
+    previouslyKnown.map((d) => d.externalDeviceId),
+    locks.map((lock) => lock.id),
+  );
 
   if (locks.length > 0) {
     await prisma.$transaction(
@@ -419,7 +461,14 @@ export async function discoverAugustDevices(
     data: { lastSyncedAt: new Date(), status: "CONNECTED" },
   });
 
-  return { discovered: locks.length, enriched, detailFailures };
+  return {
+    discovered: locks.length,
+    enriched,
+    detailFailures,
+    ...(noLongerReturned.length > 0 && {
+      noLongerReturnedExternalIds: noLongerReturned,
+    }),
+  };
 }
 
 export async function listDiscoveredDevices(

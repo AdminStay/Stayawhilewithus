@@ -84,3 +84,36 @@ export function findSuggestedPropertyForHouseId(
   if (matchingProperties.size !== 1) return null;
   return [...matchingProperties.values()][0] ?? null;
 }
+
+/**
+ * Pure set-difference (2026-09-23, item D) — which of `storedExternalIds`
+ * (August ProviderDevice rows already in the database, from before this
+ * discovery run) are absent from `freshExternalIds` (the exact ids a
+ * successful, just-completed August provider discovery returned just now).
+ * Exact string comparison only — no name/houseId/address inference, no
+ * fuzzy matching, no cross-provider comparison, matching every other
+ * function in this file. Deduplicates its result since a caller's
+ * `storedExternalIds` could in principle contain the same id twice; a
+ * fresh id appearing more than once has no effect either way, since only
+ * its presence in the Set matters.
+ *
+ * This is a diff, not a decision — it never infers WHY an id is missing
+ * (temporarily offline vs. genuinely removed/replaced) and must never be
+ * wired to any automatic retire/disable/unmap path. The only way a device
+ * actually gets retired is the explicit, human-confirmed
+ * retireSmartDevice() (see item C, smart-devices.service.ts) — this
+ * function only tells a caller which ids are worth a human's review.
+ *
+ * The caller is responsible for only ever calling this with a
+ * `freshExternalIds` list that came from a provider discovery call that
+ * actually completed successfully — see discoverAugustDevices()'s own
+ * comment on why a failed/partial discovery must never reach this
+ * function at all.
+ */
+export function findNoLongerReturnedExternalIds(
+  storedExternalIds: string[],
+  freshExternalIds: string[],
+): string[] {
+  const fresh = new Set(freshExternalIds);
+  return [...new Set(storedExternalIds.filter((id) => !fresh.has(id)))];
+}

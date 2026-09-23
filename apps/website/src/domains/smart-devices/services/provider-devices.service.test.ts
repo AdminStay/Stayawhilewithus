@@ -22,7 +22,11 @@ const {
 vi.mock("@stayw/database", () => ({
   prisma: {
     providerDevice: {
-      findMany: vi.fn(),
+      // Defaults to "nothing previously known" so every existing
+      // discoverAugustDevices test (item D's noLongerReturnedExternalIds
+      // comparison queries this on every call) is unaffected unless a test
+      // explicitly overrides this with mockResolvedValueOnce.
+      findMany: vi.fn().mockResolvedValue([]),
       findUniqueOrThrow: vi.fn(),
       upsert: vi.fn().mockResolvedValue({}),
       update: vi.fn(),
@@ -482,6 +486,122 @@ describe("discoverAugustDevices", () => {
     await discoverAugustDevices(actor);
 
     expect(prisma.smartDevice.upsert).not.toHaveBeenCalled();
+  });
+
+  describe("noLongerReturnedExternalIds — D, reporting only, never a mass-missing false positive", () => {
+    it("reports a previously-known ProviderDevice id absent from a successful fresh listLocks() response", async () => {
+      withAugustEnv();
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(
+        prisma.integrationConnection.findUniqueOrThrow,
+      ).mockResolvedValueOnce({
+        id: "connection-1",
+        provider: "AUGUST",
+      } as never);
+      vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+        { externalDeviceId: "lock-old" },
+        { externalDeviceId: "lock-1" },
+      ] as never);
+      const lock = baseLock("lock-1");
+      mockListLocks.mockResolvedValueOnce([lock]);
+      mockGetLockDetail.mockResolvedValueOnce(detailFor(lock));
+
+      const result = await discoverAugustDevices(actor);
+
+      expect(prisma.providerDevice.findMany).toHaveBeenCalledWith({
+        where: { integrationConnectionId: "connection-1" },
+        select: { externalDeviceId: true },
+      });
+      expect(result.noLongerReturnedExternalIds).toEqual(["lock-old"]);
+    });
+
+    it("does not report an id that's still returned by the fresh discovery", async () => {
+      withAugustEnv();
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(
+        prisma.integrationConnection.findUniqueOrThrow,
+      ).mockResolvedValueOnce({
+        id: "connection-1",
+        provider: "AUGUST",
+      } as never);
+      vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+        { externalDeviceId: "lock-1" },
+      ] as never);
+      const lock = baseLock("lock-1");
+      mockListLocks.mockResolvedValueOnce([lock]);
+      mockGetLockDetail.mockResolvedValueOnce(detailFor(lock));
+
+      const result = await discoverAugustDevices(actor);
+
+      expect(result.noLongerReturnedExternalIds).toBeUndefined();
+    });
+
+    it("omits the field entirely (not an empty array) when there's nothing to report", async () => {
+      withAugustEnv();
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(
+        prisma.integrationConnection.findUniqueOrThrow,
+      ).mockResolvedValueOnce({
+        id: "connection-1",
+        provider: "AUGUST",
+      } as never);
+      vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([]);
+      const lock = baseLock("lock-1");
+      mockListLocks.mockResolvedValueOnce([lock]);
+      mockGetLockDetail.mockResolvedValueOnce(detailFor(lock));
+
+      const result = await discoverAugustDevices(actor);
+
+      expect(result).not.toHaveProperty("noLongerReturnedExternalIds");
+    });
+
+    it("PROVIDER FAILURE: a thrown listLocks() error propagates and never produces a fabricated 'all devices missing' result", async () => {
+      withAugustEnv();
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(
+        prisma.integrationConnection.findUniqueOrThrow,
+      ).mockResolvedValueOnce({
+        id: "connection-1",
+        provider: "AUGUST",
+      } as never);
+      // Deliberately no findMany mockResolvedValueOnce queued here — this
+      // test asserts findMany is never even called, so queuing a value it
+      // must never consume would just leak into a later test instead of
+      // proving anything.
+      mockListLocks.mockRejectedValueOnce(new Error("August auth failed"));
+
+      await expect(discoverAugustDevices(actor)).rejects.toThrow(
+        /August auth failed/,
+      );
+
+      // The comparison query itself must never even run on a failed
+      // discovery — proving this isn't just "the result was discarded,"
+      // but that the failure path never reaches the comparison at all.
+      expect(prisma.providerDevice.findMany).not.toHaveBeenCalled();
+    });
+
+    it("never disables, unmaps, or deletes a ProviderDevice row for an id it reports as no longer returned", async () => {
+      withAugustEnv();
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(
+        prisma.integrationConnection.findUniqueOrThrow,
+      ).mockResolvedValueOnce({
+        id: "connection-1",
+        provider: "AUGUST",
+      } as never);
+      vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+        { externalDeviceId: "lock-old" },
+      ] as never);
+      mockListLocks.mockResolvedValueOnce([]);
+
+      const result = await discoverAugustDevices(actor);
+
+      expect(result.noLongerReturnedExternalIds).toEqual(["lock-old"]);
+      expect(prisma.providerDevice.update).not.toHaveBeenCalled();
+      expect(
+        (prisma.providerDevice as unknown as Record<string, unknown>).delete,
+      ).toBeUndefined();
+    });
   });
 });
 

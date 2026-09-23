@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  findNoLongerReturnedExternalIds,
   findSuggestedPropertyForHouseId,
   getAugustHouseId,
   type DiscoveredDevice,
@@ -190,5 +191,63 @@ describe("findSuggestedPropertyForHouseId — F, deterministic mapping assistanc
     findSuggestedPropertyForHouseId(devices, "house-1");
 
     expect(JSON.parse(JSON.stringify(devices))).toEqual(snapshot);
+  });
+});
+
+describe("findNoLongerReturnedExternalIds — D, exact-id comparison", () => {
+  it("reports a stored id absent from a successful fresh discovery", () => {
+    expect(
+      findNoLongerReturnedExternalIds(["lock-1", "lock-2"], ["lock-1"]),
+    ).toEqual(["lock-2"]);
+  });
+
+  it("does not report a stored id that's still returned", () => {
+    expect(findNoLongerReturnedExternalIds(["lock-1"], ["lock-1"])).toEqual([]);
+  });
+
+  it("does not incorrectly report a newly discovered id as missing", () => {
+    expect(
+      findNoLongerReturnedExternalIds(["lock-1"], ["lock-1", "lock-2"]),
+    ).toEqual([]);
+  });
+
+  it("reports multiple missing ids deterministically", () => {
+    expect(
+      findNoLongerReturnedExternalIds(
+        ["lock-1", "lock-2", "lock-3"],
+        ["lock-2"],
+      ),
+    ).toEqual(["lock-1", "lock-3"]);
+  });
+
+  it("deduplicates a stored id listed more than once", () => {
+    expect(findNoLongerReturnedExternalIds(["lock-1", "lock-1"], [])).toEqual([
+      "lock-1",
+    ]);
+  });
+
+  it("returns an empty array when every stored id is still returned", () => {
+    expect(
+      findNoLongerReturnedExternalIds(
+        ["lock-1", "lock-2"],
+        ["lock-1", "lock-2"],
+      ),
+    ).toEqual([]);
+  });
+
+  it("returns an empty array when nothing was previously stored", () => {
+    expect(findNoLongerReturnedExternalIds([], ["lock-1"])).toEqual([]);
+  });
+
+  it("never mutates either input array", () => {
+    const stored = ["lock-1", "lock-2"];
+    const fresh = ["lock-1"];
+    const storedSnapshot = [...stored];
+    const freshSnapshot = [...fresh];
+
+    findNoLongerReturnedExternalIds(stored, fresh);
+
+    expect(stored).toEqual(storedSnapshot);
+    expect(fresh).toEqual(freshSnapshot);
   });
 });

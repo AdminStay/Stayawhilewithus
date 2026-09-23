@@ -170,6 +170,92 @@ describe("DiscoverDevicesButton", () => {
     expect(screen.getByText("Discovered 4 devices.")).toBeTruthy();
   });
 
+  it("shows a review-before-retiring warning, singular, for exactly one no-longer-returned lock (item D)", () => {
+    mockUseActionState.mockReturnValue([
+      {
+        status: "success",
+        discovered: 6,
+        enriched: 6,
+        detailFailures: 0,
+        noLongerReturnedExternalIds: ["lock-old"],
+      },
+      noopFormAction,
+      false,
+    ]);
+
+    render(
+      <DiscoverDevicesButton
+        label="Discover August devices"
+        action={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "1 previously-known lock is no longer reported by August. Review before retiring.",
+      ),
+    ).toBeTruthy();
+    // Must never claim or imply the device was deleted/replaced.
+    expect(screen.queryByText(/deleted/i)).toBeNull();
+    expect(screen.queryByText(/replaced/i)).toBeNull();
+  });
+
+  it("shows a review-before-retiring warning, plural, for multiple no-longer-returned locks", () => {
+    mockUseActionState.mockReturnValue([
+      {
+        status: "success",
+        discovered: 5,
+        noLongerReturnedExternalIds: ["lock-old-1", "lock-old-2"],
+      },
+      noopFormAction,
+      false,
+    ]);
+
+    render(
+      <DiscoverDevicesButton
+        label="Discover August devices"
+        action={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "2 previously-known locks are no longer reported by August. Review before retiring.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("shows no review-before-retiring warning when nothing is reported missing", () => {
+    mockUseActionState.mockReturnValue([
+      { status: "success", discovered: 6, enriched: 6, detailFailures: 0 },
+      noopFormAction,
+      false,
+    ]);
+
+    render(
+      <DiscoverDevicesButton
+        label="Discover August devices"
+        action={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(/no longer reported/)).toBeNull();
+  });
+
+  it("never shows a review-before-retiring warning for Nest (the field is always undefined for Nest's plain result)", () => {
+    mockUseActionState.mockReturnValue([
+      { status: "success", discovered: 4 },
+      noopFormAction,
+      false,
+    ]);
+
+    render(
+      <DiscoverDevicesButton label="Discover Nest devices" action={vi.fn()} />,
+    );
+
+    expect(screen.queryByText(/no longer reported/)).toBeNull();
+  });
+
   it("renders a clear, verbatim failure message and leaves the button enabled (never stuck disabled after a failure)", () => {
     mockUseActionState.mockReturnValue([
       { status: "failure", error: "August isn't configured yet." },

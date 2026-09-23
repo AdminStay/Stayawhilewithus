@@ -40,13 +40,23 @@ export function DiscoverDevicesButton({
       </Button>
 
       {state.status === "success" && (
-        <p className="mt-1 text-xs text-success-600">
-          Discovered {state.discovered} device
-          {state.discovered === 1 ? "" : "s"}.
-          {state.enriched != null && ` ${state.enriched} enriched.`}
-          {!!state.detailFailures &&
-            ` ${state.detailFailures} detail lookup${state.detailFailures === 1 ? "" : "s"} failed.`}
-        </p>
+        <>
+          <p className="mt-1 text-xs text-success-600">
+            Discovered {state.discovered} device
+            {state.discovered === 1 ? "" : "s"}.
+            {state.enriched != null && ` ${state.enriched} enriched.`}
+            {!!state.detailFailures &&
+              ` ${state.detailFailures} detail lookup${state.detailFailures === 1 ? "" : "s"} failed.`}
+          </p>
+          {!!state.noLongerReturnedExternalIds?.length && (
+            <p className="mt-1 text-xs text-warning-600">
+              {state.noLongerReturnedExternalIds.length} previously-known lock
+              {state.noLongerReturnedExternalIds.length === 1 ? "" : "s"}{" "}
+              {state.noLongerReturnedExternalIds.length === 1 ? "is" : "are"} no
+              longer reported by August. Review before retiring.
+            </p>
+          )}
+        </>
       )}
       {state.status === "failure" && (
         <p className="mt-1 text-xs text-error-500">

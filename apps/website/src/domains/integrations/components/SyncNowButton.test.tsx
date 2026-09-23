@@ -93,7 +93,7 @@ describe("SyncNowButton", () => {
 
     expect(
       screen.getByText(
-        "Synced 7 devices (34 already mapped via device mapping — kept up to date separately; 2 discovered but skipped — no property mapping).",
+        "Synced 7 devices (34 already mapped via device mapping — kept up to date separately; 2 found but skipped — no property mapping).",
       ),
     ).toBeTruthy();
   });
