@@ -244,6 +244,71 @@ describe("LocksList — Lock state column", () => {
   });
 });
 
+describe("LocksList — UNKNOWN connectivity explanation (item A)", () => {
+  it("gives UNKNOWN August locks a hover explanation, plus a help icon, that they don't get for ONLINE/OFFLINE", () => {
+    renderLocks([
+      makeLock({ id: "lock-unknown", name: "Unknown Lock", status: "UNKNOWN" }),
+      makeLock({ id: "lock-online", name: "Online Lock", status: "ONLINE" }),
+      makeLock({ id: "lock-offline", name: "Offline Lock", status: "OFFLINE" }),
+    ]);
+
+    const unknownCell = statusCellFor("Unknown Lock");
+    expect(unknownCell.querySelector("[title]")?.getAttribute("title")).toBe(
+      "August has not reported reliable connectivity for this lock.",
+    );
+    expect(unknownCell.querySelector("svg")).toBeTruthy();
+
+    expect(statusCellFor("Online Lock").querySelector("[title]")).toBeNull();
+    expect(statusCellFor("Offline Lock").querySelector("[title]")).toBeNull();
+  });
+
+  it("the explanation never claims the lock is offline, broken, missing its bridge, a specific hardware generation, or uncontrollable", () => {
+    renderLocks([makeLock({ name: "Unknown Lock", status: "UNKNOWN" })]);
+
+    const title = statusCellFor("Unknown Lock")
+      .querySelector("[title]")
+      ?.getAttribute("title");
+    expect(title).toBeTruthy();
+    expect(title).not.toMatch(/offline/i);
+    expect(title).not.toMatch(/broken|fail/i);
+    expect(title).not.toMatch(/bridge/i);
+    expect(title).not.toMatch(/generation|model|hardware/i);
+    expect(title).not.toMatch(/control/i);
+  });
+
+  it("a known LOCKED state can coexist with UNKNOWN connectivity — state and connectivity are never collapsed into each other", () => {
+    renderLocks([
+      makeLock({
+        name: "Known State Unknown Connectivity Lock",
+        status: "UNKNOWN",
+        metadata: { lockState: "locked" },
+      }),
+    ]);
+
+    const row = rowFor("Known State Unknown Connectivity Lock");
+    expect(within(row).getByText("Locked")).toBeTruthy();
+    expect(
+      within(statusCellFor("Known State Unknown Connectivity Lock")).getByText(
+        "Unknown",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("non-August providers never get the August-specific UNKNOWN explanation, even with status UNKNOWN", () => {
+    renderLocks([
+      {
+        ...makeLock({ name: "Non-August Unknown", status: "UNKNOWN" }),
+        provider: "NEST",
+      } as never,
+    ]);
+
+    const cell = statusCellFor("Non-August Unknown");
+    expect(within(cell).getByText("Unknown")).toBeTruthy();
+    expect(cell.querySelector("[title]")).toBeNull();
+    expect(cell.querySelector("svg")).toBeNull();
+  });
+});
+
 describe("LocksList — Battery column", () => {
   it("shows a quiet percentage for healthy battery", () => {
     renderLocks([

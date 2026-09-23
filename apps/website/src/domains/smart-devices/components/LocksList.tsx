@@ -52,10 +52,13 @@ type LockWithProperty = SmartDevice & {
  * Short label for the compact Status dot (2026-09-18 /locks UI cleanup) —
  * deliberately terser than the old CONNECTIVITY_LABEL's "Connectivity not
  * reported" for UNKNOWN: this is now a scannable dot+word, not a sentence.
- * The full explanation still exists (see the "Unknown" secondary badge/
- * title below) — nothing here changes what UNKNOWN means: never a
- * confirmed-offline signal, only "the provider gave no reliable connectivity
- * read this time."
+ * Nothing here changes what UNKNOWN means: never a confirmed-offline
+ * signal, only "the provider gave no reliable connectivity read this
+ * time." (2026-09-23, item A) — the Sep 18 cleanup's own comment claimed a
+ * "secondary badge/title" already carried the full explanation, but no
+ * such affordance actually existed; AUGUST_UNKNOWN_CONNECTIVITY_EXPLANATION
+ * below, rendered as a hover title on the Status cell, is that promised
+ * explanation, now real.
  */
 const CONNECTIVITY_LABEL: Record<LockWithProperty["status"], string> = {
   ONLINE: "Online",
@@ -63,6 +66,25 @@ const CONNECTIVITY_LABEL: Record<LockWithProperty["status"], string> = {
   UNKNOWN: "Unknown",
   ERROR: "Error",
 };
+
+/**
+ * Hover-title text for UNKNOWN connectivity, August locks only (2026-09-23,
+ * item A) — Michelle's report that "most locks show Unknown" traced to a
+ * real provider fact, not a bug: deriveConnectivity() (august/client.ts)
+ * correctly returns UNKNOWN whenever August's API omits the `Bridge` object
+ * entirely, which a live fleet audit found several real lock hardware/
+ * firmware generations simply never send — while still reporting battery
+ * telemetry. UNKNOWN is the deliberately honest result of that, not a
+ * defect to hide. This copy exists so an operator hovering "Unknown"
+ * understands why, without this file (or anyone reading it) claiming any
+ * of the things that would NOT be true: that the lock is offline, broken,
+ * missing its bridge as a diagnosis, a specific hardware generation, or
+ * that it can't be remotely controlled — Lock/Unlock eligibility
+ * (computeLockControlEligibility, item E) is entirely independent of this
+ * connectivity read.
+ */
+const AUGUST_UNKNOWN_CONNECTIVITY_EXPLANATION =
+  "August has not reported reliable connectivity for this lock.";
 
 const CONNECTIVITY_TONE: Record<LockWithProperty["status"], Tone> = {
   ONLINE: "success",
@@ -252,10 +274,22 @@ export function LocksList({
 
                 <TableCell>
                   <div className="flex flex-col gap-1">
-                    <StatusIndicator
-                      label={CONNECTIVITY_LABEL[lock.status]}
-                      tone={CONNECTIVITY_TONE[lock.status]}
-                    />
+                    <span
+                      className="inline-flex items-center gap-1"
+                      title={
+                        isAugust && lock.status === "UNKNOWN"
+                          ? AUGUST_UNKNOWN_CONNECTIVITY_EXPLANATION
+                          : undefined
+                      }
+                    >
+                      <StatusIndicator
+                        label={CONNECTIVITY_LABEL[lock.status]}
+                        tone={CONNECTIVITY_TONE[lock.status]}
+                      />
+                      {isAugust && lock.status === "UNKNOWN" && (
+                        <HelpCircle className="h-3 w-3 shrink-0 text-ink-faint" />
+                      )}
+                    </span>
                     <div className="flex flex-wrap items-center gap-1">
                       {demo && (
                         <Badge tone="neutral" className="text-[10px]">
