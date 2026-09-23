@@ -31,6 +31,7 @@ import {
   type DeviceFilterState,
 } from "../lib/device-filter";
 import {
+  findSuggestedPropertyForHouseId,
   getAugustHouseId,
   type DiscoveredDevice,
   type Property,
@@ -243,6 +244,13 @@ export function DiscoveredDevicesList({
           <TableBody>
             {filteredDevices.map((device) => {
               const houseId = getAugustHouseId(device);
+              // Computed against the FULL, unfiltered device list — never
+              // filteredDevices — so an active search/provider/status
+              // filter can never hide the sibling mapped device this
+              // suggestion's evidence depends on.
+              const suggestedProperty = device.propertyId
+                ? null
+                : findSuggestedPropertyForHouseId(devices, houseId);
               return (
                 <TableRow key={device.id}>
                   <TableCell
@@ -293,31 +301,39 @@ export function DiscoveredDevicesList({
                       {!device.propertyId && (
                         <form
                           action={mapProviderDeviceToPropertyAction}
-                          className="flex items-center gap-1.5"
+                          className="flex flex-col gap-1"
                         >
-                          <input
-                            type="hidden"
-                            name="providerDeviceId"
-                            value={device.id}
-                          />
-                          <Select
-                            name="propertyId"
-                            required
-                            defaultValue=""
-                            className="w-32 text-xs"
-                          >
-                            <option value="" disabled>
-                              Choose property…
-                            </option>
-                            {properties.map((property) => (
-                              <option key={property.id} value={property.id}>
-                                {property.name}
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="hidden"
+                              name="providerDeviceId"
+                              value={device.id}
+                            />
+                            <Select
+                              name="propertyId"
+                              required
+                              defaultValue={suggestedProperty?.id ?? ""}
+                              className="w-32 text-xs"
+                            >
+                              <option value="" disabled>
+                                Choose property…
                               </option>
-                            ))}
-                          </Select>
-                          <Button type="submit" size="sm" variant="secondary">
-                            Map
-                          </Button>
+                              {properties.map((property) => (
+                                <option key={property.id} value={property.id}>
+                                  {property.name}
+                                </option>
+                              ))}
+                            </Select>
+                            <Button type="submit" size="sm" variant="secondary">
+                              Map
+                            </Button>
+                          </div>
+                          {suggestedProperty && (
+                            <span className="text-[10px] text-ink-faint">
+                              Suggested from another August device at this house
+                              — confirm before mapping.
+                            </span>
+                          )}
                         </form>
                       )}
 

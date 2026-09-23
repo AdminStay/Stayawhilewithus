@@ -22,6 +22,7 @@ vi.mock("../actions", () => ({
   unmapProviderDeviceAction: vi.fn(),
 }));
 
+import { mapProviderDeviceToPropertyAction } from "../actions";
 import type { DiscoveredDevice, Property } from "../lib/discovered-device";
 
 import { DiscoveredDevicesList } from "./DiscoveredDevicesList";
@@ -476,6 +477,188 @@ describe("DiscoveredDevicesList", () => {
       expect(screen.getAllByRole("button", { name: "Map" })).toHaveLength(2);
       expect(screen.queryByRole("button", { name: /map all/i })).toBeNull();
       expect(screen.queryByRole("button", { name: /enable all/i })).toBeNull();
+    });
+  });
+
+  describe("F — deterministic houseId mapping suggestion", () => {
+    const PROPERTIES: Property[] = [
+      { id: "prop-a", name: "Aqua Palm", internalCode: "AP" },
+      { id: "prop-b", name: "Bonjour", internalCode: "BJ" },
+    ];
+
+    it("pre-fills the property picker and shows a clearly-labeled suggestion when exactly one other mapped AUGUST device shares the exact houseId", () => {
+      render(
+        <DiscoveredDevicesList
+          devices={[
+            makeDevice({
+              id: "unmapped-1",
+              discoveredName: "New Lock",
+              rawMetadata: { houseId: "house-1" },
+            }),
+            makeDevice({
+              id: "mapped-1",
+              discoveredName: "Existing Lock",
+              rawMetadata: { houseId: "house-1" },
+              propertyId: "prop-a",
+              property: PROPERTIES[0],
+            }),
+          ]}
+          properties={PROPERTIES}
+        />,
+      );
+
+      const row = screen.getByText("New Lock").closest("tr")!;
+      const select = within(row).getByRole("combobox") as HTMLSelectElement;
+      expect(select.value).toBe("prop-a");
+      expect(
+        within(row).getByText(/Suggested from another August device/i),
+      ).toBeTruthy();
+    });
+
+    it("does NOT auto-submit the suggestion — the operator still has to click Map explicitly", () => {
+      const devices = [
+        makeDevice({
+          id: "unmapped-1",
+          discoveredName: "New Lock",
+          rawMetadata: { houseId: "house-1" },
+        }),
+        makeDevice({
+          id: "mapped-1",
+          discoveredName: "Existing Lock",
+          rawMetadata: { houseId: "house-1" },
+          propertyId: "prop-a",
+          property: PROPERTIES[0],
+        }),
+      ];
+      render(
+        <DiscoveredDevicesList devices={devices} properties={PROPERTIES} />,
+      );
+
+      // mapProviderDeviceToPropertyAction is mocked at the top of this file
+      // and never invoked by rendering alone — only a real form submit
+      // (an explicit Map click) would call it.
+      expect(mapProviderDeviceToPropertyAction).not.toHaveBeenCalled();
+    });
+
+    it("the operator can still override the suggestion by picking a different property before submitting", () => {
+      render(
+        <DiscoveredDevicesList
+          devices={[
+            makeDevice({
+              id: "unmapped-1",
+              discoveredName: "New Lock",
+              rawMetadata: { houseId: "house-1" },
+            }),
+            makeDevice({
+              id: "mapped-1",
+              discoveredName: "Existing Lock",
+              rawMetadata: { houseId: "house-1" },
+              propertyId: "prop-a",
+              property: PROPERTIES[0],
+            }),
+          ]}
+          properties={PROPERTIES}
+        />,
+      );
+
+      const row = screen.getByText("New Lock").closest("tr")!;
+      const select = within(row).getByRole("combobox") as HTMLSelectElement;
+      expect(select.value).toBe("prop-a");
+
+      fireEvent.change(select, { target: { value: "prop-b" } });
+      expect(select.value).toBe("prop-b");
+    });
+
+    it("shows the normal empty placeholder (no suggestion) when no other device shares the exact houseId — no fuzzy fallback of any kind", () => {
+      render(
+        <DiscoveredDevicesList
+          devices={[
+            makeDevice({
+              id: "unmapped-1",
+              discoveredName: "New Lock",
+              rawMetadata: { houseId: "house-1" },
+            }),
+            makeDevice({
+              id: "mapped-1",
+              discoveredName: "Unrelated Lock",
+              rawMetadata: { houseId: "house-999" },
+              propertyId: "prop-a",
+              property: PROPERTIES[0],
+            }),
+          ]}
+          properties={PROPERTIES}
+        />,
+      );
+
+      const row = screen.getByText("New Lock").closest("tr")!;
+      const select = within(row).getByRole("combobox") as HTMLSelectElement;
+      expect(select.value).toBe("");
+      expect(
+        within(row).queryByText(/Suggested from another August device/i),
+      ).toBeNull();
+    });
+
+    it("shows no suggestion when the same houseId is mapped to two different properties — genuinely ambiguous", () => {
+      render(
+        <DiscoveredDevicesList
+          devices={[
+            makeDevice({
+              id: "unmapped-1",
+              discoveredName: "New Lock",
+              rawMetadata: { houseId: "house-1" },
+            }),
+            makeDevice({
+              id: "mapped-1",
+              discoveredName: "Existing Lock A",
+              rawMetadata: { houseId: "house-1" },
+              propertyId: "prop-a",
+              property: PROPERTIES[0],
+            }),
+            makeDevice({
+              id: "mapped-2",
+              discoveredName: "Existing Lock B",
+              rawMetadata: { houseId: "house-1" },
+              propertyId: "prop-b",
+              property: PROPERTIES[1],
+            }),
+          ]}
+          properties={PROPERTIES}
+        />,
+      );
+
+      const row = screen.getByText("New Lock").closest("tr")!;
+      const select = within(row).getByRole("combobox") as HTMLSelectElement;
+      expect(select.value).toBe("");
+      expect(
+        within(row).queryByText(/Suggested from another August device/i),
+      ).toBeNull();
+    });
+
+    it("never suggests based on a same-houseId device from a different provider", () => {
+      render(
+        <DiscoveredDevicesList
+          devices={[
+            makeDevice({
+              id: "unmapped-1",
+              discoveredName: "New Lock",
+              rawMetadata: { houseId: "house-1" },
+            }),
+            makeDevice({
+              id: "mapped-nest",
+              discoveredName: "Nest Thermostat",
+              integrationConnection: { provider: "NEST" },
+              rawMetadata: { houseId: "house-1" },
+              propertyId: "prop-a",
+              property: PROPERTIES[0],
+            }),
+          ]}
+          properties={PROPERTIES}
+        />,
+      );
+
+      const row = screen.getByText("New Lock").closest("tr")!;
+      const select = within(row).getByRole("combobox") as HTMLSelectElement;
+      expect(select.value).toBe("");
     });
   });
 });
