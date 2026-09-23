@@ -1,7 +1,7 @@
 import {
   Badge,
   Card,
-  Button,
+  ConfirmButton,
   DialogTrigger,
   EmptyState,
   Table,
@@ -101,9 +101,14 @@ export function ResourceLinkList({
                   </DialogTrigger>
                   <form action={deleteResourceLinkAction}>
                     <input type="hidden" name="id" value={r.id} />
-                    <Button type="submit" variant="danger" size="sm">
+                    <ConfirmButton
+                      type="submit"
+                      variant="danger"
+                      size="sm"
+                      confirmMessage={`Delete "${r.name}"? This removes it from the Resources list. There is no Restore option yet — recovering it would require direct database access.`}
+                    >
                       Delete
-                    </Button>
+                    </ConfirmButton>
                   </form>
                 </div>
               </TableCell>

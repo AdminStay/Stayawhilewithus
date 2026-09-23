@@ -17,6 +17,8 @@ vi.mock("../actions", () => ({
   updateResourceLinkAction: vi.fn(),
 }));
 
+import { deleteResourceLinkAction } from "../actions";
+
 import { ResourceLinkList } from "./ResourceLinkList";
 
 afterEach(cleanup);
@@ -108,5 +110,82 @@ describe("ResourceLinkList", () => {
 
     expect(screen.getByText("Pool vendor")).toBeTruthy();
     expect(screen.getByText("Vendor / Service Provider")).toBeTruthy();
+  });
+
+  describe("Delete confirmation (V1 safety improvement — soft delete, no Restore UI yet)", () => {
+    it("REQUIRES CONFIRMATION: gates Delete behind window.confirm(), naming the exact resource and stating there is no Restore option yet", () => {
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+      render(
+        <ResourceLinkList
+          resourceLinks={[RESOURCE]}
+          properties={PROPERTIES}
+          canManage
+          updateAction={vi.fn()}
+        />,
+      );
+
+      screen.getByRole("button", { name: "Delete" }).click();
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      const message = confirmSpy.mock.calls[0]?.[0] as string;
+      expect(message).toMatch(/Pool vendor/);
+      expect(message).toMatch(/Resources list/i);
+      expect(message).toMatch(/no Restore option/i);
+      confirmSpy.mockRestore();
+    });
+
+    it("CANCEL: when the confirmation is dismissed, the delete action is never called — zero changes", () => {
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+      render(
+        <ResourceLinkList
+          resourceLinks={[RESOURCE]}
+          properties={PROPERTIES}
+          canManage
+          updateAction={vi.fn()}
+        />,
+      );
+
+      screen.getByRole("button", { name: "Delete" }).click();
+
+      expect(deleteResourceLinkAction).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
+    });
+
+    it("CONFIRM: when the confirmation is accepted, the click is allowed through — the existing delete action's form still targets exactly this resource's id, no fuzzy/derived targeting", () => {
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+      render(
+        <ResourceLinkList
+          resourceLinks={[RESOURCE]}
+          properties={PROPERTIES}
+          canManage
+          updateAction={vi.fn()}
+        />,
+      );
+
+      const deleteButton = screen.getByRole("button", { name: "Delete" });
+      const form = deleteButton.closest("form")!;
+      const hiddenInput = form.querySelector(
+        'input[name="id"]',
+      ) as HTMLInputElement;
+      expect(hiddenInput.value).toBe("r1");
+
+      deleteButton.click();
+
+      expect(confirmSpy).toHaveBeenCalledTimes(1);
+      confirmSpy.mockRestore();
+    });
+
+    it("Ops Manager (canManage=false) still has no Delete control at all — confirmation is moot when the control isn't rendered", () => {
+      render(
+        <ResourceLinkList
+          resourceLinks={[RESOURCE]}
+          properties={PROPERTIES}
+          canManage={false}
+          updateAction={vi.fn()}
+        />,
+      );
+
+      expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+    });
   });
 });
