@@ -21,6 +21,7 @@ import {
   setProviderDeviceEnabledSchema,
   unmapProviderDeviceSchema,
 } from "./schemas/provider-devices.schema";
+import { retireSmartDeviceSchema } from "./schemas/retire-smart-device.schema";
 import {
   sendAugustLockCommand,
   type AugustLockCommandResult,
@@ -47,6 +48,7 @@ import {
   unmapProviderDevice,
   type DiscoverySyncResult,
 } from "./services/provider-devices.service";
+import { retireSmartDevice } from "./services/smart-devices.service";
 import {
   logThermostatRefresh,
   refreshThermostats,
@@ -154,6 +156,25 @@ export async function setProviderDeviceEnabledAction(formData: FormData) {
   await setProviderDeviceEnabled(actor, input);
   revalidatePath(DEVICES_PAGE_PATH);
   revalidatePath(THERMOSTATS_PAGE_PATH);
+}
+
+/**
+ * The single entry point behind /locks' "Retire this lock" action
+ * (2026-09-23, item C) — see retireSmartDevice()'s own doc comment
+ * (smart-devices.service.ts) for the full explicit, human-triggered
+ * retirement mechanism. Revalidates both /locks (where the retired row
+ * disappears from the normal operational view) and the Discovered
+ * Devices page (whose "Enabled" badge may have just flipped, if a real
+ * ProviderDevice link existed and was disabled as part of retiring).
+ */
+export async function retireSmartDeviceAction(formData: FormData) {
+  const actor = await getCurrentUser();
+  const input = retireSmartDeviceSchema.parse({
+    smartDeviceId: formData.get("smartDeviceId"),
+  });
+  await retireSmartDevice(actor, input);
+  revalidatePath(LOCKS_PAGE_PATH);
+  revalidatePath(DEVICES_PAGE_PATH);
 }
 
 /**

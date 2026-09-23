@@ -1,11 +1,16 @@
 import "server-only";
 
 import { assertPermission, type AuthContext } from "@stayw/auth";
-import { prisma, type SmartDevice } from "@stayw/database";
+import { prisma, type Prisma, type SmartDevice } from "@stayw/database";
 import { AugustClient, isAugustBrand } from "@stayw/integrations/august";
 import { CieloClient } from "@stayw/integrations/cielo";
 
 import { getTelemetryUpdatedAt } from "../lib/thermostat-metadata";
+import { retireSmartDeviceSchema } from "../schemas/retire-smart-device.schema";
+
+import { setProviderDeviceEnabled } from "./provider-devices.service";
+
+import { recordAudit } from "@/platform/audit/record-audit";
 
 export {
   canRenderNestControls,
@@ -70,6 +75,41 @@ export function isThermostatVisible(
 ): boolean {
   if (device.provider !== "NEST") return true;
   return device.providerDevice !== null && device.providerDevice.enabled;
+}
+
+/**
+ * `metadata.retiredAt` — never a dedicated column/enum value (no migration
+ * needed) — set only by the explicit retireSmartDevice() below, never by
+ * any sync/discovery/refresh path. A valid, parseable ISO timestamp means
+ * "retired"; anything else (missing, wrong type, or a string that doesn't
+ * parse to a real date) fails SAFE toward "not retired" — a malformed
+ * value must never silently hide a device that's actually still active.
+ */
+function isRetired(device: Pick<SmartDevice, "metadata">): boolean {
+  const metadata = device.metadata as Record<string, unknown> | null;
+  const retiredAt = metadata?.retiredAt;
+  if (typeof retiredAt !== "string") return false;
+  return !Number.isNaN(new Date(retiredAt).getTime());
+}
+
+/**
+ * The single centralized visibility rule for /locks' normal operational
+ * view (2026-09-23, item C) — mirrors isThermostatVisible()'s own
+ * structure exactly, scoped the same deliberate way: only AUGUST devices
+ * are ever affected. A non-August device (Nest, Cielo, ...) is always
+ * visible here regardless of its own metadata — this function has no
+ * opinion about anything but the one real problem it exists to solve
+ * (an explicitly-retired August lock cluttering the live lock list).
+ * Retiring a device never deletes its SmartDevice row, its AuditLog
+ * history, or (if one exists) its ProviderDevice row — this is purely a
+ * display-time filter over already-fetched rows, the same way
+ * isThermostatVisible() is.
+ */
+export function isLockVisible(
+  device: Pick<SmartDevice, "provider" | "metadata">,
+): boolean {
+  if (device.provider !== "AUGUST") return true;
+  return !isRetired(device);
 }
 
 export interface DeviceSyncResult {
@@ -443,3 +483,150 @@ export function isTelemetryStale(
 }
 
 export { getProviderDisplayName } from "../lib/provider-display-name";
+
+/**
+ * Explicit, human-triggered retirement for an August SmartDevice
+ * (2026-09-23, item C) — the concrete answer to "old/replaced locks
+ * remain visible after they're removed from August" (Majestic Isla ->
+ * MJ). Deliberately NEVER automatic: no sync/discovery/refresh path calls
+ * this, and it is never inferred from a device disappearing from a
+ * provider's response (that's what item D's "no longer returned by
+ * August" reporting is for — a human decision point, not an automatic
+ * trigger).
+ *
+ * What this does, in order:
+ *   1. RBAC: smart_devices:update — the same permission every other
+ *      mapping-adjacent write in this domain already requires (map/
+ *      unmap/enable/disable). Deliberately NOT locks:manage — retirement
+ *      never sends a physical command, so it doesn't need the stricter
+ *      command-authorization permission.
+ *   2. Loads the exact SmartDevice by id, including its (possibly null)
+ *      ProviderDevice link. Throws a clear error for a missing device,
+ *      for a non-AUGUST device (this scope is August-only, per explicit
+ *      instruction), and for a device that's already retired (idempotent
+ *      double-submission is rejected rather than silently re-writing the
+ *      same timestamp or double-auditing).
+ *   3. If — and only if — a real, currently-ENABLED ProviderDevice link
+ *      exists, reuses the existing setProviderDeviceEnabled(enabled:
+ *      false) exactly as already built and tested — never a second,
+ *      competing "disable" implementation. This is skipped entirely
+ *      (no error) for a legacy August SmartDevice with no ProviderDevice
+ *      row at all, and skipped (no redundant audit entry) if the
+ *      ProviderDevice is already disabled. Never calls unmapProviderDevice
+ *      — propertyId/mappedAt/mappedByUserId are historical mapping facts,
+ *      deliberately preserved, not cleared.
+ *   4. Atomically (one `prisma.$transaction`), merges `retiredAt: <ISO
+ *      timestamp>` into the SmartDevice's EXISTING metadata
+ *      (batteryLevel/lockState/telemetryUpdatedAt/... all untouched —
+ *      never a wholesale replace) AND records the dedicated
+ *      `smart_device.retired` AuditLog entry — both succeed together or
+ *      both roll back together, so this specific retirement's own audit
+ *      record can never end up silently missing while the device itself
+ *      is already retired. See ATOMICITY below for exactly what this
+ *      does and does not cover.
+ *
+ * Never deletes the SmartDevice row, never deletes ProviderDevice, never
+ * deletes any AuditLog/SmartDeviceEvent history, never calls August's API
+ * at all (no lock/unlock/getLockDetail/anything), never infers or
+ * auto-selects a "replacement" device.
+ *
+ * ATOMICITY (2026-09-23 review): step 3's `setProviderDeviceEnabled()`
+ * call is DELIBERATELY NOT folded into step 4's transaction. Two real
+ * reasons, not an oversight:
+ *   - `setProviderDeviceEnabled()` already opens its own internal
+ *     `prisma.$transaction(...)`, and Prisma does not support nesting one
+ *     interactive transaction inside another on the same connection —
+ *     composing it here would require rewriting that function to accept
+ *     an injectable transaction client and branch around its own
+ *     internal transaction, a real, non-trivial change to a shared,
+ *     already-reviewed, already-shipped function with its own
+ *     independent business logic (the enable branch's SmartDevice
+ *     upsert), used by other callers (Discovered Devices' Enable/Disable
+ *     buttons) this function has no reason to touch or risk regressing.
+ *   - A repo-wide grep found ZERO existing precedent anywhere in this
+ *     codebase for a service function accepting an injectable
+ *     `Prisma.TransactionClient` parameter — every other `$transaction`
+ *     call is self-contained. Introducing that pattern for
+ *     setProviderDeviceEnabled() specifically would be a real
+ *     architectural addition, not a small extension, and out of
+ *     proportion for this fix.
+ *
+ * What this means concretely: if `setProviderDeviceEnabled()` succeeds
+ * but the transaction in step 4 then fails, the ProviderDevice is left
+ * disabled while the SmartDevice is NOT yet marked retired (still visible
+ * on /locks). This is CORRECTLY recoverable, not a silent inconsistency:
+ * a caller who retries retireSmartDevice() for the same device will find
+ * `providerDevice.enabled` already `false` and skip step 3 entirely
+ * (see the `if` check below), proceeding straight to step 4 — the retry
+ * completes the exact same operation from where it left off. This
+ * self-healing property is what makes leaving step 3 outside the
+ * transaction an acceptable, honest tradeoff rather than an unexamined
+ * gap — proven by a dedicated test.
+ *
+ * What CANNOT happen, in every failure case: this function never returns
+ * a "success" value (the updated SmartDevice) unless every write it's
+ * responsible for actually committed. A failure at any step always
+ * throws and propagates to the caller — the operator is never told
+ * retirement succeeded when it didn't.
+ */
+export async function retireSmartDevice(
+  actor: AuthContext,
+  rawInput: { smartDeviceId: string },
+): Promise<SmartDevice> {
+  await assertPermission(actor, "smart_devices:update");
+  const input = retireSmartDeviceSchema.parse(rawInput);
+
+  const smartDevice = await prisma.smartDevice.findUnique({
+    where: { id: input.smartDeviceId },
+    include: { providerDevice: true },
+  });
+  if (!smartDevice) {
+    throw new Error("Device not found.");
+  }
+  if (smartDevice.provider !== "AUGUST") {
+    throw new Error("Only August locks can be retired at this time.");
+  }
+  if (isRetired(smartDevice)) {
+    throw new Error("This device is already retired.");
+  }
+
+  // Reuse, never duplicate — see this function's own doc comment. A legacy
+  // August SmartDevice (no ProviderDevice row) simply skips this step;
+  // retirement must not fail because that link doesn't exist. Self-heals
+  // on retry if a later step fails — see ATOMICITY above.
+  if (smartDevice.providerDevice && smartDevice.providerDevice.enabled) {
+    await setProviderDeviceEnabled(actor, {
+      providerDeviceId: smartDevice.providerDevice.id,
+      enabled: false,
+    });
+  }
+
+  const previousMetadata =
+    (smartDevice.metadata as Record<string, unknown> | null) ?? {};
+  const retiredAt = new Date().toISOString();
+  const updatedMetadata = { ...previousMetadata, retiredAt };
+
+  // Atomic: the metadata write and its own dedicated audit entry commit
+  // together or not at all — see ATOMICITY above.
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.smartDevice.update({
+      where: { id: smartDevice.id },
+      data: { metadata: updatedMetadata as Prisma.InputJsonValue },
+    });
+
+    await recordAudit(
+      {
+        actorUserId: actor.userId,
+        actorType: "USER",
+        action: "smart_device.retired",
+        entityType: "SmartDevice",
+        entityId: smartDevice.id,
+        beforeState: { metadata: previousMetadata } as Prisma.InputJsonValue,
+        afterState: { metadata: updatedMetadata } as Prisma.InputJsonValue,
+      },
+      tx,
+    );
+
+    return updated;
+  });
+}

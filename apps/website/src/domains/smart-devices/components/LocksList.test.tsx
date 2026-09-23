@@ -594,3 +594,88 @@ describe("LocksList — per-row physical lock-control gating", () => {
     expect(screen.getByRole("button", { name: "Unlock" })).toBeTruthy();
   });
 });
+
+describe("LocksList — Retire this lock (2026-09-23, item C)", () => {
+  it("renders the Retire control for an August lock when canRefresh + retireAction are both supplied", () => {
+    render(
+      <LocksList
+        locks={[makeLock({ name: "Old Lock" })] as never}
+        canRefresh={true}
+        retireAction={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Retire" })).toBeTruthy();
+  });
+
+  it("does not render Retire when retireAction is omitted, even if canRefresh is true", () => {
+    render(
+      <LocksList
+        locks={[makeLock({ name: "Old Lock" })] as never}
+        canRefresh={true}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Retire" })).toBeNull();
+  });
+
+  it("does not render Retire when canRefresh is false, even if retireAction is supplied", () => {
+    render(
+      <LocksList
+        locks={[makeLock({ name: "Old Lock" })] as never}
+        canRefresh={false}
+        retireAction={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Retire" })).toBeNull();
+  });
+
+  it("REQUIRES CONFIRMATION: gates Retire behind window.confirm(), naming the exact lock/property and stating it removes the lock from the normal view without deleting history or sending a physical command", () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              name: "Majestic Isla - Front Door",
+              property: { name: "Majestic Isla" },
+            }),
+          ] as never
+        }
+        canRefresh={true}
+        retireAction={vi.fn()}
+      />,
+    );
+
+    screen.getByRole("button", { name: "Retire" }).click();
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/Majestic Isla - Front Door/),
+    );
+    const message = confirmSpy.mock.calls[0]?.[0] as string;
+    expect(message).toMatch(/Majestic Isla/);
+    expect(message).toMatch(/normal Locks view/i);
+    expect(message).toMatch(/does NOT delete/i);
+    expect(message).toMatch(/does NOT send any command/i);
+    confirmSpy.mockRestore();
+  });
+
+  it("submits with exactly this row's own smartDeviceId — no fuzzy/derived targeting", () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(
+      <LocksList
+        locks={[makeLock({ id: "lock-xyz", name: "Old Lock" })] as never}
+        canRefresh={true}
+        retireAction={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByText("Old Lock").closest("tr")!;
+    const hiddenInput = within(row).getByDisplayValue(
+      "lock-xyz",
+    ) as HTMLInputElement;
+    expect(hiddenInput.name).toBe("smartDeviceId");
+    confirmSpy.mockRestore();
+  });
+});

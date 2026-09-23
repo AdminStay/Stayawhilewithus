@@ -1,5 +1,6 @@
 import {
   Badge,
+  ConfirmButton,
   EmptyState,
   Metric,
   MetricStrip,
@@ -132,6 +133,7 @@ export function LocksList({
   spotRefreshAction,
   canControlLocks = false,
   lockCommandAction,
+  retireAction,
 }: {
   locks: LockWithProperty[];
   /** UX-only gate, matching every other write-capable button in this domain — assertPermission inside the server action remains the real enforcement. */
@@ -153,6 +155,17 @@ export function LocksList({
     prevState: AugustLockCommandActionState,
     formData: FormData,
   ) => Promise<AugustLockCommandActionState>;
+  /**
+   * "Retire this lock" (2026-09-23, item C) — gated on `canRefresh`
+   * (`smart_devices:update`), the same permission retireSmartDevice()
+   * itself requires; deliberately reuses that flag rather than adding a
+   * third one, since retirement is a monitoring/mapping-adjacent action,
+   * never a physical command. Rendered only when both this prop and
+   * `canRefresh` are true — never rendered at all when absent, same
+   * "action prop presence gates the button" convention as
+   * spotRefreshAction/lockCommandAction above.
+   */
+  retireAction?: (formData: FormData) => void | Promise<void>;
 }) {
   const total = locks.length;
   const online = locks.filter((l) => l.status === "ONLINE").length;
@@ -209,7 +222,8 @@ export function LocksList({
           <TableHeaderCell className="w-[10%]">Battery</TableHeaderCell>
           <TableHeaderCell className="w-[16%]">Last update</TableHeaderCell>
           {((canRefresh && spotRefreshAction) ||
-            (canControlLocks && lockCommandAction)) && (
+            (canControlLocks && lockCommandAction) ||
+            (canRefresh && retireAction)) && (
             <TableHeaderCell className="w-[20%]">Actions</TableHeaderCell>
           )}
         </TableHead>
@@ -285,7 +299,8 @@ export function LocksList({
                 </TableCell>
 
                 {((canRefresh && spotRefreshAction) ||
-                  (canControlLocks && lockCommandAction)) && (
+                  (canControlLocks && lockCommandAction) ||
+                  (canRefresh && retireAction)) && (
                   <TableCell>
                     {isAugust ? (
                       <div className="flex flex-col gap-1">
@@ -331,6 +346,23 @@ export function LocksList({
                               smartDeviceId={lock.id}
                               action={spotRefreshAction}
                             />
+                          )}
+                          {canRefresh && retireAction && (
+                            <form action={retireAction}>
+                              <input
+                                type="hidden"
+                                name="smartDeviceId"
+                                value={lock.id}
+                              />
+                              <ConfirmButton
+                                type="submit"
+                                size="sm"
+                                variant="secondary"
+                                confirmMessage={`Retire "${lock.name}" at ${lock.property.name}? This removes it from the normal Locks view. It does NOT delete any historical record, and does NOT send any command to the physical lock.`}
+                              >
+                                Retire
+                              </ConfirmButton>
+                            </form>
                           )}
                         </div>
                         {canControlLocks &&

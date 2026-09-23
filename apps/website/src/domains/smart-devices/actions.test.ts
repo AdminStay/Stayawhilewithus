@@ -19,6 +19,7 @@ const {
   mockLogLockRefresh,
   mockRefreshAugustTelemetryForSelectedLocks,
   mockLogLockSpotRefresh,
+  mockRetireSmartDevice,
 } = vi.hoisted(() => ({
   mockRevalidatePath: vi.fn(),
   mockDiscoverNestDevices: vi.fn(),
@@ -34,6 +35,7 @@ const {
   mockLogLockRefresh: vi.fn(),
   mockRefreshAugustTelemetryForSelectedLocks: vi.fn(),
   mockLogLockSpotRefresh: vi.fn(),
+  mockRetireSmartDevice: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({
@@ -76,6 +78,10 @@ vi.mock("./services/lock-spot-refresh.service", () => ({
   logLockSpotRefresh: mockLogLockSpotRefresh,
 }));
 
+vi.mock("./services/smart-devices.service", () => ({
+  retireSmartDevice: mockRetireSmartDevice,
+}));
+
 import {
   discoverAugustDevicesAction,
   discoverNestDevicesAction,
@@ -83,6 +89,7 @@ import {
   refreshAugustTelemetryBatchAction,
   refreshAugustTelemetrySpotAction,
   refreshThermostatsAction,
+  retireSmartDeviceAction,
   sendAugustLockCommandAction,
 } from "./actions";
 
@@ -871,5 +878,36 @@ describe("refreshAugustTelemetryBatchAction", () => {
     ]) {
       expect(body).not.toContain(forbidden);
     }
+  });
+});
+
+describe("retireSmartDeviceAction", () => {
+  const SMART_DEVICE_ID = "11111111-1111-1111-1111-111111111111";
+
+  it("parses smartDeviceId from FormData, delegates to retireSmartDevice, and revalidates both /locks and the Discovered Devices page", async () => {
+    mockRetireSmartDevice.mockResolvedValueOnce({});
+    const formData = new FormData();
+    formData.set("smartDeviceId", SMART_DEVICE_ID);
+
+    await retireSmartDeviceAction(formData);
+
+    expect(mockRetireSmartDevice).toHaveBeenCalledWith(
+      { userId: "user-1" },
+      { smartDeviceId: SMART_DEVICE_ID },
+    );
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/integrations/devices");
+  });
+
+  it("propagates a real rejection (e.g. RBAC denial or already-retired) rather than swallowing it", async () => {
+    mockRetireSmartDevice.mockRejectedValueOnce(
+      new Error("This device is already retired."),
+    );
+    const formData = new FormData();
+    formData.set("smartDeviceId", SMART_DEVICE_ID);
+
+    await expect(retireSmartDeviceAction(formData)).rejects.toThrow(
+      "This device is already retired.",
+    );
   });
 });

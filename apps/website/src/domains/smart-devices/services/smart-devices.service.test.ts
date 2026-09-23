@@ -1,9 +1,24 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// retireSmartDevice()'s own transaction callback receives a `tx` client and
+// calls `tx.smartDevice.update(...)` — routed to this SAME spy instance
+// (not a second, separate one) so every existing assertion against
+// `prisma.smartDevice.update` still observes calls made through the
+// transaction, exactly as if it were the top-level client. This is the
+// established pattern this file already uses for other Prisma mocks; the
+// only new piece is `$transaction`'s callback-form support. vi.hoisted()
+// is required — vi.mock() factories are hoisted above every top-level
+// statement, same discipline as lock-refresh.service.test.ts.
+const { smartDeviceUpdateMock } = vi.hoisted(() => ({
+  smartDeviceUpdateMock: vi.fn().mockResolvedValue({}),
+}));
+
 vi.mock("@stayw/database", () => ({
   prisma: {
     smartDevice: {
       findMany: vi.fn(),
+      findUnique: vi.fn(),
+      update: smartDeviceUpdateMock,
       upsert: vi.fn().mockResolvedValue({}),
       deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
@@ -13,11 +28,40 @@ vi.mock("@stayw/database", () => ({
     providerDevice: {
       findMany: vi.fn().mockResolvedValue([]),
     },
+    // Only the callback form is real-exercised in this file today
+    // (retireSmartDevice()) — mirrors real Prisma behavior for that form:
+    // runs the callback with a `tx` client, propagates whatever it
+    // throws/resolves. The array form isn't used anywhere in this
+    // particular service file, so it's deliberately unimplemented here
+    // rather than guessed at.
+    $transaction: vi.fn(async (arg: unknown) => {
+      if (typeof arg !== "function") {
+        throw new Error(
+          "This mock only supports the $transaction callback form.",
+        );
+      }
+      return (
+        arg as (tx: {
+          smartDevice: { update: typeof smartDeviceUpdateMock };
+        }) => unknown
+      )({ smartDevice: { update: smartDeviceUpdateMock } });
+    }),
   },
 }));
 
 vi.mock("@stayw/auth", () => ({
   assertPermission: vi.fn(),
+}));
+
+const { mockSetProviderDeviceEnabled, mockRecordAudit } = vi.hoisted(() => ({
+  mockSetProviderDeviceEnabled: vi.fn(),
+  mockRecordAudit: vi.fn().mockResolvedValue({}),
+}));
+vi.mock("./provider-devices.service", () => ({
+  setProviderDeviceEnabled: mockSetProviderDeviceEnabled,
+}));
+vi.mock("@/platform/audit/record-audit", () => ({
+  recordAudit: mockRecordAudit,
 }));
 
 const mockListLocks = vi.fn();
@@ -38,6 +82,7 @@ vi.mock("@stayw/integrations/cielo", () => ({
 
 import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
+import { AugustClient } from "@stayw/integrations/august";
 
 import {
   getBatteryLevel,
@@ -45,10 +90,12 @@ import {
   canRenderNestControls,
   getTelemetryUpdatedAt,
   isDemoSmartDevice,
+  isLockVisible,
   isLowBattery,
   isTelemetryStale,
   isThermostatVisible,
   listSmartDevices,
+  retireSmartDevice,
   syncAugustDevices,
   syncCieloDevices,
 } from "./smart-devices.service";
@@ -716,5 +763,342 @@ describe("syncCieloDevices", () => {
 
     expect(prisma.smartDevice.upsert).toHaveBeenCalledTimes(2);
     expect(prisma.smartDevice.deleteMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("isLockVisible — C, centralized /locks visibility rule", () => {
+  it("shows a non-retired August lock (no retiredAt in metadata at all)", () => {
+    expect(isLockVisible({ provider: "AUGUST", metadata: {} })).toBe(true);
+  });
+
+  it("shows an August lock when metadata itself is null", () => {
+    expect(isLockVisible({ provider: "AUGUST", metadata: null })).toBe(true);
+  });
+
+  it("hides an August lock with a real, valid retiredAt", () => {
+    expect(
+      isLockVisible({
+        provider: "AUGUST",
+        metadata: { retiredAt: new Date().toISOString() },
+      }),
+    ).toBe(false);
+  });
+
+  it("FAIL-SAFE: a malformed (unparseable) retiredAt string does NOT hide the lock — never silently treated as retired", () => {
+    expect(
+      isLockVisible({
+        provider: "AUGUST",
+        metadata: { retiredAt: "not-a-real-date" },
+      }),
+    ).toBe(true);
+  });
+
+  it("FAIL-SAFE: a wrong-typed retiredAt (not a string) does NOT hide the lock", () => {
+    expect(
+      isLockVisible({ provider: "AUGUST", metadata: { retiredAt: 12345 } }),
+    ).toBe(true);
+  });
+
+  it("never hides a non-August device, even with a real retiredAt-shaped value in its metadata — scoped strictly to August", () => {
+    expect(
+      isLockVisible({
+        provider: "CIELO",
+        metadata: { retiredAt: new Date().toISOString() },
+      }),
+    ).toBe(true);
+    expect(
+      isLockVisible({
+        provider: "NEST",
+        metadata: { retiredAt: new Date().toISOString() },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("retireSmartDevice — C, explicit human-controlled retirement", () => {
+  const SMART_DEVICE_ID = "11111111-1111-1111-1111-111111111111";
+  const PROVIDER_DEVICE_ID = "22222222-2222-2222-2222-222222222222";
+
+  afterEach(() => {
+    vi.mocked(assertPermission).mockReset();
+    vi.mocked(prisma.smartDevice.findUnique).mockReset();
+    vi.mocked(prisma.smartDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    mockSetProviderDeviceEnabled.mockReset().mockResolvedValue({});
+    mockRecordAudit.mockReset().mockResolvedValue({});
+    vi.mocked(AugustClient).mockClear();
+    mockListLocks.mockReset();
+    mockGetLockDetail.mockReset();
+  });
+
+  function augustDevice(overrides: Record<string, unknown> = {}) {
+    return {
+      id: SMART_DEVICE_ID,
+      provider: "AUGUST",
+      metadata: { batteryLevel: 50, lockState: "locked" },
+      providerDevice: null,
+      ...overrides,
+    };
+  }
+
+  it("retires an August SmartDevice for an authorized actor", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      augustDevice() as never,
+    );
+
+    await retireSmartDevice(actor, { smartDeviceId: SMART_DEVICE_ID });
+
+    expect(assertPermission).toHaveBeenCalledWith(
+      actor,
+      "smart_devices:update",
+    );
+    expect(prisma.smartDevice.update).toHaveBeenCalledWith({
+      where: { id: SMART_DEVICE_ID },
+      data: {
+        metadata: expect.objectContaining({
+          batteryLevel: 50,
+          lockState: "locked",
+          retiredAt: expect.any(String),
+        }),
+      },
+    });
+  });
+
+  it("propagates denial when the actor lacks smart_devices:update, without ever reading the device", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(
+      retireSmartDevice(actor, { smartDeviceId: SMART_DEVICE_ID }),
+    ).rejects.toThrow();
+    expect(prisma.smartDevice.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("preserves every existing metadata key while adding a valid, parseable retiredAt", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      augustDevice({
+        metadata: {
+          batteryLevel: 33,
+          lockState: "unlocked",
+          telemetryUpdatedAt: "2026-09-01T00:00:00.000Z",
+        },
+      }) as never,
+    );
+
+    await retireSmartDevice(actor, { smartDeviceId: SMART_DEVICE_ID });
+
+    const call = vi.mocked(prisma.smartDevice.update).mock.calls[0]?.[0] as {
+      data: { metadata: Record<string, unknown> };
+    };
+    expect(call.data.metadata.batteryLevel).toBe(33);
+    expect(call.data.metadata.lockState).toBe("unlocked");
+    expect(call.data.metadata.telemetryUpdatedAt).toBe(
+      "2026-09-01T00:00:00.000Z",
+    );
+    const retiredAt = call.data.metadata.retiredAt as string;
+    expect(typeof retiredAt).toBe("string");
+    expect(Number.isNaN(new Date(retiredAt).getTime())).toBe(false);
+  });
+
+  it("creates the dedicated smart_device.retired AuditLog entry", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      augustDevice() as never,
+    );
+
+    await retireSmartDevice(actor, { smartDeviceId: SMART_DEVICE_ID });
+
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "smart_device.retired",
+        entityType: "SmartDevice",
+        entityId: SMART_DEVICE_ID,
+        actorUserId: actor.userId,
+        actorType: "USER",
+      }),
+      expect.objectContaining({ smartDevice: expect.anything() }),
+    );
+  });
+
+  it("throws a clear error for a missing device, without writing anything", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(null);
+
+    await expect(
+      retireSmartDevice(actor, { smartDeviceId: SMART_DEVICE_ID }),
+    ).rejects.toThrow(/not found/i);
+    expect(prisma.smartDevice.update).not.toHaveBeenCalled();
+    expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-August device — this scope is August-only, per explicit instruction", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      augustDevice({ provider: "CIELO" }) as never,
+    );
+
+    await expect(
+      retireSmartDevice(actor, { smartDeviceId: SMART_DEVICE_ID }),
+    ).rejects.toThrow(/August/);
+    expect(prisma.smartDevice.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects re-retiring a device that's already retired — never a silent double-write or a second audit entry", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      augustDevice({
+        metadata: { retiredAt: new Date().toISOString() },
+      }) as never,
+    );
+
+    await expect(
+      retireSmartDevice(actor, { smartDeviceId: SMART_DEVICE_ID }),
+    ).rejects.toThrow(/already retired/i);
+    expect(prisma.smartDevice.update).not.toHaveBeenCalled();
+    expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+
+  it("LEGACY DEVICE: retires an August SmartDevice with no ProviderDevice link at all — must not fail because that link doesn't exist", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      augustDevice({ providerDevice: null }) as never,
+    );
+
+    const result = await retireSmartDevice(actor, {
+      smartDeviceId: SMART_DEVICE_ID,
+    });
+
+    expect(result).toBeDefined();
+    expect(mockSetProviderDeviceEnabled).not.toHaveBeenCalled();
+    expect(prisma.smartDevice.update).toHaveBeenCalled();
+  });
+
+  it("PROVIDERDEVICE-BACKED: reuses the existing, already-tested setProviderDeviceEnabled(enabled:false) when a real, currently-enabled ProviderDevice link exists — never a competing/duplicated disable implementation", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      augustDevice({
+        providerDevice: { id: PROVIDER_DEVICE_ID, enabled: true },
+      }) as never,
+    );
+
+    await retireSmartDevice(actor, { smartDeviceId: SMART_DEVICE_ID });
+
+    expect(mockSetProviderDeviceEnabled).toHaveBeenCalledWith(actor, {
+      providerDeviceId: PROVIDER_DEVICE_ID,
+      enabled: false,
+    });
+  });
+
+  it("does not call setProviderDeviceEnabled again when the ProviderDevice is already disabled — avoids a redundant provider_device.disabled audit entry", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      augustDevice({
+        providerDevice: { id: PROVIDER_DEVICE_ID, enabled: false },
+      }) as never,
+    );
+
+    await retireSmartDevice(actor, { smartDeviceId: SMART_DEVICE_ID });
+
+    expect(mockSetProviderDeviceEnabled).not.toHaveBeenCalled();
+  });
+
+  it("never calls August's real API and never deletes anything — a pure database write, no provider/physical command reachable", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      augustDevice({
+        providerDevice: { id: PROVIDER_DEVICE_ID, enabled: true },
+      }) as never,
+    );
+
+    await retireSmartDevice(actor, { smartDeviceId: SMART_DEVICE_ID });
+
+    expect(AugustClient).not.toHaveBeenCalled();
+    expect(mockListLocks).not.toHaveBeenCalled();
+    expect(mockGetLockDetail).not.toHaveBeenCalled();
+    expect(
+      (prisma.smartDevice as unknown as Record<string, unknown>).delete,
+    ).toBeUndefined();
+  });
+
+  describe("ATOMICITY — the metadata write and its own smart_device.retired audit commit or fail together", () => {
+    it("rejects, and never resolves with a device, if the transaction's SmartDevice.metadata write fails — proves a DB failure never surfaces as a false success", async () => {
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        augustDevice({ providerDevice: null }) as never,
+      );
+      smartDeviceUpdateMock.mockRejectedValueOnce(
+        new Error("simulated DB failure during retirement"),
+      );
+
+      await expect(
+        retireSmartDevice(actor, { smartDeviceId: SMART_DEVICE_ID }),
+      ).rejects.toThrow(/simulated DB failure/i);
+
+      // The update failed before the audit step ever ran inside the same
+      // transaction callback — no misleading "retired, but no audit record"
+      // state was ever observable outside this function.
+      expect(mockRecordAudit).not.toHaveBeenCalled();
+    });
+
+    it("rejects, and never resolves with a device, if the transaction's own smart_device.retired audit write fails — proves the metadata write can never be reported as committed without its audit entry", async () => {
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        augustDevice({ providerDevice: null }) as never,
+      );
+      mockRecordAudit.mockRejectedValueOnce(
+        new Error("simulated audit write failure during retirement"),
+      );
+
+      await expect(
+        retireSmartDevice(actor, { smartDeviceId: SMART_DEVICE_ID }),
+      ).rejects.toThrow(/simulated audit write failure/i);
+    });
+  });
+
+  describe("SELF-HEALING RETRY — a partial failure after setProviderDeviceEnabled(false) succeeds is recoverable by simply calling retireSmartDevice() again", () => {
+    it("first attempt: ProviderDevice gets disabled, then the atomic metadata+audit step fails, so the overall call rejects", async () => {
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        augustDevice({
+          providerDevice: { id: PROVIDER_DEVICE_ID, enabled: true },
+        }) as never,
+      );
+      smartDeviceUpdateMock.mockRejectedValueOnce(
+        new Error("simulated failure right after ProviderDevice was disabled"),
+      );
+
+      await expect(
+        retireSmartDevice(actor, { smartDeviceId: SMART_DEVICE_ID }),
+      ).rejects.toThrow(/simulated failure right after/i);
+
+      expect(mockSetProviderDeviceEnabled).toHaveBeenCalledWith(actor, {
+        providerDeviceId: PROVIDER_DEVICE_ID,
+        enabled: false,
+      });
+    });
+
+    it("retry: with the ProviderDevice now already disabled (the real-world state left behind by the first attempt), the retry skips setProviderDeviceEnabled entirely and completes successfully", async () => {
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        augustDevice({
+          providerDevice: { id: PROVIDER_DEVICE_ID, enabled: false },
+        }) as never,
+      );
+
+      const result = await retireSmartDevice(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+      });
+
+      expect(result).toBeDefined();
+      expect(mockSetProviderDeviceEnabled).not.toHaveBeenCalled();
+      expect(mockRecordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "smart_device.retired" }),
+        expect.objectContaining({ smartDevice: expect.anything() }),
+      );
+    });
   });
 });

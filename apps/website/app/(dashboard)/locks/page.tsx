@@ -5,6 +5,7 @@ import {
   refreshAugustAction,
   refreshAugustTelemetryBatchAction,
   refreshAugustTelemetrySpotAction,
+  retireSmartDeviceAction,
   sendAugustLockCommandAction,
 } from "@/domains/smart-devices/actions";
 import { BulkRefreshDialog } from "@/domains/smart-devices/components/BulkRefreshDialog";
@@ -16,6 +17,7 @@ import {
 } from "@/domains/smart-devices/services/august-commands.service";
 import {
   isDemoSmartDevice,
+  isLockVisible,
   listSmartDevices,
 } from "@/domains/smart-devices/services/smart-devices.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
@@ -23,7 +25,14 @@ import { getCurrentUser } from "@/platform/auth/get-current-user";
 export default async function LocksPage() {
   const actor = await getCurrentUser();
   const devices = await listSmartDevices(actor);
-  const locks = devices.filter((d) => d.deviceType === "LOCK");
+  // isLockVisible() is the one centralized rule for this normal operational
+  // view (2026-09-23, item C) — an explicitly-retired August lock (see
+  // retireSmartDevice()) is excluded here, and only here; its SmartDevice
+  // row, ProviderDevice row (if any), and full AuditLog history are all
+  // still fully intact in the database, untouched by this filter.
+  const locks = devices.filter(
+    (d) => d.deviceType === "LOCK" && isLockVisible(d),
+  );
 
   // UX-side eligibility filter for the bulk panel's checklist only —
   // refreshAugustTelemetryForSelectedLocks() re-checks provider/deviceType/
@@ -103,6 +112,7 @@ export default async function LocksPage() {
         spotRefreshAction={refreshAugustTelemetrySpotAction}
         canControlLocks={canControlLocks}
         lockCommandAction={sendAugustLockCommandAction}
+        retireAction={retireSmartDeviceAction}
       />
     </div>
   );
