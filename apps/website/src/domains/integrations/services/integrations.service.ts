@@ -10,6 +10,7 @@ import {
   NotionClient,
   type NotionHighlight,
   type NotionIntegrationIdentity,
+  type NotionLibraryEntry,
   type NotionListingRecord,
   type NotionPageContent,
   type NotionSearchResultItem,
@@ -31,6 +32,7 @@ import {
   selectVisibleNotionFields,
   type NotionVisibilityContext,
 } from "../config/notion-field-visibility";
+import { NOTION_LIBRARY_DATA_SOURCE_ID } from "../config/notion-library";
 import { UNKNOWN_REGION } from "../config/notion-region-reference";
 import type { DisconnectIntegrationInput } from "../schemas/integrations.schema";
 
@@ -861,6 +863,47 @@ export async function getNotionPageContent(
     return { configured: true, ok: true, content };
   } catch (err) {
     console.error("getNotionPageContent failed:", err);
+    return {
+      configured: true,
+      ok: false,
+      error: NOTION_PAGE_CONTENT_GENERIC_ERROR,
+    };
+  }
+}
+
+/**
+ * Backs the "browse the real LIBRARY database" experience — item "Notion
+ * Library" (2026-09-24), Michelle's request. Same `integrations:read` gate,
+ * same sanitize-at-the-boundary discipline, and the same "the token's own
+ * Notion sharing is the real authorization boundary" reasoning as
+ * getNotionPageContent() above: this can't reveal any LIBRARY row the
+ * integration token couldn't already read directly. Returns only
+ * id/title/url/lastEditedTime per entry (see NotionLibraryEntry /
+ * listDataSourceEntries()) — never any other property a LIBRARY row might
+ * carry, so a value like a lockbox code stored on some other column of one
+ * of these rows (unlikely given the real schema found, but not assumed)
+ * could never reach this function's caller even by accident. A specific
+ * entry's own page BODY content (where real operational detail like a
+ * lockbox code actually lives) is fetched separately, on demand, only when
+ * an authorized user opens that specific entry — via the exact same
+ * getNotionPageContent() above, never eagerly for the whole list.
+ */
+export async function listNotionLibraryEntries(
+  actor: AuthContext,
+): Promise<IntegrationHighlights<NotionLibraryEntry>> {
+  await assertPermission(actor, "integrations:read");
+
+  const token = process.env.NOTION_API_KEY;
+  if (!token) return { configured: false };
+
+  try {
+    const client = new NotionClient({ token });
+    const items = await client.listDataSourceEntries(
+      NOTION_LIBRARY_DATA_SOURCE_ID,
+    );
+    return { configured: true, ok: true, items };
+  } catch (err) {
+    console.error("listNotionLibraryEntries failed:", err);
     return {
       configured: true,
       ok: false,

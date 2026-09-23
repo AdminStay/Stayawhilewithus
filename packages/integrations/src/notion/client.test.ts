@@ -947,6 +947,117 @@ describe("NotionClient", () => {
     });
   });
 
+  describe('listDataSourceEntries (item "Notion Library", 2026-09-24)', () => {
+    it("extracts the title from whichever property has Notion's title type, regardless of its name, and returns only id/title/url/lastEditedTime", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          {
+            id: "lib-1",
+            url: "https://notion.so/lib-1",
+            last_edited_time: "2026-09-20T00:00:00.000Z",
+            properties: {
+              Title: {
+                type: "title",
+                title: [{ plain_text: "Property Lockboxes Code" }],
+              },
+            },
+          },
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const entries = await client.listDataSourceEntries("library-ds");
+
+      expect(entries).toEqual([
+        {
+          id: "lib-1",
+          title: "Property Lockboxes Code",
+          url: "https://notion.so/lib-1",
+          lastEditedTime: "2026-09-20T00:00:00.000Z",
+        },
+      ]);
+    });
+
+    it("never leaks any other property value on the row — only id/title/url/lastEditedTime ever leave this function", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [
+          {
+            id: "lib-2",
+            url: "https://notion.so/lib-2",
+            properties: {
+              Title: { type: "title", title: [{ plain_text: "Owner Info" }] },
+              Notes: {
+                type: "rich_text",
+                rich_text: [{ plain_text: "some private detail" }],
+              },
+            },
+          },
+        ],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const entries = await client.listDataSourceEntries("library-ds");
+
+      expect(Object.keys(entries[0]!)).toEqual([
+        "id",
+        "title",
+        "url",
+        "lastEditedTime",
+      ]);
+      expect(JSON.stringify(entries)).not.toContain("private detail");
+    });
+
+    it("falls back to a safe placeholder, never throwing, when a row has no title-type property at all", async () => {
+      mockRequest.mockResolvedValueOnce({
+        results: [{ id: "lib-3", properties: {} }],
+        has_more: false,
+        next_cursor: null,
+      });
+      const client = new NotionClient(credentials);
+
+      const entries = await client.listDataSourceEntries("library-ds");
+
+      expect(entries[0]!.title).toBe("(untitled)");
+    });
+
+    it("reuses the same pagination safety logic as listDataSourceRecords — follows next_cursor across multiple pages", async () => {
+      mockRequest
+        .mockResolvedValueOnce({
+          results: [
+            {
+              id: "lib-1",
+              properties: {
+                Title: { type: "title", title: [{ plain_text: "A" }] },
+              },
+            },
+          ],
+          has_more: true,
+          next_cursor: "cursor-a",
+        })
+        .mockResolvedValueOnce({
+          results: [
+            {
+              id: "lib-2",
+              properties: {
+                Title: { type: "title", title: [{ plain_text: "B" }] },
+              },
+            },
+          ],
+          has_more: false,
+          next_cursor: null,
+        });
+      const client = new NotionClient(credentials);
+
+      const entries = await client.listDataSourceEntries("library-ds");
+
+      expect(entries.map((e) => e.id)).toEqual(["lib-1", "lib-2"]);
+    });
+  });
+
   describe("updatePageProperty", () => {
     it("reads the page first, then PATCHes using Notion's OWN current property type — never the caller's assumption", async () => {
       mockRequest

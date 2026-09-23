@@ -7,6 +7,7 @@ import {
   updateNotionBlockContentAction,
   updateNotionFieldAction,
 } from "@/domains/integrations/actions";
+import { NotionLibraryBrowser } from "@/domains/integrations/components/NotionLibraryBrowser";
 import { NotionListingsSearch } from "@/domains/integrations/components/NotionListingsSearch";
 import { NotionRecentActivity } from "@/domains/integrations/components/NotionRecentActivity";
 import { NotionSearch } from "@/domains/integrations/components/NotionSearch";
@@ -18,6 +19,7 @@ import {
   getNotionIntegrationConfigStatus,
   getNotionIntegrationIdentity,
   getNotionPageContent,
+  listNotionLibraryEntries,
   listNotionListings,
   type IntegrationHighlights,
   type NotionListingWithVisibility,
@@ -126,6 +128,18 @@ export default async function NotionPage() {
     NOTION_SOPS_ROOT_PAGE_ID,
   );
 
+  // The real, separate "LIBRARY" database (2026-09-24, Michelle's request)
+  // — kept structurally distinct from both SOPs (a single page, not a
+  // database) and "View of Listings" (a different database entirely,
+  // unchanged): Property Directory, Owner Info, Service Providers List,
+  // Property Lockboxes Code, and whatever else lives there, each opened on
+  // demand exactly like a SOP's own `child_page` entry. Same
+  // `integrations:read` gate as every other Notion read on this page — an
+  // unauthorized user never reaches this fetch at all (assertPermission
+  // inside listNotionLibraryEntries() itself), so its own content is only
+  // ever rendered to an authorized requester.
+  const libraryResult = await listNotionLibraryEntries(actor);
+
   // Admin/ops-manager-only diagnostic (same integrations:read gate every
   // other Notion read on this page already requires — see
   // getNotionIntegrationIdentity()'s own doc comment for why no stricter
@@ -196,6 +210,18 @@ export default async function NotionPage() {
             />
           ) : sopLibraryResult.configured ? (
             <p className="text-sm text-error-500">{sopLibraryResult.error}</p>
+          ) : null}
+        </div>
+        <div>
+          <SectionHeader title="Library" size="lg" />
+          {libraryResult.configured && libraryResult.ok ? (
+            <NotionLibraryBrowser
+              entries={libraryResult.items}
+              fetchContentAction={fetchNotionPageContentAction}
+              updateBlockAction={updateNotionBlockContentAction}
+            />
+          ) : libraryResult.configured ? (
+            <p className="text-sm text-error-500">{libraryResult.error}</p>
           ) : null}
         </div>
         <div>

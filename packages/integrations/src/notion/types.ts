@@ -169,6 +169,23 @@ export interface NotionListingRecord {
 }
 
 /**
+ * One "LIBRARY" database entry reduced to exactly what the Library browser
+ * UI needs (item "Notion Library", 2026-09-24) — id/title/url/last-edited
+ * time only, never the raw Notion properties map, and never any other
+ * column value that row might have. Each entry is itself a real Notion
+ * page (Property Directory, Owner Info, Service Providers List, Property
+ * Lockboxes Code, ...); its own content is fetched separately, on demand,
+ * via `getPageContent()` — this type only describes the clickable list
+ * item, not the page body.
+ */
+export interface NotionLibraryEntry {
+  id: string;
+  title: string;
+  url: string | null;
+  lastEditedTime: string | null;
+}
+
+/**
  * The Notion property types the in-dashboard editable-field architecture
  * knows how to render/validate — deliberately a closed set matching exactly
  * what "View of Listings" and similar operational databases actually use

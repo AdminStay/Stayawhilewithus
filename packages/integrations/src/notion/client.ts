@@ -18,6 +18,7 @@ import type {
   NotionEditableBlockType,
   NotionHighlight,
   NotionIntegrationIdentity,
+  NotionLibraryEntry,
   NotionListingRecord,
   NotionPageContent,
   NotionRichTextRun,
@@ -39,6 +40,7 @@ export type {
   NotionIntegrationIdentity,
   NotionContentBlock,
   NotionDataSourceQueryResult,
+  NotionLibraryEntry,
   NotionListingRecord,
   NotionPageContent,
   NotionRichTextRun,
@@ -187,6 +189,40 @@ function extractUrlValue(value: unknown): string | null {
  * throwing — a row is never dropped, and one bad column never takes down
  * the whole listing page, just that one field.
  */
+/**
+ * Finds whichever property on a data-source row has Notion's own `title`
+ * type and returns its plain text — never a fixed, guessed property name.
+ * Mirrors `extractTitle()`'s equivalent loop for a general search result;
+ * kept as a separate function since the input shape differs (a data-source
+ * row's `properties` map vs. a search result's).
+ */
+function extractRowTitle(row: NotionDataSourceRow): string {
+  for (const prop of Object.values(row.properties)) {
+    if (prop.type === "title" && prop.title.length > 0) {
+      return prop.title.map((t) => t.plain_text).join("");
+    }
+  }
+  return "(untitled)";
+}
+
+/**
+ * Maps one raw data-source row to the minimal, generic NotionLibraryEntry
+ * shape — id/title/url/last-edited time only. Used by
+ * `listDataSourceEntries()` (item "Notion Library") — deliberately never
+ * reads any other property on the row (unlike `mapListingRecord()` below,
+ * which reads several known "View of Listings" columns by name), so a
+ * value stored in some other column on a LIBRARY row can never reach this
+ * function's caller.
+ */
+function mapLibraryEntry(row: NotionDataSourceRow): NotionLibraryEntry {
+  return {
+    id: row.id,
+    title: extractRowTitle(row),
+    url: row.url ?? null,
+    lastEditedTime: row.last_edited_time ?? null,
+  };
+}
+
 function mapListingRecord(row: NotionDataSourceRow): NotionListingRecord {
   const props: Record<string, unknown> = isPlainObject(row.properties)
     ? row.properties
@@ -543,19 +579,22 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
   }
 
   /**
-   * Full, read-only retrieval of every row in a data source (e.g. "View of
-   * Listings"), fully paginated — never just the first page. Two
-   * independent safeguards against a runaway loop, mirroring the discipline
-   * applied to OwnerRez's pagination fix: a hard page cap, and rejection of
-   * a `next_cursor` value already seen in this same call. Also refuses to
-   * silently truncate if Notion ever reports `has_more: true` without a
-   * usable `next_cursor` — that would otherwise look like a normal
-   * completion. Returns the narrow NotionListingRecord shape only; the raw
-   * Notion properties map never leaves this function.
+   * Full, read-only retrieval of every row in a data source, fully
+   * paginated — never just the first page. Two independent safeguards
+   * against a runaway loop, mirroring the discipline applied to OwnerRez's
+   * pagination fix: a hard page cap, and rejection of a `next_cursor` value
+   * already seen in this same call. Also refuses to silently truncate if
+   * Notion ever reports `has_more: true` without a usable `next_cursor` —
+   * that would otherwise look like a normal completion. Returns the raw
+   * `NotionDataSourceRow[]` — shared by both `listDataSourceRecords()`
+   * ("View of Listings", mapped to the listing-specific shape) and
+   * `listDataSourceEntries()` (item "Notion Library", 2026-09-24, mapped
+   * generically by title only) so this pagination logic is tested and
+   * maintained in exactly one place, never duplicated per caller.
    */
-  async listDataSourceRecords(
+  private async queryAllDataSourceRows(
     dataSourceId: string,
-  ): Promise<NotionListingRecord[]> {
+  ): Promise<NotionDataSourceRow[]> {
     const rows: NotionDataSourceRow[] = [];
     const seenCursors = new Set<string>();
     let cursor: string | null = null;
@@ -601,7 +640,39 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
       cursor = page.next_cursor;
     }
 
+    return rows;
+  }
+
+  /** "View of Listings" — see `queryAllDataSourceRows()` for the shared pagination/safety logic. Returns the narrow NotionListingRecord shape only; the raw Notion properties map never leaves this function. */
+  async listDataSourceRecords(
+    dataSourceId: string,
+  ): Promise<NotionListingRecord[]> {
+    const rows = await this.queryAllDataSourceRows(dataSourceId);
     return rows.map(mapListingRecord);
+  }
+
+  /**
+   * Generic read-only listing for any data source where only a row's id +
+   * title (+ url/last-edited time) are needed — item "Notion Library"
+   * (2026-09-24): the real "LIBRARY" database's own top-level entries
+   * (Property Directory, Owner Info, Service Providers List, Property
+   * Lockboxes Code, ...), each of which is itself a real Notion page whose
+   * own content is fetched on demand via `getPageContent()`, exactly the
+   * same on-demand-child-page pattern the SOPs library already uses. Unlike
+   * `mapListingRecord()`, this never assumes a fixed property name (View of
+   * Listings' schema is fixed and known; LIBRARY's title property is simply
+   * whichever property has Notion's `title` type) — matches
+   * `extractTitle()`'s own "find the title-type property" approach for a
+   * general search result. Never reads or exposes any OTHER property on the
+   * row — only id/title/url/last_edited_time ever leave this function, so a
+   * sensitive value stored in some other column on one of these rows can
+   * never reach the caller through this path.
+   */
+  async listDataSourceEntries(
+    dataSourceId: string,
+  ): Promise<NotionLibraryEntry[]> {
+    const rows = await this.queryAllDataSourceRows(dataSourceId);
+    return rows.map(mapLibraryEntry);
   }
 
   /**
