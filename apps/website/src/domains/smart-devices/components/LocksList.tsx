@@ -27,6 +27,7 @@ import type {
   RefreshAugustSpotActionState,
 } from "../actions";
 import { formatTimestamp } from "../lib/format-timestamp";
+import type { LockControlEligibility } from "../services/august-commands.service";
 import {
   getBatteryLevel,
   getLockState,
@@ -40,7 +41,11 @@ import {
 import { AugustLockControlButton } from "./AugustLockControlButton";
 import { LockSpotRefreshButton } from "./LockSpotRefreshButton";
 
-type LockWithProperty = SmartDevice & { property: { name: string } };
+type LockWithProperty = SmartDevice & {
+  property: { name: string };
+  /** Real per-lock Lock/Unlock eligibility (see computeLockControlEligibility) — null for a non-August device, or when the viewer can't control locks at all (canControlLocks is false, so it's never rendered anyway). */
+  controlEligibility: LockControlEligibility | null;
+};
 
 /**
  * Short label for the compact Status dot (2026-09-18 /locks UI cleanup) —
@@ -283,41 +288,59 @@ export function LocksList({
                   (canControlLocks && lockCommandAction)) && (
                   <TableCell>
                     {isAugust ? (
-                      <div className="flex flex-wrap items-center gap-2">
-                        {canControlLocks && lockCommandAction && (
-                          <>
-                            <AugustLockControlButton
+                      <div className="flex flex-col gap-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {canControlLocks && lockCommandAction && (
+                            <>
+                              <AugustLockControlButton
+                                smartDeviceId={lock.id}
+                                operation="LOCK"
+                                lockName={lock.name}
+                                propertyName={lock.property.name}
+                                action={lockCommandAction}
+                                disabled={!lock.controlEligibility?.eligible}
+                                disabledReason={
+                                  lock.controlEligibility?.reason ?? undefined
+                                }
+                                emphasis={
+                                  normalizedLockState === "locked"
+                                    ? "subdued"
+                                    : "primary"
+                                }
+                              />
+                              <AugustLockControlButton
+                                smartDeviceId={lock.id}
+                                operation="UNLOCK"
+                                lockName={lock.name}
+                                propertyName={lock.property.name}
+                                action={lockCommandAction}
+                                disabled={!lock.controlEligibility?.eligible}
+                                disabledReason={
+                                  lock.controlEligibility?.reason ?? undefined
+                                }
+                                emphasis={
+                                  normalizedLockState === "unlocked"
+                                    ? "subdued"
+                                    : "primary"
+                                }
+                              />
+                            </>
+                          )}
+                          {canRefresh && spotRefreshAction && (
+                            <LockSpotRefreshButton
                               smartDeviceId={lock.id}
-                              operation="LOCK"
-                              lockName={lock.name}
-                              propertyName={lock.property.name}
-                              action={lockCommandAction}
-                              emphasis={
-                                normalizedLockState === "locked"
-                                  ? "subdued"
-                                  : "primary"
-                              }
+                              action={spotRefreshAction}
                             />
-                            <AugustLockControlButton
-                              smartDeviceId={lock.id}
-                              operation="UNLOCK"
-                              lockName={lock.name}
-                              propertyName={lock.property.name}
-                              action={lockCommandAction}
-                              emphasis={
-                                normalizedLockState === "unlocked"
-                                  ? "subdued"
-                                  : "primary"
-                              }
-                            />
-                          </>
-                        )}
-                        {canRefresh && spotRefreshAction && (
-                          <LockSpotRefreshButton
-                            smartDeviceId={lock.id}
-                            action={spotRefreshAction}
-                          />
-                        )}
+                          )}
+                        </div>
+                        {canControlLocks &&
+                          lockCommandAction &&
+                          lock.controlEligibility &&
+                          !lock.controlEligibility.eligible && (
+                            <p className="text-[10px] text-ink-faint">
+                              {lock.controlEligibility.reason}
+                            </p>
+                          )}
                       </div>
                     ) : (
                       <span className="text-ink-muted">—</span>

@@ -63,6 +63,20 @@ function resultTone(state: AugustLockCommandActionState): string {
  * entirely server-side (capability check, allowlist, confirmation dialog
  * below) — this prop only changes which button looks like the "expected"
  * one to reach for.
+ *
+ * `disabled`/`disabledReason` (2026-09-23) are a DIFFERENT kind of signal
+ * from `emphasis` — real current eligibility (see
+ * computeLockControlEligibility(), august-commands.service.ts), not a
+ * cosmetic preference. When `disabled` is true the trigger itself is
+ * unclickable and shows `disabledReason` as its tooltip, so the confirm
+ * dialog never opens at all — this is what stops the dashboard from
+ * presenting a lock as remotely controllable when the real, authoritative
+ * server-side gate (AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS) would refuse it,
+ * or when the last real attempt against this exact device is on record as
+ * having failed. Purely additional UX/clarity — sendAugustLockCommand()
+ * re-checks every one of these conditions live and unconditionally
+ * regardless of what this prop says; nothing here weakens or replaces that
+ * enforcement.
  */
 export function AugustLockControlButton({
   smartDeviceId,
@@ -71,6 +85,8 @@ export function AugustLockControlButton({
   propertyName,
   action,
   emphasis = "primary",
+  disabled = false,
+  disabledReason,
 }: {
   smartDeviceId: string;
   operation: "LOCK" | "UNLOCK";
@@ -81,6 +97,8 @@ export function AugustLockControlButton({
     formData: FormData,
   ) => Promise<AugustLockCommandActionState>;
   emphasis?: "primary" | "subdued";
+  disabled?: boolean;
+  disabledReason?: string;
 }) {
   const [state, formAction, isPending] = useActionState(action, INITIAL_STATE);
   const [open, setOpen] = useState(false);
@@ -99,6 +117,8 @@ export function AugustLockControlButton({
         size="sm"
         variant={emphasis === "subdued" ? "ghost" : "secondary"}
         onClick={() => setOpen(true)}
+        disabled={disabled}
+        title={disabled ? disabledReason : undefined}
       >
         <Icon className="h-3.5 w-3.5" />
         {label}

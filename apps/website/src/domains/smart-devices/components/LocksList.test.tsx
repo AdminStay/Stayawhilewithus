@@ -1,5 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Mocked to avoid pulling in the real smart-devices.service.ts, which
@@ -81,8 +87,14 @@ type LockFixture = {
   metadata: Record<string, unknown>;
   updatedAt: Date;
   property: { name: string };
+  controlEligibility: { eligible: boolean; reason: string | null } | null;
 };
 
+// Defaults to eligible: real /locks usage always computes a real
+// controlEligibility for every August row once canControlLocks is true
+// (see page.tsx) — never leaves it undefined the way an unrelated-field
+// test fixture otherwise might. Tests that specifically exercise the
+// ineligible/disabled case override this explicitly.
 function makeLock(overrides: Partial<LockFixture> = {}): LockFixture {
   return {
     id: "lock-1",
@@ -94,6 +106,7 @@ function makeLock(overrides: Partial<LockFixture> = {}): LockFixture {
     metadata: {},
     updatedAt: new Date("2026-09-01T00:00:00.000Z"),
     property: { name: "Test Property" },
+    controlEligibility: { eligible: true, reason: null },
     ...overrides,
   };
 }
@@ -424,6 +437,99 @@ describe("LocksList — per-row physical lock-control gating", () => {
     );
     expect(screen.getByRole("button", { name: "Lock" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Unlock" })).toBeTruthy();
+  });
+
+  it("ELIGIBILITY: Lock/Unlock render enabled and clickable (dialog opens) when controlEligibility.eligible is true", () => {
+    const action = vi.fn();
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              name: "Eligible Lock",
+              controlEligibility: { eligible: true, reason: null },
+            }),
+          ] as never
+        }
+        canControlLocks={true}
+        lockCommandAction={action}
+      />,
+    );
+
+    const lockButton = screen.getByRole("button", {
+      name: "Lock",
+    }) as HTMLButtonElement;
+    expect(lockButton.disabled).toBe(false);
+
+    fireEvent.click(lockButton);
+    expect(screen.getByRole("button", { name: "Confirm Lock" })).toBeTruthy();
+  });
+
+  it("ELIGIBILITY: Lock/Unlock render disabled, with the real reason visible, and never open the confirm dialog when controlEligibility.eligible is false — never inferred from mapped+enabled alone", () => {
+    const action = vi.fn();
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              name: "Not Yet Eligible Lock",
+              controlEligibility: {
+                eligible: false,
+                reason: "Live control isn't enabled for this lock yet.",
+              },
+            }),
+          ] as never
+        }
+        canControlLocks={true}
+        lockCommandAction={action}
+      />,
+    );
+
+    const lockButton = screen.getByRole("button", {
+      name: "Lock",
+    }) as HTMLButtonElement;
+    const unlockButton = screen.getByRole("button", {
+      name: "Unlock",
+    }) as HTMLButtonElement;
+    expect(lockButton.disabled).toBe(true);
+    expect(unlockButton.disabled).toBe(true);
+    expect(
+      screen.getByText("Live control isn't enabled for this lock yet."),
+    ).toBeTruthy();
+
+    fireEvent.click(lockButton);
+    expect(screen.queryByRole("button", { name: "Confirm Lock" })).toBeNull();
+  });
+
+  it("ELIGIBILITY: a real recorded FAILED attempt (e.g. MJ's real 403) disables the controls with that specific reason, distinct from the allowlist reason — proves history is surfaced, not just the allowlist gate", () => {
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              name: "MJ - Front Door",
+              controlEligibility: {
+                eligible: false,
+                reason:
+                  "The last real attempt to control this lock did not succeed. Contact an admin before trying again.",
+              },
+            }),
+          ] as never
+        }
+        canControlLocks={true}
+        lockCommandAction={vi.fn()}
+      />,
+    );
+
+    expect(
+      (screen.getByRole("button", { name: "Lock" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      screen.getByText(
+        "The last real attempt to control this lock did not succeed. Contact an admin before trying again.",
+      ),
+    ).toBeTruthy();
   });
 
   it("each row's controls target that exact row's own SmartDevice.id, never another row's — no fuzzy/derived targeting", () => {

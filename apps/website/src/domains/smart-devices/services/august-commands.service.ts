@@ -57,6 +57,110 @@ function parseTestDeviceAllowlist(raw: string | undefined): Set<string> {
 }
 
 /**
+ * UX-only read of the exact same real, live `AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS`
+ * gate `sendAugustLockCommand()` itself enforces (step 5 in its own doc
+ * comment) — never a second, separate allowlist, never a relaxed copy.
+ * Exists so the dashboard can decide whether to even show Lock/Unlock as
+ * available BEFORE a real command is attempted, rather than only learning
+ * "Live control isn't enabled for this lock yet" after a full confirm
+ * dialog round trip. Recomputed fresh on every call (no caching) so it's
+ * never stale relative to the real env var. This function makes no
+ * database call, no provider call, and cannot itself allow or deny a real
+ * command — sendAugustLockCommand() re-checks this exact same env var
+ * unconditionally regardless of what this returns.
+ */
+export function isAugustLockCommandTestDevice(
+  externalDeviceId: string,
+): boolean {
+  return parseTestDeviceAllowlist(
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS,
+  ).has(externalDeviceId);
+}
+
+/** What LocksList shows in place of the Lock/Unlock controls when they're not currently eligible — never rendered when `eligible` is true. */
+export interface LockControlEligibility {
+  eligible: boolean;
+  reason: string | null;
+}
+
+/** Exact same copy sendAugustLockCommand() itself returns when providerDevice is missing/disabled — reused, not paraphrased, so a pre-click and a post-click message never disagree. */
+const NOT_ENABLED_FOR_CONTROL_REASON =
+  "This device is not enabled for control — map and enable it from Discovered Devices first.";
+
+/** Exact same copy sendAugustLockCommand() itself returns for the allowlist gate — reused, not paraphrased. */
+const NOT_IN_TEST_ALLOWLIST_REASON =
+  "Live control isn't enabled for this lock yet.";
+
+/** Deliberately generic and safe — never the raw stored `metadata.errorDetail` (that field is written for internal/audit inspection, not general operator-facing display; see recordAuditSafely()'s own doc comment). */
+const LAST_ATTEMPT_FAILED_REASON =
+  "The last real attempt to control this lock did not succeed. Contact an admin before trying again.";
+
+/**
+ * The "not yet positively verified" reason — covers both "no real command
+ * attempt exists at all" and "the only real attempt on record was a
+ * REJECTED pre-flight refusal, never a real provider-level command." Never
+ * a failure message (nothing is known to be broken), and never treated as
+ * eligible either — see computeLockControlEligibility()'s own doc comment
+ * for why absence of failure evidence is not proof of operability.
+ */
+const NOT_YET_VERIFIED_REASON =
+  "Remote control has not been verified for this lock yet.";
+
+/**
+ * Combines the real signals above into one UX decision — never "mapped +
+ * enabled alone," and never "no evidence of failure" either. StayWhile's
+ * requirement (2026-09-23 correction) is fail-closed and POSITIVE: a lock
+ * is only ever shown as controllable when real remote-command operability
+ * for that exact device has already been demonstrated — a real, on-record
+ * `SUCCEEDED` outcome from an actual `sendAugustLockCommand()` attempt
+ * (e.g. Aqua Palm's real controlled test). Every other case defaults to
+ * disabled:
+ *
+ *   - no real, enabled ProviderDevice mapping (`externalDeviceId` null) —
+ *     disabled (nothing to even check).
+ *   - not in the real AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS allowlist —
+ *     disabled (the command would be refused before ever reaching August).
+ *   - most recent real attempt `FAILED` (e.g. MJ - Front Door's real
+ *     `403`) — disabled, and MUST NOT be inferred as "fixed" by mere
+ *     allowlist membership or the passage of time; only a later real
+ *     `SUCCEEDED` attempt (not made by this function or this UI) would
+ *     change that.
+ *   - no real attempt on record at all — disabled/unverified. An
+ *     allowlisted-but-never-tested lock is NOT presented as ready; absence
+ *     of failure evidence is not proof of operability.
+ *   - most recent real attempt `REJECTED` only (StayWhile's own pre-flight
+ *     refusal — mapping/capability/allowlist — never reached August at
+ *     all) — disabled/unverified. A REJECTED record is never treated as
+ *     equivalent to, or a step toward, a real SUCCEEDED outcome.
+ *
+ * This function makes no provider or database call, and — per explicit
+ * instruction — never performs or triggers a real command to establish
+ * verification; the only source of truth is already-existing AuditLog
+ * history the caller supplies.
+ */
+export function computeLockControlEligibility(
+  externalDeviceId: string | null,
+  lastOutcome: AugustLockCommandRecordedOutcome | undefined,
+): LockControlEligibility {
+  if (externalDeviceId === null) {
+    return { eligible: false, reason: NOT_ENABLED_FOR_CONTROL_REASON };
+  }
+  if (!isAugustLockCommandTestDevice(externalDeviceId)) {
+    return { eligible: false, reason: NOT_IN_TEST_ALLOWLIST_REASON };
+  }
+  if (lastOutcome === "SUCCEEDED") {
+    return { eligible: true, reason: null };
+  }
+  if (lastOutcome === "FAILED") {
+    return { eligible: false, reason: LAST_ATTEMPT_FAILED_REASON };
+  }
+  // `undefined` (no real attempt on record) or `"REJECTED"` (a real attempt
+  // was refused before ever reaching August) — neither is proof of real
+  // remote-command operability.
+  return { eligible: false, reason: NOT_YET_VERIFIED_REASON };
+}
+
+/**
  * A 403 alone is ambiguous: August returns it both for a genuinely
  * unauthorized/expired connection AND for a specific device/operation it
  * refuses for other reasons (2026-09-18 incident: MJ - Front Door's
@@ -438,4 +542,68 @@ async function recordAuditSafely(args: {
       ? ({ errorDetail: args.errorDetail } as Prisma.InputJsonValue)
       : undefined,
   });
+}
+
+/** The one real recorded outcome kind that means "a live provider-level command attempt actually happened and did not succeed" — see getLatestAugustLockCommandOutcomes()'s own doc comment for why only this one matters for UI eligibility. */
+export type AugustLockCommandRecordedOutcome =
+  "SUCCEEDED" | "FAILED" | "REJECTED";
+
+/**
+ * Read-only: the most recent recorded `smart_device.august_lock_command`
+ * outcome per device, from the exact same AuditLog rows
+ * recordAuditSafely() already writes above — never a second/derived
+ * tracking mechanism. Used exclusively to decide whether the dashboard
+ * should present Lock/Unlock as available (see
+ * apps/website/app/(dashboard)/locks/page.tsx) — this function makes no
+ * provider call and changes nothing; it only reads history that already
+ * exists.
+ *
+ * Specifically answers "did the last REAL command attempt against this
+ * device fail" (`result: "FAILED"` — set only in the catch block wrapping
+ * the actual `client.lock()/unlock()/unlatch()` call, i.e. a genuine
+ * provider-level refusal or transport failure, like MJ - Front Door's real
+ * `403`) — distinct from `"REJECTED"` (StayWhile's own pre-flight checks:
+ * mapping/capability/allowlist — already independently re-verified live on
+ * every real attempt regardless of history, so stale REJECTED history adds
+ * no safety value here and is not treated as blocking) and `"SUCCEEDED"`
+ * (e.g. Aqua Palm's real controlled test). A device with no recorded
+ * attempt at all returns no entry — absence of failure evidence, not
+ * proof of success; callers must combine this with the real
+ * AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS check (isAugustLockCommandTestDevice
+ * above), never rely on this alone.
+ */
+export async function getLatestAugustLockCommandOutcomes(
+  actor: AuthContext,
+  smartDeviceIds: string[],
+): Promise<Map<string, AugustLockCommandRecordedOutcome>> {
+  await assertPermission(actor, "smart_devices:read");
+  if (smartDeviceIds.length === 0) return new Map();
+
+  const rows = await prisma.auditLog.findMany({
+    where: {
+      entityType: "SmartDevice",
+      entityId: { in: smartDeviceIds },
+      action: "smart_device.august_lock_command",
+    },
+    orderBy: { occurredAt: "desc" },
+    select: { entityId: true, afterState: true },
+  });
+
+  const outcomes = new Map<string, AugustLockCommandRecordedOutcome>();
+  for (const row of rows) {
+    // Rows are ordered most-recent-first — the first time we see a given
+    // entityId is its most recent outcome; every later row for the same
+    // device is older and ignored.
+    if (outcomes.has(row.entityId)) continue;
+    const afterState = row.afterState as { result?: unknown } | null;
+    const result = afterState?.result;
+    if (
+      result === "SUCCEEDED" ||
+      result === "FAILED" ||
+      result === "REJECTED"
+    ) {
+      outcomes.set(row.entityId, result);
+    }
+  }
+  return outcomes;
 }

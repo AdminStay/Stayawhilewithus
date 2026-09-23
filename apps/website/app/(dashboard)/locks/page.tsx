@@ -11,6 +11,10 @@ import { BulkRefreshDialog } from "@/domains/smart-devices/components/BulkRefres
 import { LocksList } from "@/domains/smart-devices/components/LocksList";
 import { RefreshLocksButton } from "@/domains/smart-devices/components/RefreshLocksButton";
 import {
+  computeLockControlEligibility,
+  getLatestAugustLockCommandOutcomes,
+} from "@/domains/smart-devices/services/august-commands.service";
+import {
   isDemoSmartDevice,
   listSmartDevices,
 } from "@/domains/smart-devices/services/smart-devices.service";
@@ -49,6 +53,28 @@ export default async function LocksPage() {
   // re-checks locks:manage server-side regardless of what this decides.
   const canControlLocks = await hasPermission(actor, "locks:manage");
 
+  // Real per-lock eligibility for the Lock/Unlock controls — never "mapped
+  // + enabled alone" (see computeLockControlEligibility's own doc comment).
+  // Only computed when canControlLocks is true: nobody who can't see the
+  // buttons at all needs this, and getLatestAugustLockCommandOutcomes()
+  // still independently checks smart_devices:read regardless.
+  const augustLockIds = locks
+    .filter((lock) => lock.provider === "AUGUST")
+    .map((lock) => lock.id);
+  const lastCommandOutcomes = canControlLocks
+    ? await getLatestAugustLockCommandOutcomes(actor, augustLockIds)
+    : new Map();
+  const locksWithEligibility = locks.map((lock) => ({
+    ...lock,
+    controlEligibility:
+      lock.provider === "AUGUST" && canControlLocks
+        ? computeLockControlEligibility(
+            lock.providerDevice?.externalDeviceId ?? null,
+            lastCommandOutcomes.get(lock.id),
+          )
+        : null,
+  }));
+
   return (
     <div>
       {/* 2026-09-18 UI cleanup: Refresh all / Bulk refresh now live in the
@@ -72,7 +98,7 @@ export default async function LocksPage() {
         }
       />
       <LocksList
-        locks={locks}
+        locks={locksWithEligibility}
         canRefresh={canRefresh}
         spotRefreshAction={refreshAugustTelemetrySpotAction}
         canControlLocks={canControlLocks}

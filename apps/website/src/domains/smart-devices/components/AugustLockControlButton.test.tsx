@@ -108,4 +108,49 @@ describe("AugustLockControlButton", () => {
       expect(action).not.toHaveBeenCalled();
     });
   });
+
+  describe("disabled/disabledReason (2026-09-23, E — real eligibility)", () => {
+    it("defaults to enabled/clickable when disabled is omitted — unchanged behavior for every existing caller", () => {
+      const action = renderButton();
+
+      const button = screen.getByRole("button", { name: "Unlock" });
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+
+      fireEvent.click(button);
+      expect(
+        screen.getByRole("button", { name: "Confirm Unlock" }),
+      ).toBeTruthy();
+      expect(action).not.toHaveBeenCalled();
+    });
+
+    it("disables the trigger and shows the real reason as its tooltip when disabled is true — the confirm dialog never opens", () => {
+      renderButton({
+        disabled: true,
+        disabledReason: "Live control isn't enabled for this lock yet.",
+      });
+
+      const button = screen.getByRole("button", {
+        name: "Unlock",
+      }) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute("title")).toBe(
+        "Live control isn't enabled for this lock yet.",
+      );
+
+      fireEvent.click(button);
+      expect(
+        screen.queryByRole("button", { name: "Confirm Unlock" }),
+      ).toBeNull();
+    });
+
+    it("never shows a tooltip reason when disabled is false, even if a reason string is passed — a stray reason must not leak onto an enabled button", () => {
+      renderButton({
+        disabled: false,
+        disabledReason: "Live control isn't enabled for this lock yet.",
+      });
+
+      const button = screen.getByRole("button", { name: "Unlock" });
+      expect(button.getAttribute("title")).toBeNull();
+    });
+  });
 });

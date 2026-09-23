@@ -27,6 +27,9 @@ vi.mock("@stayw/database", () => ({
     providerDevice: {
       update: vi.fn().mockResolvedValue({}),
     },
+    auditLog: {
+      findMany: vi.fn(),
+    },
     $transaction: mockTransaction,
   },
 }));
@@ -58,7 +61,12 @@ import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
 import { HttpRequestError } from "@stayw/integrations/core";
 
-import { sendAugustLockCommand } from "./august-commands.service";
+import {
+  computeLockControlEligibility,
+  getLatestAugustLockCommandOutcomes,
+  isAugustLockCommandTestDevice,
+  sendAugustLockCommand,
+} from "./august-commands.service";
 
 const actor = { userId: "user-1" };
 const SMART_DEVICE_ID = "11111111-1111-1111-1111-111111111111";
@@ -761,5 +769,177 @@ describe("sendAugustLockCommand", () => {
     expect(serialized).not.toMatch(
       /access_token|install_id|accessToken|installId/i,
     );
+  });
+});
+
+describe("isAugustLockCommandTestDevice", () => {
+  const ORIGINAL_ALLOWLIST = process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS;
+  afterEach(() => {
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = ORIGINAL_ALLOWLIST;
+  });
+
+  it("reads the exact same env var sendAugustLockCommand() itself enforces — never a second/separate allowlist", () => {
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+      EXTERNAL_ID,
+    ]);
+
+    expect(isAugustLockCommandTestDevice(EXTERNAL_ID)).toBe(true);
+    expect(isAugustLockCommandTestDevice("some-other-lock")).toBe(false);
+  });
+
+  it("fails closed (false) when the env var is unset, empty, or malformed — never 'allow everything'", () => {
+    delete process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS;
+    expect(isAugustLockCommandTestDevice(EXTERNAL_ID)).toBe(false);
+
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = "[]";
+    expect(isAugustLockCommandTestDevice(EXTERNAL_ID)).toBe(false);
+
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = "not valid json";
+    expect(isAugustLockCommandTestDevice(EXTERNAL_ID)).toBe(false);
+  });
+});
+
+describe("computeLockControlEligibility — fail-closed, positive-verification-required (2026-09-23 correction)", () => {
+  const ORIGINAL_ALLOWLIST = process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS;
+  afterEach(() => {
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = ORIGINAL_ALLOWLIST;
+  });
+
+  it("is disabled when the device has no ProviderDevice mapping at all (externalDeviceId is null) — never inferred as eligible just because a row exists", () => {
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+      EXTERNAL_ID,
+    ]);
+
+    const result = computeLockControlEligibility(null, undefined);
+
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe(
+      "This device is not enabled for control — map and enable it from Discovered Devices first.",
+    );
+  });
+
+  it("is disabled, with the exact same copy sendAugustLockCommand() itself returns, when the device isn't in the real allowlist — even with a real recorded SUCCEEDED outcome, since the allowlist gate is checked first and independently", () => {
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = "[]";
+
+    const result = computeLockControlEligibility(EXTERNAL_ID, "SUCCEEDED");
+
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe("Live control isn't enabled for this lock yet.");
+  });
+
+  it("REAL EVIDENCE — Aqua Palm case: is eligible ONLY when allowlisted AND the most recent real attempt SUCCEEDED — real, positively-verified operability, not an absence of failure", () => {
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+      EXTERNAL_ID,
+    ]);
+
+    const result = computeLockControlEligibility(EXTERNAL_ID, "SUCCEEDED");
+
+    expect(result).toEqual({ eligible: true, reason: null });
+  });
+
+  it("REAL EVIDENCE — MJ case: is disabled with a distinct reason when the most recent real attempt against this exact device FAILED, even though it's allowlist-eligible — this is what stops MJ (real 403, UserType user) from ever being retried through the dashboard", () => {
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+      EXTERNAL_ID,
+    ]);
+
+    const result = computeLockControlEligibility(EXTERNAL_ID, "FAILED");
+
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toBe(
+      "The last real attempt to control this lock did not succeed. Contact an admin before trying again.",
+    );
+  });
+
+  it("FAIL-CLOSED CORRECTION: is disabled/unverified — never eligible — when allowlisted but there is no recorded attempt at all. Absence of failure evidence is not proof of operability.", () => {
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+      EXTERNAL_ID,
+    ]);
+
+    const result = computeLockControlEligibility(EXTERNAL_ID, undefined);
+
+    expect(result).toEqual({
+      eligible: false,
+      reason: "Remote control has not been verified for this lock yet.",
+    });
+  });
+
+  it("FAIL-CLOSED CORRECTION: is disabled/unverified — never eligible — when the only real record is a REJECTED pre-flight refusal, since that record never reached August at all and is not proof a real command would succeed", () => {
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+      EXTERNAL_ID,
+    ]);
+
+    const result = computeLockControlEligibility(EXTERNAL_ID, "REJECTED");
+
+    expect(result).toEqual({
+      eligible: false,
+      reason: "Remote control has not been verified for this lock yet.",
+    });
+  });
+});
+
+describe("getLatestAugustLockCommandOutcomes", () => {
+  beforeEach(() => {
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.auditLog.findMany).mockReset();
+  });
+
+  it("requires smart_devices:read and makes no query for an empty id list", async () => {
+    const result = await getLatestAugustLockCommandOutcomes(actor, []);
+
+    expect(result.size).toBe(0);
+    expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
+  });
+
+  it("queries only smart_device.august_lock_command AuditLog rows for exactly the requested SmartDevice ids, ordered most-recent-first", async () => {
+    vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce([]);
+
+    await getLatestAugustLockCommandOutcomes(actor, [SMART_DEVICE_ID]);
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "smart_devices:read");
+    expect(prisma.auditLog.findMany).toHaveBeenCalledWith({
+      where: {
+        entityType: "SmartDevice",
+        entityId: { in: [SMART_DEVICE_ID] },
+        action: "smart_device.august_lock_command",
+      },
+      orderBy: { occurredAt: "desc" },
+      select: { entityId: true, afterState: true },
+    });
+  });
+
+  it("takes only the FIRST (most recent) row per device — an older row for the same device is ignored", async () => {
+    vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce([
+      { entityId: SMART_DEVICE_ID, afterState: { result: "SUCCEEDED" } },
+      { entityId: SMART_DEVICE_ID, afterState: { result: "FAILED" } },
+    ] as never);
+
+    const result = await getLatestAugustLockCommandOutcomes(actor, [
+      SMART_DEVICE_ID,
+    ]);
+
+    expect(result.get(SMART_DEVICE_ID)).toBe("SUCCEEDED");
+  });
+
+  it("returns no entry for a device with a malformed/missing afterState.result — never guesses", async () => {
+    vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce([
+      { entityId: SMART_DEVICE_ID, afterState: { operation: "LOCK" } },
+    ] as never);
+
+    const result = await getLatestAugustLockCommandOutcomes(actor, [
+      SMART_DEVICE_ID,
+    ]);
+
+    expect(result.has(SMART_DEVICE_ID)).toBe(false);
+  });
+
+  it("propagates denial when the actor lacks smart_devices:read, without querying the database", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(
+      getLatestAugustLockCommandOutcomes(actor, [SMART_DEVICE_ID]),
+    ).rejects.toThrow();
+    expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
   });
 });
