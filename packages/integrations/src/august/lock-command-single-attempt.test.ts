@@ -101,3 +101,28 @@ describe("AugustClient physical-write commands — at most one outbound fetch pe
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
+
+describe("AugustClient.getLockDetail() call options (2026-09-25)", () => {
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    originalFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("with { maxRetries: 0 }, a network-level abort produces exactly ONE outbound fetch (used by confirmation polling)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValue(new Error("This operation was aborted"));
+    global.fetch = fetchMock;
+    const client = new AugustClient(credentials);
+
+    await expect(
+      client.getLockDetail("lock-1", { maxRetries: 0 }),
+    ).rejects.toThrow("This operation was aborted");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

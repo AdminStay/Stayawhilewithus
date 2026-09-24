@@ -17,6 +17,10 @@ function resultMessage(state: AugustLockCommandActionState): string | null {
       return null;
     case "success":
       return `Confirmed — this lock now reports "${state.lockState ?? "an unreported state"}".`;
+    // 2026-09-25: the lock already reported the requested state, so no
+    // physical command was sent — never phrased like a confirmed transition.
+    case "no_action":
+      return `No command was sent — this lock already reports "${state.lockState ?? "the requested state"}".`;
     case "rejected":
       return state.reason;
     case "already_running":
@@ -34,7 +38,9 @@ function resultMessage(state: AugustLockCommandActionState): string | null {
 }
 
 function resultTone(state: AugustLockCommandActionState): string {
-  return state.status === "success" ? "text-success-600" : "text-error-500";
+  if (state.status === "success") return "text-success-600";
+  if (state.status === "no_action") return "text-ink-muted";
+  return "text-error-500";
 }
 
 /**
@@ -158,9 +164,11 @@ export function AugustLockControlButton({
               onClick={handleClose}
               disabled={isPending}
             >
-              {state.status === "success" ? "Close" : "Cancel"}
+              {state.status === "success" || state.status === "no_action"
+                ? "Close"
+                : "Cancel"}
             </Button>
-            {state.status !== "success" && (
+            {state.status !== "success" && state.status !== "no_action" && (
               <Button
                 type="submit"
                 variant={operation === "UNLOCK" ? "danger" : "primary"}

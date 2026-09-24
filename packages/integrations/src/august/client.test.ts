@@ -86,7 +86,7 @@ describe("AugustClient", () => {
 
     const detail = await client.getLockDetail("lock-1");
 
-    expect(mockRequest).toHaveBeenCalledWith("/locks/lock-1");
+    expect(mockRequest).toHaveBeenCalledWith("/locks/lock-1", {}, {});
     expect(detail).toEqual({
       id: "lock-1",
       name: "Front Door",
@@ -342,7 +342,10 @@ describe("AugustClient", () => {
       await client.connect();
 
       for (const call of mockRequest.mock.calls) {
-        expect(call).toHaveLength(1); // just the path — no init, no per-call options at all
+        // No per-call maxRetries override on a default read (getLockDetail
+        // passes an empty options object; the others pass only the path).
+        const callOptions = call[2] as { maxRetries?: number } | undefined;
+        expect(callOptions?.maxRetries).toBeUndefined();
       }
     });
   });

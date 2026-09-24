@@ -61,6 +61,10 @@ function resultMessage(state: AugustLockCommandActionState): string | null {
       return `This test did not succeed — a real command reached the lock and failed: ${state.reason} This device is now BLOCKED from further testing through this workflow. Do not retry; contact an admin.`;
     case "ambiguous":
       return state.reason;
+    // Not expected here (an unverified lock already in the requested state
+    // is REJECTED instead), but never shown as a verification success.
+    case "no_action":
+      return `No command was sent — this lock already reports "${state.lockState ?? "the requested state"}". This does not verify the lock.`;
   }
 }
 

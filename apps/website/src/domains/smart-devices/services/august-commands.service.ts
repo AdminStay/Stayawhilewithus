@@ -16,6 +16,15 @@ import { recordAudit } from "@/platform/audit/record-audit";
 
 export type AugustLockCommandResult =
   | { status: "success"; lockState: string | null }
+  /**
+   * 2026-09-25: the lock already reported the requested target state
+   * BEFORE this call, so no physical command was sent. Only ever returned
+   * for routine control on an already-VERIFIED device (a first-verification
+   * attempt in this situation is REJECTED instead). Deliberately NOT a
+   * `success` variant: nothing moved, so it must never read as, or count
+   * toward, a confirmed transition.
+   */
+  | { status: "no_action"; lockState: string | null }
   | { status: "rejected"; reason: string }
   | { status: "already_running" }
   | { status: "failure"; reason: string }
@@ -71,6 +80,34 @@ const STALE_COMMAND_THRESHOLD_MS = 5 * 60 * 1000;
 const CONFIRMATION_POLL_ATTEMPTS = 4;
 const CONFIRMATION_POLL_DELAY_MS = 3000;
 
+/**
+ * Wall-clock budget for one sendAugustLockCommand() call's provider work
+ * (2026-09-25, pre-deploy item 2). It must finish well inside the hosting
+ * function limit, because a function killed mid-confirmation would send a
+ * physical command and then never write its audit row. The /locks page,
+ * which hosts this server action, sets `maxDuration = 60`; 45s of budget
+ * leaves 15s for the DB/audit writes and the `finally` cleanup.
+ *
+ * Worst case, step by step:
+ *   - Pre-command reads (default retries, about 31s worst each) are checked
+ *     against PRE_COMMAND_DEADLINE_MS after each one. Past it, the command
+ *     is REJECTED and nothing is sent: at most 15s + 31s = 46s.
+ *   - Otherwise the PUT starts by 15s and is single-attempt, so it ends by
+ *     25s at most (one 10s timeout).
+ *   - Each confirmation read is single-attempt (at most 10s). A poll, or the
+ *     pause before it, only starts if it can finish by the 45s budget; if
+ *     not, the result is AMBIGUOUS.
+ * Typical case (sub-second reads): roughly 1–10 seconds in total.
+ */
+const COMMAND_TIME_BUDGET_MS = 45_000;
+const PRE_COMMAND_DEADLINE_MS = 15_000;
+/** HttpClient's per-attempt timeout (DEFAULT_TIMEOUT_MS) — one single-attempt read's worst case. */
+const SINGLE_READ_WORST_CASE_MS = 10_000;
+
+/** Operator-facing reason when pre-command reads were too slow to safely start a physical command inside the time budget. */
+const SLOW_PROVIDER_REJECTED_REASON =
+  "August is responding too slowly right now, so no command was sent. Try again shortly.";
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -113,20 +150,82 @@ async function pollForConfirmedLockState(
   client: AugustClient,
   externalDeviceId: string,
   operation: AugustLockOperation,
+  deadline: number,
 ): Promise<AugustLockDetail | null> {
   const expected = expectedLockStateFor(operation);
   for (let attempt = 0; attempt < CONFIRMATION_POLL_ATTEMPTS; attempt++) {
-    if (attempt > 0) await sleep(CONFIRMATION_POLL_DELAY_MS);
+    const pause = attempt > 0 ? CONFIRMATION_POLL_DELAY_MS : 0;
+    // Only start a poll (and its pause) if it can finish inside the time
+    // budget — see COMMAND_TIME_BUDGET_MS.
+    if (Date.now() + pause + SINGLE_READ_WORST_CASE_MS > deadline) break;
+    if (pause > 0) await sleep(pause);
     try {
-      const detail = await client.getLockDetail(externalDeviceId);
+      // Single attempt: this loop is the retry mechanism, and one timeout
+      // per read is what makes the budget check above hold.
+      const detail = await client.getLockDetail(externalDeviceId, {
+        maxRetries: 0,
+      });
       if (detail.lockState?.toLowerCase() === expected) return detail;
     } catch {
-      // A read failure (after its own internal retries) is treated the
-      // same as "no confirmation yet" — try again on the next poll rather
-      // than aborting the whole confirmation window on one bad read.
+      // A read failure is treated the same as "no confirmation yet" — try
+      // again on the next poll rather than aborting the whole window.
     }
   }
   return null;
+}
+
+/**
+ * Read-only, single-device lookup of the same history
+ * getLatestAugustLockCommandOutcomes() reads for the whole dashboard —
+ * used internally by sendAugustLockCommand()'s already-in-requested-state
+ * check (2026-09-25) to decide whether THIS exact attempt is still a
+ * first-verification one (never positively proven yet) or routine control
+ * on an already-VERIFIED device. Deliberately not the exported,
+ * permission-checked function: the caller here is already inside
+ * sendAugustLockCommand() itself, past its own locks:manage RBAC check,
+ * so a second smart_devices:read check would be redundant, not safer.
+ */
+async function getMostRecentRecordedOutcome(
+  smartDeviceId: string,
+): Promise<AugustLockCommandRecordedOutcome | undefined> {
+  const rows = await prisma.auditLog.findMany({
+    where: {
+      entityType: "SmartDevice",
+      entityId: smartDeviceId,
+      action: "smart_device.august_lock_command",
+    },
+    orderBy: { occurredAt: "desc" },
+    select: { afterState: true },
+  });
+  // Skips NO_ACTION_ALREADY_IN_STATE rows (and anything else unrecognized)
+  // so a no-op can never mask this device's real SUCCEEDED/FAILED/AMBIGUOUS
+  // history — same rule as getLatestAugustLockCommandOutcomes().
+  for (const row of rows) {
+    const outcome = parseRecordedOutcome(row.afterState);
+    if (outcome) return outcome;
+  }
+  return undefined;
+}
+
+/**
+ * The one place an AuditLog `afterState` is turned into a recorded outcome.
+ * Returns undefined for NO_ACTION_ALREADY_IN_STATE (no command was sent, so
+ * it is not evidence of anything about remote-command operability) and for
+ * any unrecognized value — callers then fall through to the next-older row.
+ */
+function parseRecordedOutcome(
+  afterState: Prisma.JsonValue | null,
+): AugustLockCommandRecordedOutcome | undefined {
+  const result = (afterState as { result?: unknown } | null)?.result;
+  if (
+    result === "SUCCEEDED" ||
+    result === "FAILED" ||
+    result === "REJECTED" ||
+    result === "AMBIGUOUS"
+  ) {
+    return result;
+  }
+  return undefined;
 }
 
 /**
@@ -556,16 +655,106 @@ export async function sendAugustLockCommand(
   // that point" (2026-09-25, the Orion incident's root cause investigation
   // — see this function's own doc comment item 6/7 below).
   let commandAttempted = false;
+  const startedAt = Date.now();
+
+  // Pre-command time check (see COMMAND_TIME_BUDGET_MS): if August's reads
+  // were too slow, refuse before any physical command is sent.
+  const rejectIfTooSlow = async (): Promise<AugustLockCommandResult | null> => {
+    if (Date.now() - startedAt <= PRE_COMMAND_DEADLINE_MS) return null;
+    await recordAuditSafely({
+      actor,
+      smartDeviceId: smartDevice.id,
+      propertyId,
+      operation: input.operation,
+      previousMetadata,
+      result: "REJECTED",
+      errorDetail: `Pre-command reads exceeded ${PRE_COMMAND_DEADLINE_MS}ms; no command sent.`,
+    });
+    return { status: "rejected", reason: SLOW_PROVIDER_REJECTED_REASON };
+  };
 
   try {
     const client = getAugustClientFromEnv();
 
     // Fresh capability refresh — never the stored snapshot.
     const freshDetail = await client.getLockDetail(externalDeviceId);
+    const slowAfterDetail = await rejectIfTooSlow();
+    if (slowAfterDetail) return slowAfterDetail;
     await prisma.providerDevice.update({
       where: { smartDeviceId: smartDevice.id },
       data: { rawMetadata: freshDetail as unknown as Prisma.InputJsonValue },
     });
+
+    // ALREADY-IN-REQUESTED-STATE CHECK (2026-09-25 correction): if the
+    // lock already reports the exact state this operation would produce,
+    // a later matching poll reading would prove nothing about whether the
+    // lock actually moved. Only checked when we have a real, valid current
+    // reading (`lockState !== null` — never guessed); a null/unknown
+    // current state means we have no evidence this would be a no-op, so we
+    // proceed normally.
+    const preCommandState = freshDetail.lockState?.toLowerCase() ?? null;
+    const targetState = expectedLockStateFor(input.operation);
+    if (preCommandState === targetState) {
+      const lastOutcome = await getMostRecentRecordedOutcome(smartDevice.id);
+      // Anything short of a real, on-record SUCCEEDED means this exact
+      // device has never had its remote-command operability positively
+      // proven yet (matches computeFirstTestEligibility's own definition)
+      // — a first-verification attempt here MUST be held to the "prove a
+      // real transition" bar, never allowed to pass on a pre-existing,
+      // unrelated state.
+      const isFirstVerification = lastOutcome !== "SUCCEEDED";
+
+      if (isFirstVerification) {
+        const requestedLabel = input.operation === "LOCK" ? "Lock" : "Unlock";
+        const oppositeLabel = input.operation === "LOCK" ? "Unlock" : "Lock";
+        const reason = `This lock is already ${preCommandState}, so a ${requestedLabel} test could not prove the lock physically moves. Test ${oppositeLabel} instead.`;
+        await recordAuditSafely({
+          actor,
+          smartDeviceId: smartDevice.id,
+          propertyId,
+          operation: input.operation,
+          previousMetadata,
+          result: "REJECTED",
+          errorDetail: `Already-in-requested-state pre-flight block (first verification only): lock already reports "${preCommandState}".`,
+        });
+        return { status: "rejected", reason };
+      }
+
+      // Routine control on an already-VERIFIED device: honest no-op.
+      // Never send a redundant physical command — the lock is already
+      // exactly where the operator wants it. Still persist the fresh
+      // telemetry we just read, same discipline as the real command path.
+      // Audited as NO_ACTION_ALREADY_IN_STATE, never SUCCEEDED: nothing
+      // moved, so this row must never count toward "verified" (see
+      // parseRecordedOutcome()).
+      const noopMetadata = mergeAugustLockMetadata(
+        (previousMetadata as Record<string, unknown> | null) ?? {},
+        {
+          batteryLevel: freshDetail.batteryLevel,
+          lockState: freshDetail.lockState,
+          telemetryUpdatedAt: freshDetail.telemetryUpdatedAt,
+        },
+      );
+      await prisma.smartDevice.update({
+        where: { id: smartDevice.id },
+        data: {
+          status: freshDetail.connectivity,
+          metadata: noopMetadata as Prisma.InputJsonValue,
+          lastSeenAt: freshDetail.seenAt ? new Date(freshDetail.seenAt) : null,
+        },
+      });
+      await recordAuditSafely({
+        actor,
+        smartDeviceId: smartDevice.id,
+        propertyId,
+        operation: input.operation,
+        previousMetadata,
+        result: "NO_ACTION_ALREADY_IN_STATE",
+        confirmedLockState: freshDetail.lockState,
+        note: `No command was sent: the lock already reported "${preCommandState}" before ${input.operation}.`,
+      });
+      return { status: "no_action", lockState: freshDetail.lockState };
+    }
 
     if (!freshDetail.serialNumber) {
       const reason =
@@ -585,6 +774,8 @@ export async function sendAugustLockCommand(
     const capabilities = await client.getLockCapabilities(
       freshDetail.serialNumber,
     );
+    const slowAfterCapabilities = await rejectIfTooSlow();
+    if (slowAfterCapabilities) return slowAfterCapabilities;
     const supported =
       input.operation === "LOCK"
         ? capabilities.lock
@@ -651,6 +842,7 @@ export async function sendAugustLockCommand(
       client,
       externalDeviceId,
       input.operation,
+      startedAt + COMMAND_TIME_BUDGET_MS,
     );
     if (!confirmed) {
       // August acknowledged the request (no HttpRequestError was thrown
@@ -791,9 +983,11 @@ async function recordAuditSafely(args: {
   propertyId: string;
   operation: AugustLockOperation;
   previousMetadata: Prisma.JsonValue;
-  result: "SUCCEEDED" | "FAILED" | "REJECTED" | "AMBIGUOUS";
+  result: AugustLockCommandRecordedOutcome | "NO_ACTION_ALREADY_IN_STATE";
   confirmedLockState?: string | null;
   errorDetail?: string;
+  /** Operator-readable explanation for a non-error outcome (NO_ACTION_ALREADY_IN_STATE). */
+  note?: string;
 }): Promise<void> {
   await recordAudit({
     actorUserId: args.actor.userId,
@@ -812,10 +1006,17 @@ async function recordAuditSafely(args: {
       ...(args.confirmedLockState !== undefined && {
         confirmedLockState: args.confirmedLockState,
       }),
+      ...(args.result === "NO_ACTION_ALREADY_IN_STATE" && {
+        commandSent: false,
+      }),
     } as Prisma.InputJsonValue,
-    metadata: args.errorDetail
-      ? ({ errorDetail: args.errorDetail } as Prisma.InputJsonValue)
-      : undefined,
+    metadata:
+      args.errorDetail || args.note
+        ? ({
+            ...(args.errorDetail && { errorDetail: args.errorDetail }),
+            ...(args.note && { note: args.note }),
+          } as Prisma.InputJsonValue)
+        : undefined,
   });
 }
 
@@ -869,17 +1070,11 @@ export async function getLatestAugustLockCommandOutcomes(
     // Rows are ordered most-recent-first — the first time we see a given
     // entityId is its most recent outcome; every later row for the same
     // device is older and ignored.
+    // NO_ACTION_ALREADY_IN_STATE rows parse to undefined and are skipped,
+    // so the device's next-older real outcome is used instead.
     if (outcomes.has(row.entityId)) continue;
-    const afterState = row.afterState as { result?: unknown } | null;
-    const result = afterState?.result;
-    if (
-      result === "SUCCEEDED" ||
-      result === "FAILED" ||
-      result === "REJECTED" ||
-      result === "AMBIGUOUS"
-    ) {
-      outcomes.set(row.entityId, result);
-    }
+    const outcome = parseRecordedOutcome(row.afterState);
+    if (outcome) outcomes.set(row.entityId, outcome);
   }
   return outcomes;
 }

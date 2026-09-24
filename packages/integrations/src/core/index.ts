@@ -1,5 +1,5 @@
 export { HttpClient, HttpRequestError } from "./http-client";
-export type { HttpClientOptions } from "./http-client";
+export type { HttpClientOptions, HttpRequestCallOptions } from "./http-client";
 export { verifyHmacSignature } from "./webhook-signature";
 export { NotImplementedError } from "./errors";
 export type {

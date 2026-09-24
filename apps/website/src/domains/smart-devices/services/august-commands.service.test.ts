@@ -75,6 +75,12 @@ const PROPERTY_ID = "22222222-2222-2222-2222-222222222222";
 const EXTERNAL_ID = "august-lock-1";
 const SERIAL_NUMBER = "M0123456";
 
+// Default lockState is deliberately "unlocked" (2026-09-25, the
+// already-in-requested-state correction) — most tests below request LOCK,
+// so this default represents a genuine, meaningful pre-command state
+// (opposite of the target) rather than accidentally colliding with the
+// new already-in-requested-state gate. Tests that specifically exercise
+// that gate, or that request UNLOCK/UNLATCH, override this explicitly.
 function freshDetail(overrides: Record<string, unknown> = {}) {
   return {
     id: EXTERNAL_ID,
@@ -82,7 +88,7 @@ function freshDetail(overrides: Record<string, unknown> = {}) {
     houseId: "house-1",
     batteryLevel: 80,
     connectivity: "ONLINE",
-    lockState: "locked",
+    lockState: "unlocked",
     telemetryUpdatedAt: "2026-09-18T00:00:00.000Z",
     seenAt: "2026-09-18T00:00:00.000Z",
     serialNumber: SERIAL_NUMBER,
@@ -138,6 +144,11 @@ describe("sendAugustLockCommand", () => {
     delete process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS;
     vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
     vi.mocked(prisma.smartDevice.findUnique).mockReset();
+    // Default: no prior recorded outcome for this device (a genuinely
+    // first-verification scenario) — tests that need a different history
+    // (e.g. "already SUCCEEDED, so this is routine control") override this
+    // explicitly.
+    vi.mocked(prisma.auditLog.findMany).mockReset().mockResolvedValue([]);
     mockTransaction.mockReset();
     mockGetLockDetail.mockReset();
     mockGetLockCapabilities.mockReset();
@@ -397,7 +408,7 @@ describe("sendAugustLockCommand", () => {
     );
     allowTransaction();
     mockGetLockDetail
-      .mockResolvedValueOnce(freshDetail())
+      .mockResolvedValueOnce(freshDetail({ lockState: "locked" })) // pre-command: genuine pending transition for UNLOCK
       .mockResolvedValueOnce(freshDetail({ lockState: "unlocked" }));
     mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
 
@@ -455,7 +466,9 @@ describe("sendAugustLockCommand", () => {
     );
     const staleMarker = new Date(Date.now() - 10 * 60 * 1000);
     allowTransaction(staleMarker);
-    mockGetLockDetail.mockResolvedValue(freshDetail());
+    mockGetLockDetail
+      .mockResolvedValueOnce(freshDetail()) // pre-command: "unlocked" (a genuine pending transition for LOCK)
+      .mockResolvedValue(freshDetail({ lockState: "locked" })); // confirmation poll matches immediately, no real delay
     mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
 
     const result = await sendAugustLockCommand(actor, {
@@ -533,7 +546,9 @@ describe("sendAugustLockCommand", () => {
       mappedEnabledDevice() as never,
     );
     allowTransaction();
-    mockGetLockDetail.mockResolvedValueOnce(freshDetail());
+    mockGetLockDetail.mockResolvedValueOnce(
+      freshDetail({ lockState: "locked" }), // pre-command: genuine pending transition for UNLOCK
+    );
     mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
     mockUnlock.mockRejectedValueOnce(
       new HttpRequestError("/remoteoperate/august-lock-1/unlock", 422),
@@ -598,7 +613,9 @@ describe("sendAugustLockCommand", () => {
         mappedEnabledDevice() as never,
       );
       allowTransaction();
-      mockGetLockDetail.mockResolvedValueOnce(freshDetail());
+      mockGetLockDetail.mockResolvedValueOnce(
+        freshDetail({ lockState: "locked" }), // pre-command: genuine pending transition for UNLOCK
+      );
       mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
       mockUnlock.mockRejectedValueOnce(
         new Error(
@@ -743,7 +760,7 @@ describe("sendAugustLockCommand", () => {
         );
         allowTransaction();
         mockGetLockDetail
-          .mockResolvedValueOnce(freshDetail()) // pre-command capability refresh
+          .mockResolvedValueOnce(freshDetail({ lockState: "locked" })) // pre-command: genuine pending transition for UNLOCK
           .mockResolvedValueOnce(freshDetail({ lockState: "unlocked" })); // poll attempt 1: confirmed immediately
         mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
 
@@ -802,7 +819,7 @@ describe("sendAugustLockCommand", () => {
         );
         allowTransaction();
         mockGetLockDetail
-          .mockResolvedValueOnce(freshDetail()) // pre-command capability refresh
+          .mockResolvedValueOnce(freshDetail({ lockState: "locked" })) // pre-command: genuine pending transition for UNLOCK
           .mockResolvedValueOnce(freshDetail({ lockState: "locked" })) // poll 1: STALE — bridge hasn't relayed the UNLOCK yet
           .mockResolvedValueOnce(freshDetail({ lockState: "locked" })) // poll 2: still stale
           .mockResolvedValueOnce(freshDetail({ lockState: "unlocked" })); // poll 3: finally matches
@@ -835,7 +852,7 @@ describe("sendAugustLockCommand", () => {
         );
         allowTransaction();
         mockGetLockDetail
-          .mockResolvedValueOnce(freshDetail()) // pre-command capability refresh
+          .mockResolvedValueOnce(freshDetail({ lockState: "locked" })) // pre-command: genuine pending transition for UNLOCK
           .mockResolvedValue(freshDetail({ lockState: "locked" })); // EVERY poll still reports "locked" — an UNLOCK was requested, never confirmed
         mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
 
@@ -1051,6 +1068,264 @@ describe("sendAugustLockCommand", () => {
     expect(updatedMetadata?.batteryLevel).toBe(77);
   });
 
+  describe("already-in-requested-state (2026-09-25): verification must prove a real physical transition", () => {
+    function historyRows(...results: string[]) {
+      return results.map((result) => ({ afterState: { result } }));
+    }
+
+    it("UNVERIFIED lock already locked + LOCK test: REJECTED, tells the operator to test Unlock, sends no command", async () => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+        EXTERNAL_ID,
+      ]);
+      mockGetLockDetail.mockResolvedValueOnce(
+        freshDetail({ lockState: "locked" }),
+      );
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason:
+          "This lock is already locked, so a Lock test could not prove the lock physically moves. Test Unlock instead.",
+      });
+      expect(mockLock).not.toHaveBeenCalled();
+      expect(mockUnlock).not.toHaveBeenCalled();
+      expect(mockGetLockCapabilities).not.toHaveBeenCalled();
+      expect(mockRecordAudit).toHaveBeenCalledTimes(1);
+      expect(mockRecordAudit.mock.calls[0]![0].afterState.result).toBe(
+        "REJECTED",
+      );
+    });
+
+    it("UNVERIFIED lock (only REJECTED history) already unlocked + UNLOCK test: REJECTED, tells the operator to test Lock", async () => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce(
+        historyRows("REJECTED") as never,
+      );
+      mockGetLockDetail.mockResolvedValueOnce(
+        freshDetail({ lockState: "unlocked" }),
+      );
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "UNLOCK",
+      });
+
+      expect(result.status).toBe("rejected");
+      expect(result).toMatchObject({
+        reason: expect.stringContaining("Test Lock instead."),
+      });
+      expect(mockUnlock).not.toHaveBeenCalled();
+    });
+
+    it("VERIFIED lock already in the requested state: NO_ACTION_ALREADY_IN_STATE, never SUCCEEDED, no command sent", async () => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce(
+        historyRows("SUCCEEDED") as never,
+      );
+      mockGetLockDetail.mockResolvedValueOnce(
+        freshDetail({ lockState: "locked" }),
+      );
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result).toEqual({ status: "no_action", lockState: "locked" });
+      expect(mockLock).not.toHaveBeenCalled();
+      expect(mockRecordAudit).toHaveBeenCalledTimes(1);
+      const audit = mockRecordAudit.mock.calls[0]![0];
+      expect(audit.afterState).toMatchObject({
+        operation: "LOCK",
+        result: "NO_ACTION_ALREADY_IN_STATE",
+        commandSent: false,
+      });
+      expect(audit.afterState.result).not.toBe("SUCCEEDED");
+      expect(audit.metadata.note).toContain("No command was sent");
+    });
+
+    it("a newer NO_ACTION row never masks the device's real SUCCEEDED history (still routine control, not a first verification)", async () => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce(
+        historyRows("NO_ACTION_ALREADY_IN_STATE", "SUCCEEDED") as never,
+      );
+      mockGetLockDetail.mockResolvedValueOnce(
+        freshDetail({ lockState: "locked" }),
+      );
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result.status).toBe("no_action");
+    });
+
+    it("a lock with only NO_ACTION history is still UNVERIFIED — a no-op never counts toward verified", async () => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce(
+        historyRows("NO_ACTION_ALREADY_IN_STATE") as never,
+      );
+      mockGetLockDetail.mockResolvedValueOnce(
+        freshDetail({ lockState: "locked" }),
+      );
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result.status).toBe("rejected");
+      expect(mockLock).not.toHaveBeenCalled();
+    });
+
+    it("an unknown/null pre-command state is not treated as already-in-state — the command proceeds normally", async () => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+        EXTERNAL_ID,
+      ]);
+      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+      mockGetLockDetail
+        .mockResolvedValueOnce(freshDetail({ lockState: null }))
+        .mockResolvedValue(freshDetail({ lockState: "locked" }));
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(mockLock).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ status: "success", lockState: "locked" });
+      expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("time budget (2026-09-25): the command path always finishes inside the /locks maxDuration", () => {
+    function advanceBy(ms: number) {
+      vi.setSystemTime(Date.now() + ms);
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+        EXTERNAL_ID,
+      ]);
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("a slow pre-command read (past 15s) is REJECTED before any physical command is sent", async () => {
+      mockGetLockDetail.mockImplementationOnce(async () => {
+        advanceBy(16_000);
+        return freshDetail();
+      });
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason:
+          "August is responding too slowly right now, so no command was sent. Try again shortly.",
+      });
+      expect(mockGetLockCapabilities).not.toHaveBeenCalled();
+      expect(mockLock).not.toHaveBeenCalled();
+      expect(mockRecordAudit.mock.calls[0]![0].afterState.result).toBe(
+        "REJECTED",
+      );
+    });
+
+    it("a slow capabilities read (past 15s total) is REJECTED before any physical command is sent", async () => {
+      mockGetLockDetail.mockResolvedValueOnce(freshDetail());
+      mockGetLockCapabilities.mockImplementationOnce(async () => {
+        advanceBy(16_000);
+        return FULLY_CAPABLE;
+      });
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result.status).toBe("rejected");
+      expect(mockLock).not.toHaveBeenCalled();
+    });
+
+    it("confirmation polling stops once another poll could not finish inside the 45s budget, and reports AMBIGUOUS", async () => {
+      mockGetLockDetail
+        .mockImplementationOnce(async () => {
+          advanceBy(14_000); // just under the pre-command deadline
+          return freshDetail();
+        })
+        .mockImplementation(async () => {
+          advanceBy(10_000); // every poll read takes its full single-attempt timeout
+          return freshDetail({ lockState: "unlocked" }); // never the requested state
+        });
+      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+
+      const resultPromise = sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+      await vi.runAllTimersAsync();
+      const result = await resultPromise;
+
+      expect(mockLock).toHaveBeenCalledTimes(1);
+      // Polls start at 14s (ends 24s) and 27s (ends 37s); a third would need
+      // 37 + 3 + 10 = 50s > 45s, so it is never started.
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(3);
+      expect(result.status).toBe("ambiguous");
+    });
+
+    it("confirmation poll reads are single-attempt; the pre-command read keeps default retries", async () => {
+      mockGetLockDetail
+        .mockResolvedValueOnce(freshDetail())
+        .mockResolvedValue(freshDetail({ lockState: "locked" }));
+      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+
+      await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(mockGetLockDetail).toHaveBeenNthCalledWith(1, EXTERNAL_ID);
+      expect(mockGetLockDetail).toHaveBeenNthCalledWith(2, EXTERNAL_ID, {
+        maxRetries: 0,
+      });
+    });
+  });
+
   describe("RETIREMENT-SAFETY (2026-09-23 release-review Fix 4): post-command confirmation write merges onto existing metadata instead of replacing it", () => {
     it("preserves an existing retiredAt in the confirmation write itself, while fresh battery/lockState/telemetry fields still update — a write-primitive test, not an assertion that Production should permit commands against retired devices (existing guards remain fail-closed and are untouched)", async () => {
       process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
@@ -1188,7 +1463,9 @@ describe("sendAugustLockCommand", () => {
       mappedEnabledDevice() as never,
     );
     allowTransaction();
-    mockGetLockDetail.mockResolvedValue(freshDetail({ lockState: "locked" }));
+    mockGetLockDetail
+      .mockResolvedValueOnce(freshDetail()) // pre-command: "unlocked" — genuine pending transition for LOCK
+      .mockResolvedValue(freshDetail({ lockState: "locked" }));
     mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
 
     const result = await sendAugustLockCommand(actor, {
@@ -1225,7 +1502,9 @@ describe("sendAugustLockCommand", () => {
       mappedEnabledDevice() as never,
     );
     allowTransaction();
-    mockGetLockDetail.mockResolvedValue(freshDetail());
+    mockGetLockDetail
+      .mockResolvedValueOnce(freshDetail()) // pre-command: "unlocked" (a genuine pending transition for LOCK)
+      .mockResolvedValue(freshDetail({ lockState: "locked" })); // confirmation poll matches immediately, no real delay
     mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
 
     await sendAugustLockCommand(actor, {
@@ -1488,6 +1767,37 @@ describe("getLatestAugustLockCommandOutcomes", () => {
     ]);
 
     expect(result.get(SMART_DEVICE_ID)).toBe("AMBIGUOUS");
+  });
+
+  it("skips a NO_ACTION_ALREADY_IN_STATE row and uses the device's next-older real outcome", async () => {
+    vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce([
+      {
+        entityId: SMART_DEVICE_ID,
+        afterState: { result: "NO_ACTION_ALREADY_IN_STATE" },
+      },
+      { entityId: SMART_DEVICE_ID, afterState: { result: "FAILED" } },
+    ] as never);
+
+    const result = await getLatestAugustLockCommandOutcomes(actor, [
+      SMART_DEVICE_ID,
+    ]);
+
+    expect(result.get(SMART_DEVICE_ID)).toBe("FAILED");
+  });
+
+  it("a device whose only rows are NO_ACTION_ALREADY_IN_STATE has no recorded outcome — never counted as verified", async () => {
+    vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce([
+      {
+        entityId: SMART_DEVICE_ID,
+        afterState: { result: "NO_ACTION_ALREADY_IN_STATE" },
+      },
+    ] as never);
+
+    const result = await getLatestAugustLockCommandOutcomes(actor, [
+      SMART_DEVICE_ID,
+    ]);
+
+    expect(result.has(SMART_DEVICE_ID)).toBe(false);
   });
 
   it("propagates denial when the actor lacks smart_devices:read, without querying the database", async () => {

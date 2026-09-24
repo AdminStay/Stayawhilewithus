@@ -76,6 +76,27 @@ describe("AugustLockControlButton", () => {
     expect(submittedFormData.get("operation")).toBe("LOCK");
   });
 
+  it("no_action (2026-09-25): says no command was sent — never phrased as a confirmed transition — and offers Close, not Confirm", async () => {
+    const action = vi
+      .fn()
+      .mockResolvedValue({ status: "no_action", lockState: "locked" });
+    renderButton({ operation: "LOCK", action });
+
+    fireEvent.click(screen.getByRole("button", { name: "Lock" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm Lock" }));
+
+    expect(
+      await screen.findByText(
+        'No command was sent — this lock already reports "locked".',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Confirmed/)).toBeNull();
+    expect(
+      screen.getAllByRole("button", { name: "Close" }).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Confirm Lock" })).toBeNull();
+  });
+
   describe("emphasis (2026-09-18 /locks UI cleanup)", () => {
     it("defaults to the normal secondary-button treatment when emphasis is omitted", () => {
       renderButton({ emphasis: undefined });

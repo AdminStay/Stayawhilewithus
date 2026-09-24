@@ -23,6 +23,15 @@ import {
 } from "@/domains/smart-devices/services/smart-devices.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
+/**
+ * Explicit hosting function limit (seconds) for this route, which also hosts
+ * the lock-command server action (sendAugustLockCommandAction). The command
+ * path's own time budget (COMMAND_TIME_BUDGET_MS = 45s, august-commands.service.ts)
+ * is sized to finish well inside this. 60 is valid on every Vercel plan,
+ * with or without Fluid compute.
+ */
+export const maxDuration = 60;
+
 export default async function LocksPage() {
   const actor = await getCurrentUser();
   const devices = await listSmartDevices(actor);

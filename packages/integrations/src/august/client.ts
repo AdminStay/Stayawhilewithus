@@ -1,6 +1,10 @@
 import type { SyncDirection } from "@stayw/database/enums";
 
-import { HttpClient, NotImplementedError } from "../core";
+import {
+  HttpClient,
+  NotImplementedError,
+  type HttpRequestCallOptions,
+} from "../core";
 import type {
   BaseIntegrationClient,
   IntegrationCapability,
@@ -245,10 +249,20 @@ export class AugustClient
    * timestamp for one lock. See AugustLockDetail's doc comment (./types.ts)
    * for exactly what each field means and why several are nullable rather
    * than guessed.
+   *
+   * `callOptions` (2026-09-25): lets a caller with its own retry loop and
+   * time budget — sendAugustLockCommand()'s confirmation polling — make a
+   * single-attempt read (`{ maxRetries: 0 }`) so each poll is bounded by
+   * one timeout. Omitted everywhere else, so default read retries apply.
    */
-  async getLockDetail(lockId: string): Promise<AugustLockDetail> {
+  async getLockDetail(
+    lockId: string,
+    callOptions: HttpRequestCallOptions = {},
+  ): Promise<AugustLockDetail> {
     const raw = await this.http.request<RawAugustLockDetail>(
       `/locks/${encodeURIComponent(lockId)}`,
+      {},
+      callOptions,
     );
     const lockStatus = raw.LockStatus;
     const validLockStatus = lockStatus?.valid === true;

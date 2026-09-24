@@ -334,6 +334,7 @@ export async function sendAugustLockCommandAction(
   // actually attempted, so there is no new outcome to reflect.
   if (
     result.status === "success" ||
+    result.status === "no_action" ||
     result.status === "failure" ||
     result.status === "rejected" ||
     result.status === "ambiguous"
