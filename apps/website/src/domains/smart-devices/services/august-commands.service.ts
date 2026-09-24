@@ -17,7 +17,8 @@ export type AugustLockCommandResult =
   | { status: "success"; lockState: string | null }
   | { status: "rejected"; reason: string }
   | { status: "already_running" }
-  | { status: "failure"; reason: string };
+  | { status: "failure"; reason: string }
+  | { status: "ambiguous"; reason: string };
 
 export interface SendAugustLockCommandInput {
   smartDeviceId: string;
@@ -107,6 +108,18 @@ const NOT_YET_VERIFIED_REASON =
   "Remote control has not been verified for this lock yet.";
 
 /**
+ * Distinct from LAST_ATTEMPT_FAILED_REASON on purpose (2026-09-25, the
+ * Orion incident) — an AMBIGUOUS outcome is not a confirmed provider
+ * rejection, so telling an operator "did not succeed" would overclaim
+ * evidence we don't have. This wording matches the operator-facing text
+ * the ambiguous/uncertain case explicitly calls for: never implies the
+ * command failed, never implies it succeeded, and is explicit that manual
+ * investigation (not a retry) is what resolves it.
+ */
+const AMBIGUOUS_OUTCOME_BLOCKED_REASON =
+  "Command outcome uncertain. Do not retry until the lock's physical/provider state has been verified. Contact an admin.";
+
+/**
  * Combines the real signals above into one UX decision — never "mapped +
  * enabled alone," and never "no evidence of failure" either. StayWhile's
  * requirement (2026-09-23 correction) is fail-closed and POSITIVE: a lock
@@ -125,6 +138,13 @@ const NOT_YET_VERIFIED_REASON =
  *     allowlist membership or the passage of time; only a later real
  *     `SUCCEEDED` attempt (not made by this function or this UI) would
  *     change that.
+ *   - most recent real attempt `AMBIGUOUS` (2026-09-25 — no definitive
+ *     response was ever received from August, e.g. Orion's real
+ *     connection-abort) — disabled, for the same reason as `FAILED`: we
+ *     have no evidence this device is safe to command again, only evidence
+ *     that we don't know what happened. Never treated as equivalent to a
+ *     real `FAILED` (it is not a confirmed rejection) and never treated as
+ *     "fixed" by anything short of manual investigation.
  *   - no real attempt on record at all — disabled/unverified. An
  *     allowlisted-but-never-tested lock is NOT presented as ready; absence
  *     of failure evidence is not proof of operability.
@@ -153,6 +173,9 @@ export function computeLockControlEligibility(
   }
   if (lastOutcome === "FAILED") {
     return { eligible: false, reason: LAST_ATTEMPT_FAILED_REASON };
+  }
+  if (lastOutcome === "AMBIGUOUS") {
+    return { eligible: false, reason: AMBIGUOUS_OUTCOME_BLOCKED_REASON };
   }
   // `undefined` (no real attempt on record) or `"REJECTED"` (a real attempt
   // was refused before ever reaching August) — neither is proof of real
@@ -196,6 +219,13 @@ export interface FirstTestEligibility {
  *   - its most recent real recorded outcome is NOT `FAILED` — permanently
  *     BLOCKED; must never be retried through this or any other control
  *     (e.g. MJ - Front Door's real 403).
+ *   - its most recent real recorded outcome is NOT `AMBIGUOUS` (2026-09-25
+ *     — Orion's real connection-abort, no definitive response ever
+ *     received) — blocked exactly like `FAILED`: an uncertain outcome must
+ *     never be automatically retryable, through this workflow or any
+ *     other, until a human has manually investigated. Never conflated with
+ *     `FAILED` itself (it is not evidence of a real rejection), but treated
+ *     identically for eligibility purposes.
  *
  * `undefined` (no real attempt on record at all) and `"REJECTED"` (only a
  * pre-flight refusal, never a real provider-level attempt) are both
@@ -210,6 +240,7 @@ export function computeFirstTestEligibility(
   if (externalDeviceId === null) return { eligible: false };
   if (lastOutcome === "SUCCEEDED") return { eligible: false };
   if (lastOutcome === "FAILED") return { eligible: false };
+  if (lastOutcome === "AMBIGUOUS") return { eligible: false };
   return { eligible: true };
 }
 
@@ -425,6 +456,14 @@ export async function sendAugustLockCommand(
   const previousMetadata = smartDevice.metadata;
   const propertyId = smartDevice.propertyId;
   const externalDeviceId = smartDevice.providerDevice.externalDeviceId;
+  // Set true only immediately before the real client.lock()/unlock()/
+  // unlatch() call below — the single fact the catch block below needs to
+  // tell "this failed before we ever tried to command the physical lock"
+  // (a pre-flight capability-read problem, unchanged FAILED classification)
+  // apart from "we tried to command it and something went wrong after
+  // that point" (2026-09-25, the Orion incident's root cause investigation
+  // — see this function's own doc comment item 6/7 below).
+  let commandAttempted = false;
 
   try {
     const client = getAugustClientFromEnv();
@@ -495,7 +534,10 @@ export async function sendAugustLockCommand(
       return { status: "rejected", reason };
     }
 
-    // The real command.
+    // The real command. Every existing safety check above this point has
+    // already passed — from here onward, any failure means we genuinely
+    // don't know for certain the physical lock was untouched.
+    commandAttempted = true;
     if (input.operation === "LOCK") {
       await client.lock(externalDeviceId);
     } else if (input.operation === "UNLOCK") {
@@ -558,17 +600,55 @@ export async function sendAugustLockCommand(
 
     return { status: "success", lockState: confirmed.lockState };
   } catch (err) {
-    const safeMessage = translateAugustCommandError(err);
+    // FAILED means real, DEFINITIVE evidence of a problem: either the
+    // failure happened before the real command was ever attempted (a
+    // pre-flight capability read broke — commandAttempted is still false),
+    // or August's own server sent back an actual HTTP response with a
+    // status code (HttpRequestError — a genuine, identifiable answer, even
+    // an unhappy one like a 403 refusal or a 422 bridge-offline). Either
+    // way we KNOW something concrete, and the existing MJ-style permanent
+    // block is the correct, evidence-backed response.
+    //
+    // AMBIGUOUS (2026-09-25, the Orion incident's root cause) is the other
+    // case: commandAttempted is true (we reached the point of calling
+    // client.lock()/unlock()/unlatch(), or the post-command confirmation
+    // read after it) AND the error is NOT an HttpRequestError — i.e. no
+    // response of any kind ever came back (a network-level abort/timeout,
+    // like HttpClient's own AbortController firing after its configured
+    // timeout with zero bytes received). We have no evidence the command
+    // reached August, no evidence it didn't, and no evidence of the
+    // resulting physical state — treating this as a confirmed "FAILED"
+    // would overclaim; treating it as safe-to-retry would ignore that a
+    // real write may already be in flight or already delivered. AMBIGUOUS
+    // blocks identically to FAILED (see computeLockControlEligibility/
+    // computeFirstTestEligibility) without claiming to be one.
+    const isDefinitive = !commandAttempted || err instanceof HttpRequestError;
+    const errorDetail = err instanceof Error ? err.message : String(err);
+
+    if (isDefinitive) {
+      const safeMessage = translateAugustCommandError(err);
+      await recordAuditSafely({
+        actor,
+        smartDeviceId: smartDevice.id,
+        propertyId,
+        operation: input.operation,
+        previousMetadata,
+        result: "FAILED",
+        errorDetail,
+      });
+      return { status: "failure", reason: safeMessage };
+    }
+
     await recordAuditSafely({
       actor,
       smartDeviceId: smartDevice.id,
       propertyId,
       operation: input.operation,
       previousMetadata,
-      result: "FAILED",
-      errorDetail: err instanceof Error ? err.message : String(err),
+      result: "AMBIGUOUS",
+      errorDetail,
     });
-    return { status: "failure", reason: safeMessage };
+    return { status: "ambiguous", reason: AMBIGUOUS_OUTCOME_BLOCKED_REASON };
   } finally {
     await prisma.smartDevice.update({
       where: { id: smartDevice.id },
@@ -589,7 +669,7 @@ async function recordAuditSafely(args: {
   propertyId: string;
   operation: AugustLockOperation;
   previousMetadata: Prisma.JsonValue;
-  result: "SUCCEEDED" | "FAILED" | "REJECTED";
+  result: "SUCCEEDED" | "FAILED" | "REJECTED" | "AMBIGUOUS";
   confirmedLockState?: string | null;
   errorDetail?: string;
 }): Promise<void> {
@@ -617,9 +697,9 @@ async function recordAuditSafely(args: {
   });
 }
 
-/** The one real recorded outcome kind that means "a live provider-level command attempt actually happened and did not succeed" — see getLatestAugustLockCommandOutcomes()'s own doc comment for why only this one matters for UI eligibility. */
+/** The real recorded outcome kinds — see getLatestAugustLockCommandOutcomes()'s own doc comment for what each means and why they matter for UI eligibility. `AMBIGUOUS` (2026-09-25) is distinct from `FAILED`: it means no definitive response was ever received at all (a network-level abort/timeout), not that August gave a real, identifiable refusal. */
 export type AugustLockCommandRecordedOutcome =
-  "SUCCEEDED" | "FAILED" | "REJECTED";
+  "SUCCEEDED" | "FAILED" | "REJECTED" | "AMBIGUOUS";
 
 /**
  * Read-only: the most recent recorded `smart_device.august_lock_command`
@@ -673,7 +753,8 @@ export async function getLatestAugustLockCommandOutcomes(
     if (
       result === "SUCCEEDED" ||
       result === "FAILED" ||
-      result === "REJECTED"
+      result === "REJECTED" ||
+      result === "AMBIGUOUS"
     ) {
       outcomes.set(row.entityId, result);
     }

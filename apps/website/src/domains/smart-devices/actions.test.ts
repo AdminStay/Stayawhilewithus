@@ -242,6 +242,22 @@ describe("sendAugustLockCommandAction", () => {
     expect(mockRevalidatePath).not.toHaveBeenCalled();
   });
 
+  it("REVALIDATES on an ambiguous result too (2026-09-25, the Orion incident correction) — an uncertain outcome must immediately re-derive as blocked, same as a real failure", async () => {
+    mockSendAugustLockCommand.mockResolvedValueOnce({
+      status: "ambiguous",
+      reason:
+        "Command outcome uncertain. Do not retry until the lock's physical/provider state has been verified. Contact an admin.",
+    });
+    const formData = new FormData();
+    formData.set("smartDeviceId", SMART_DEVICE_ID);
+    formData.set("operation", "LOCK");
+
+    const result = await sendAugustLockCommandAction(IDLE_COMMAND, formData);
+
+    expect(result.status).toBe("ambiguous");
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+  });
+
   it("rejects an operation value outside LOCK/UNLOCK/UNLATCH before ever calling the service — no fuzzy/derived targeting", async () => {
     const formData = new FormData();
     formData.set("smartDeviceId", SMART_DEVICE_ID);

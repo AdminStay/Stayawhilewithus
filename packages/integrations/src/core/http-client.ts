@@ -113,6 +113,25 @@ async function extractSafeErrorDetail(
   };
 }
 
+export interface HttpRequestCallOptions {
+  /**
+   * Per-call override of this client's own configured retry count
+   * (2026-09-25, the Orion incident's root-cause correction) — for a
+   * physical write command (August lock/unlock/unlatch), a network-level
+   * abort/timeout must never silently retransmit the same command, since
+   * we'd have no way to know whether an earlier attempt already reached
+   * the provider/lock. Callers making a real physical write pass
+   * `{ maxRetries: 0 }` here so that command gets at most one outbound
+   * attempt, while every other call on the same HttpClient instance
+   * (reads: getLockDetail, getLockCapabilities, listLocks, etc.) keeps
+   * this client's normal configured retry behavior untouched, since they
+   * simply omit this option. This is a per-call opt-in, never a global
+   * default change — see AugustClient.operate()'s own doc comment for the
+   * one real caller that uses it.
+   */
+  maxRetries?: number;
+}
+
 /**
  * Shared fetch wrapper for all integration clients: fixed base URL,
  * timeout via AbortController, and exponential-backoff retry on 5xx/network
@@ -121,8 +140,13 @@ async function extractSafeErrorDetail(
 export class HttpClient {
   constructor(private readonly opts: HttpClientOptions) {}
 
-  async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const maxRetries = this.opts.maxRetries ?? DEFAULT_MAX_RETRIES;
+  async request<T>(
+    path: string,
+    init: RequestInit = {},
+    callOptions: HttpRequestCallOptions = {},
+  ): Promise<T> {
+    const maxRetries =
+      callOptions.maxRetries ?? this.opts.maxRetries ?? DEFAULT_MAX_RETRIES;
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {

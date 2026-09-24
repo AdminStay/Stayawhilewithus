@@ -9,22 +9,32 @@ import type { AugustLockCommandActionState } from "../actions";
 const INITIAL_STATE: AugustLockCommandActionState = { status: "idle" };
 
 /**
- * Four real outcomes, deliberately worded so none can be mistaken for
- * another (2026-09-24 review):
+ * Five real outcomes, deliberately worded so none can be mistaken for
+ * another (2026-09-25 review, after the Orion incident):
  *
  *   - "success": the only case that reports a real, provider-confirmed
  *     lock state — never guessed, never shown for any other outcome.
- *   - "failure": a REAL command reached August and did not succeed
- *     (a genuine 403, a bridge timeout/busy/offline, etc. — see
- *     translateAugustCommandError()). Some of those underlying reasons say
- *     "try again shortly" on their own (a 423/408 is transient at the
- *     provider level), which would read as an invitation to immediately
- *     retry a device this workflow must now treat as permanently BLOCKED
- *     (the same computeFirstTestEligibility()/computeLockControlEligibility
- *     rule Majestic's real 403 is held to) — so this message leads with
- *     "did not succeed" / "BLOCKED" / "do not retry" first, with the raw
- *     safe reason folded in as supporting detail, never the other way
- *     around.
+ *   - "failure": a real, DEFINITIVE response came back from August (a
+ *     genuine HTTP status — 403, 422, 423, etc. — see
+ *     translateAugustCommandError()) that means the command did not
+ *     succeed. Some of those underlying reasons say "try again shortly" on
+ *     their own (a 423/408 is transient at the provider level), which
+ *     would read as an invitation to immediately retry a device this
+ *     workflow must now treat as permanently BLOCKED (the same
+ *     computeFirstTestEligibility()/computeLockControlEligibility rule
+ *     Majestic's real 403 is held to) — so this message leads with "did
+ *     not succeed" / "BLOCKED" / "do not retry" first, with the raw safe
+ *     reason folded in as supporting detail, never the other way around.
+ *   - "ambiguous": no definitive response was ever received at all — the
+ *     connection was aborted/timed out before August answered (see
+ *     sendAugustLockCommand()'s own doc comment on how this is
+ *     distinguished from "failure"). We do NOT know whether the command
+ *     reached the provider or the lock, and the lock's own reported state
+ *     is not trustworthy evidence either way. This is deliberately never
+ *     phrased as a failure (we have no evidence of one) and never implies
+ *     any physical state — it blocks exactly like "failure" (no automatic
+ *     retry, manual investigation required) but must never be confused
+ *     with a confirmed provider rejection.
  *   - "rejected": StayWhile's OWN pre-flight refused before any real
  *     command reached the provider at all (capability/allowlist/etc.) —
  *     never phrased as a failure of the physical lock, and explicitly
@@ -49,16 +59,23 @@ function resultMessage(state: AugustLockCommandActionState): string | null {
       return "No new command was sent — another command is already in progress for this lock. Wait for it to finish, then try again.";
     case "failure":
       return `This test did not succeed — a real command reached the lock and failed: ${state.reason} This device is now BLOCKED from further testing through this workflow. Do not retry; contact an admin.`;
+    case "ambiguous":
+      return state.reason;
   }
 }
 
 function resultTone(state: AugustLockCommandActionState): string {
   if (state.status === "success") return "text-success-600";
-  if (state.status === "failure") return "text-error-500";
+  // "ambiguous" is not a confirmed failure, but it blocks exactly like one
+  // (no automatic retry, manual investigation required) — it gets the same
+  // serious tone as a real failure, distinguished only by its wording.
+  if (state.status === "failure" || state.status === "ambiguous")
+    return "text-error-500";
   // "rejected" (stopped before reaching the lock) and "already_running"
   // (nothing sent at all) are both distinct from a real physical failure —
   // a separate, less alarming tone keeps an operator from reading either
-  // as "this lock is broken," which only a real FAILED outcome means.
+  // as "this lock is broken," which only a real FAILED or an AMBIGUOUS
+  // outcome means.
   return "text-warning-600";
 }
 
@@ -84,22 +101,37 @@ function resultTone(state: AugustLockCommandActionState): string {
  * and is not reimplemented here. This component adds no new command
  * backend — only a new, narrower trigger onto the old one.
  *
- * Never pre-selects LOCK or UNLOCK: both are separate, equally-weighted
- * submit buttons (`name="operation"`, distinct `value`s) inside one shared
- * form — the operator's own click, not a default, decides which value
- * `sendAugustLockCommandAction` ever receives. No allowlist/environment
- * value is read, held, or displayed anywhere in this file — eligibility to
- * even show this control comes from the caller's `FirstTestEligibility`
- * (safe, non-secret criteria only); the real allowlist stays a
- * server-side-only final gate that can still REJECT this exact same
- * attempt before any provider call, exactly as it always has.
+ * Never pre-selects LOCK or UNLOCK: LOCK and UNLOCK are each their OWN
+ * separate `<form>`, each with exactly one submit button and exactly one
+ * fixed hidden `operation` input — deliberately NOT one shared form with
+ * two `name="operation"` submit buttons distinguished only by which one
+ * was clicked. That design (used in an earlier version of this component)
+ * has a real, well-known HTML footgun: a form with more than one submit
+ * control resolves an *implicit* submission (pressing Enter, or any
+ * non-explicit-click activation) to the FIRST submit button in DOM order,
+ * regardless of which one the operator meant to use or last focused —
+ * and a `fireEvent.click()`-based unit test can never catch this, because
+ * it always targets a specific element directly. Two fully separate forms
+ * make this structurally impossible: each form has exactly one submit
+ * control, so there is no "first button" ambiguity for either an explicit
+ * click or an implicit submission to resolve incorrectly. This mirrors
+ * AugustLockControlButton's own long-established, already-safe pattern
+ * (two entirely separate component instances, one per operation) rather
+ * than inventing a new one.
  *
- * Once a real outcome is on record (success, failure, or a pre-flight
- * rejection), both operation buttons disappear — closing and reopening
- * this dialog (which re-reads the freshly-revalidated page's own
- * eligibility) is required for any further action, so a stale render can
- * never be used to silently retry a command that just failed or a test
- * that already succeeded.
+ * No allowlist/environment value is read, held, or displayed anywhere in
+ * this file — eligibility to even show this control comes from the
+ * caller's `FirstTestEligibility` (safe, non-secret criteria only); the
+ * real allowlist stays a server-side-only final gate that can still
+ * REJECT this exact same attempt before any provider call, exactly as it
+ * always has.
+ *
+ * Once a real outcome is on record (success, failure, a pre-flight
+ * rejection, or an ambiguous/uncertain result), both operation buttons
+ * disappear — closing and reopening this dialog (which re-reads the
+ * freshly-revalidated page's own eligibility) is required for any further
+ * action, so a stale render can never be used to silently retry a command
+ * that just failed, was left uncertain, or already succeeded.
  */
 export function AugustFirstTestButton({
   smartDeviceId,
@@ -118,15 +150,31 @@ export function AugustFirstTestButton({
     formData: FormData,
   ) => Promise<AugustLockCommandActionState>;
 }) {
-  const [state, formAction, isPending] = useActionState(action, INITIAL_STATE);
+  // Two fully independent useActionState instances — one per operation,
+  // each bound to its own single-button form — so neither can ever be
+  // populated by the other's submission. Only one of these is ever
+  // actually used per dialog lifetime (the operator picks one operation);
+  // `active` below is whichever one has moved past "idle".
+  const [lockState, lockFormAction, lockPending] = useActionState(
+    action,
+    INITIAL_STATE,
+  );
+  const [unlockState, unlockFormAction, unlockPending] = useActionState(
+    action,
+    INITIAL_STATE,
+  );
   const [open, setOpen] = useState(false);
+
+  const state = lockState.status !== "idle" ? lockState : unlockState;
+  const isPending = lockPending || unlockPending;
 
   // A real, on-record outcome (of any kind) — not "already_running", which
   // means nothing was actually attempted yet.
   const decided =
     state.status === "success" ||
     state.status === "failure" ||
-    state.status === "rejected";
+    state.status === "rejected" ||
+    state.status === "ambiguous";
 
   function handleClose() {
     if (isPending) return;
@@ -152,9 +200,7 @@ export function AugustFirstTestButton({
         onClose={handleClose}
         title="First verification test — not routine control"
       >
-        <form action={formAction} className="space-y-4">
-          <input type="hidden" name="smartDeviceId" value={smartDeviceId} />
-
+        <div className="space-y-4">
           <div className="space-y-2 text-sm text-ink">
             <p>
               <span className="font-medium">{propertyName}</span> — {lockName}
@@ -195,30 +241,39 @@ export function AugustFirstTestButton({
             </Button>
             {!decided && (
               <>
-                <Button
-                  type="submit"
-                  name="operation"
-                  value="LOCK"
-                  variant="primary"
-                  disabled={isPending}
-                >
-                  <Lock className="h-3.5 w-3.5" />
-                  {isPending ? "Testing…" : "Confirm — test LOCK"}
-                </Button>
-                <Button
-                  type="submit"
-                  name="operation"
-                  value="UNLOCK"
-                  variant="danger"
-                  disabled={isPending}
-                >
-                  <Unlock className="h-3.5 w-3.5" />
-                  {isPending ? "Testing…" : "Confirm — test UNLOCK"}
-                </Button>
+                {/* Its own form, its own single fixed hidden input, its own
+                    single submit button — no shared form, no second submit
+                    control that an implicit/Enter-key submission could ever
+                    resolve to instead. See this component's own doc comment
+                    for why. */}
+                <form action={lockFormAction}>
+                  <input
+                    type="hidden"
+                    name="smartDeviceId"
+                    value={smartDeviceId}
+                  />
+                  <input type="hidden" name="operation" value="LOCK" />
+                  <Button type="submit" variant="primary" disabled={isPending}>
+                    <Lock className="h-3.5 w-3.5" />
+                    {lockPending ? "Testing…" : "Confirm — test LOCK"}
+                  </Button>
+                </form>
+                <form action={unlockFormAction}>
+                  <input
+                    type="hidden"
+                    name="smartDeviceId"
+                    value={smartDeviceId}
+                  />
+                  <input type="hidden" name="operation" value="UNLOCK" />
+                  <Button type="submit" variant="danger" disabled={isPending}>
+                    <Unlock className="h-3.5 w-3.5" />
+                    {unlockPending ? "Testing…" : "Confirm — test UNLOCK"}
+                  </Button>
+                </form>
               </>
             )}
           </div>
-        </form>
+        </div>
       </Dialog>
     </>
   );

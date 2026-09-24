@@ -23,6 +23,13 @@ function resultMessage(state: AugustLockCommandActionState): string | null {
       return "Another command is already in progress for this lock — try again shortly.";
     case "failure":
       return state.reason;
+    // 2026-09-25: no definitive response was ever received from August (a
+    // network-level abort/timeout, not a real rejection) — never phrased
+    // as a failure, and never implying a retry is safe. See
+    // sendAugustLockCommand()'s own doc comment (august-commands.service.ts)
+    // for why this is distinct from "failure".
+    case "ambiguous":
+      return state.reason;
   }
 }
 

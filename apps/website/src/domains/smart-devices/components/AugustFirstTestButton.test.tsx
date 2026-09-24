@@ -151,6 +151,55 @@ describe("AugustFirstTestButton", () => {
     expect(submittedFormData.get("operation")).toBe("UNLOCK");
   });
 
+  it("ROOT CAUSE REGRESSION (Orion incident, 2026-09-25): LOCK and UNLOCK are two fully separate forms, so an implicit/non-click submission of either form (e.g. the real HTML behavior of Enter defaulting to a form's first/only submit button) can only ever resolve to THAT form's own fixed operation — never the other form's", () => {
+    const action = vi.fn().mockResolvedValue({ status: "idle" });
+    const { container } = render(
+      <AugustFirstTestButton
+        smartDeviceId="lock-xyz"
+        lockName="Side Door"
+        propertyName="Camingo"
+        currentLockState={null}
+        action={action}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /test controllability/i }),
+    );
+
+    const forms = container.querySelectorAll("form");
+    expect(forms).toHaveLength(2); // exactly one form per operation — no shared form with two submit buttons
+
+    const lockForm = Array.from(forms).find((f) =>
+      f.querySelector('input[name="operation"][value="LOCK"]'),
+    )!;
+    const unlockForm = Array.from(forms).find((f) =>
+      f.querySelector('input[name="operation"][value="UNLOCK"]'),
+    )!;
+    expect(lockForm).toBeTruthy();
+    expect(unlockForm).toBeTruthy();
+    expect(lockForm).not.toBe(unlockForm);
+    // Each form has exactly one submit control — the structural property
+    // that makes "which button does an implicit submission resolve to"
+    // unambiguous, regardless of DOM order or which one was last focused.
+    expect(lockForm.querySelectorAll('button[type="submit"]')).toHaveLength(1);
+    expect(unlockForm.querySelectorAll('button[type="submit"]')).toHaveLength(
+      1,
+    );
+
+    // Simulate an implicit submission of the UNLOCK form specifically (not
+    // a click on any button) — this is exactly the class of submission a
+    // fireEvent.click on a specific button can never exercise, and exactly
+    // the ambiguity a single shared form with two submit buttons could not
+    // structurally rule out.
+    fireEvent.submit(unlockForm);
+
+    expect(action).toHaveBeenCalledTimes(1);
+    const submitted = action.mock.calls[0]?.[1] as FormData;
+    expect(submitted.get("operation")).toBe("UNLOCK");
+    expect(submitted.get("smartDeviceId")).toBe("lock-xyz");
+  });
+
   it("after a real FAILED outcome, both operation buttons disappear — the dialog cannot be used to immediately retry", () => {
     const action = vi
       .fn()
@@ -353,6 +402,49 @@ describe("AugustFirstTestButton", () => {
       expect(
         screen.getByRole("button", { name: /confirm.*test lock/i }),
       ).toBeTruthy();
+    });
+  });
+
+  it("OUTCOME CLARITY (Orion incident, 2026-09-25): AMBIGUOUS never claims success, never claims a confirmed failure, blocks further attempts in this dialog, and never guesses a physical lock state", () => {
+    const action = vi.fn().mockResolvedValue({
+      status: "ambiguous",
+      reason:
+        "Command outcome uncertain. Do not retry until the lock's physical/provider state has been verified. Contact an admin.",
+    });
+    render(
+      <AugustFirstTestButton
+        smartDeviceId="lock-1"
+        lockName="Orion - Front Door"
+        propertyName="Orion's Landing"
+        currentLockState="locked"
+        action={action}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /test controllability/i }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /confirm.*test lock/i }),
+    );
+
+    return screen.findByText(/uncertain/i).then((el) => {
+      expect(el.textContent).not.toMatch(/success|succeeded/i);
+      expect(el.textContent).toMatch(/do not retry/i);
+      // Never a physical-state claim of any kind — "locked"/"unlocked" must
+      // never appear in this message, unlike the real "success" message.
+      expect(el.textContent).not.toMatch(/locked|unlocked/i);
+      // Same serious tone as a real failure, but distinguishable by text.
+      expect(el.className).toMatch(/text-error-500/);
+      // No automatic retry: both operation buttons disappear, same as a
+      // real FAILED outcome — closing and reopening (re-reading freshly
+      // revalidated eligibility) is required for any further action.
+      expect(
+        screen.queryByRole("button", { name: /confirm.*test lock/i }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: /confirm.*test unlock/i }),
+      ).toBeNull();
     });
   });
 });

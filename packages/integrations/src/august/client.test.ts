@@ -283,29 +283,33 @@ describe("AugustClient", () => {
   });
 
   describe("lock() / unlock() / unlatch()", () => {
-    it("lock() sends PUT /remoteoperate/{lockId}/lock", async () => {
+    it("lock() sends PUT /remoteoperate/{lockId}/lock with maxRetries: 0 (2026-09-25, physical-write single-attempt correction — see operate()'s own doc comment)", async () => {
       mockRequest.mockResolvedValueOnce({});
       const client = new AugustClient(credentials);
 
       await client.lock("lock-1");
 
-      expect(mockRequest).toHaveBeenCalledWith("/remoteoperate/lock-1/lock", {
-        method: "PUT",
-      });
+      expect(mockRequest).toHaveBeenCalledWith(
+        "/remoteoperate/lock-1/lock",
+        { method: "PUT" },
+        { maxRetries: 0 },
+      );
     });
 
-    it("unlock() sends PUT /remoteoperate/{lockId}/unlock", async () => {
+    it("unlock() sends PUT /remoteoperate/{lockId}/unlock with maxRetries: 0", async () => {
       mockRequest.mockResolvedValueOnce({});
       const client = new AugustClient(credentials);
 
       await client.unlock("lock-1");
 
-      expect(mockRequest).toHaveBeenCalledWith("/remoteoperate/lock-1/unlock", {
-        method: "PUT",
-      });
+      expect(mockRequest).toHaveBeenCalledWith(
+        "/remoteoperate/lock-1/unlock",
+        { method: "PUT" },
+        { maxRetries: 0 },
+      );
     });
 
-    it("unlatch() sends PUT /remoteoperate/{lockId}/unlatch", async () => {
+    it("unlatch() sends PUT /remoteoperate/{lockId}/unlatch with maxRetries: 0", async () => {
       mockRequest.mockResolvedValueOnce({});
       const client = new AugustClient(credentials);
 
@@ -314,6 +318,7 @@ describe("AugustClient", () => {
       expect(mockRequest).toHaveBeenCalledWith(
         "/remoteoperate/lock-1/unlatch",
         { method: "PUT" },
+        { maxRetries: 0 },
       );
     });
 
@@ -324,6 +329,21 @@ describe("AugustClient", () => {
       const client = new AugustClient(credentials);
 
       await expect(client.lock("lock-1")).rejects.toThrow("422");
+    });
+
+    it("every read method on this client (getLockDetail, getLockCapabilities, listLocks, connect) omits the maxRetries override — only the three physical write calls opt into single-attempt behavior", async () => {
+      mockRequest.mockClear(); // isolate this test's own calls from every earlier test's accumulated call history (this file never resets mockRequest between tests)
+      mockRequest.mockResolvedValue({});
+      const client = new AugustClient(credentials);
+
+      await client.getLockDetail("lock-1");
+      await client.getLockCapabilities("M0123456");
+      await client.listLocks();
+      await client.connect();
+
+      for (const call of mockRequest.mock.calls) {
+        expect(call).toHaveLength(1); // just the path — no init, no per-call options at all
+      }
     });
   });
 });

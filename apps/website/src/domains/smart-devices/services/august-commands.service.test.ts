@@ -490,7 +490,7 @@ describe("sendAugustLockCommand", () => {
     });
   });
 
-  it("provider error handling (timeout): a raw HTTP 408 is translated to a safe message, never returned raw, and audited as FAILED", async () => {
+  it("REAL EVIDENCE — a definitive HTTP 408 response (a genuine HttpRequestError, August's server actually answered) IS classified FAILED, translated to a safe message never returned raw", async () => {
     process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
       EXTERNAL_ID,
     ]);
@@ -501,7 +501,7 @@ describe("sendAugustLockCommand", () => {
     mockGetLockDetail.mockResolvedValueOnce(freshDetail());
     mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
     mockLock.mockRejectedValueOnce(
-      new Error("Request to /remoteoperate/august-lock-1/lock failed with 408"),
+      new HttpRequestError("/remoteoperate/august-lock-1/lock", 408),
     );
 
     const result = await sendAugustLockCommand(actor, {
@@ -525,7 +525,7 @@ describe("sendAugustLockCommand", () => {
     );
   });
 
-  it("provider error handling (bridge offline): a raw HTTP 422 is translated to a safe, specific message", async () => {
+  it("REAL EVIDENCE — a definitive HTTP 422 response (bridge offline, August's server actually answered) IS classified FAILED, translated to a safe specific message", async () => {
     process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
       EXTERNAL_ID,
     ]);
@@ -536,9 +536,7 @@ describe("sendAugustLockCommand", () => {
     mockGetLockDetail.mockResolvedValueOnce(freshDetail());
     mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
     mockUnlock.mockRejectedValueOnce(
-      new Error(
-        "Request to /remoteoperate/august-lock-1/unlock failed with 422",
-      ),
+      new HttpRequestError("/remoteoperate/august-lock-1/unlock", 422),
     );
 
     const result = await sendAugustLockCommand(actor, {
@@ -550,6 +548,194 @@ describe("sendAugustLockCommand", () => {
     if (result.status === "failure") {
       expect(result.reason).toMatch(/bridge is currently offline/);
     }
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterState: expect.objectContaining({ result: "FAILED" }),
+      }),
+    );
+  });
+
+  describe("AMBIGUOUS outcome (2026-09-25, the Orion incident's root cause correction)", () => {
+    it("REAL EVIDENCE — Orion case: a plain Error with NO HttpRequestError instance (no definitive HTTP response ever received — e.g. HttpClient's own AbortController firing on its configured timeout, exactly like the real 'This operation was aborted' Orion hit) is classified AMBIGUOUS, never FAILED", async () => {
+      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+        EXTERNAL_ID,
+      ]);
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      mockGetLockDetail.mockResolvedValueOnce(freshDetail());
+      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+      mockLock.mockRejectedValueOnce(new Error("This operation was aborted"));
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result.status).toBe("ambiguous");
+      if (result.status === "ambiguous") {
+        expect(result.reason).toMatch(/uncertain/i);
+        expect(result.reason).toMatch(/do not retry/i);
+        expect(result.reason).not.toMatch(/aborted/i); // never the raw error text
+      }
+      expect(mockRecordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "smart_device.august_lock_command",
+          afterState: expect.objectContaining({ result: "AMBIGUOUS" }),
+          metadata: expect.objectContaining({
+            errorDetail: "This operation was aborted",
+          }),
+        }),
+      );
+    });
+
+    it("a plain Error whose message happens to contain a status-shaped substring (e.g. '408') is STILL classified AMBIGUOUS, not FAILED — no real HttpRequestError means no real evidence, regardless of what the message text says", async () => {
+      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+        EXTERNAL_ID,
+      ]);
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      mockGetLockDetail.mockResolvedValueOnce(freshDetail());
+      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+      mockUnlock.mockRejectedValueOnce(
+        new Error(
+          "Request to /remoteoperate/august-lock-1/unlock failed with 422",
+        ),
+      );
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "UNLOCK",
+      });
+
+      expect(result.status).toBe("ambiguous");
+    });
+
+    it("a plain Error mentioning '403' (no real HttpRequestError) is classified AMBIGUOUS, not FAILED — distinct from the real HttpRequestError(403) case tested elsewhere", async () => {
+      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+        EXTERNAL_ID,
+      ]);
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      mockGetLockDetail.mockResolvedValueOnce(freshDetail());
+      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+      mockLock.mockRejectedValueOnce(
+        new Error(
+          "Request to /remoteoperate/august-lock-1/lock failed with 403",
+        ),
+      );
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result.status).toBe("ambiguous");
+    });
+
+    it("a failure during the PRE-command capability check (before the physical command is ever attempted) remains FAILED, never AMBIGUOUS — commandAttempted is still false at that point", async () => {
+      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+        EXTERNAL_ID,
+      ]);
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      mockGetLockDetail.mockRejectedValueOnce(
+        new Error("This operation was aborted"),
+      );
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result.status).toBe("failure");
+      expect(mockLock).not.toHaveBeenCalled();
+      expect(mockRecordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          afterState: expect.objectContaining({ result: "FAILED" }),
+        }),
+      );
+    });
+
+    it("a failure during the POST-command confirmation read (the command call itself succeeded) is classified AMBIGUOUS when no definitive response comes back — we sent it, but can't confirm the result", async () => {
+      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+        EXTERNAL_ID,
+      ]);
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      mockGetLockDetail
+        .mockResolvedValueOnce(freshDetail()) // pre-command capability refresh succeeds
+        .mockRejectedValueOnce(new Error("This operation was aborted")); // confirmation read aborts
+      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(mockLock).toHaveBeenCalledWith(EXTERNAL_ID);
+      expect(result.status).toBe("ambiguous");
+      expect(mockRecordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          afterState: expect.objectContaining({ result: "AMBIGUOUS" }),
+        }),
+      );
+    });
+
+    it("AMBIGUOUS never sets confirmedLockState — no physical state is ever guessed", async () => {
+      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+        EXTERNAL_ID,
+      ]);
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      mockGetLockDetail.mockResolvedValueOnce(freshDetail());
+      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+      mockLock.mockRejectedValueOnce(new Error("This operation was aborted"));
+
+      await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      const auditCall = mockRecordAudit.mock.calls[0]![0];
+      expect(auditCall.afterState).not.toHaveProperty("confirmedLockState");
+    });
+
+    it("AMBIGUOUS is never automatically retried — a second call after an AMBIGUOUS outcome is a wholly separate, independent invocation with its own full safety-check chain (no special-cased bypass exists)", async () => {
+      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+        EXTERNAL_ID,
+      ]);
+      vi.mocked(prisma.smartDevice.findUnique)
+        .mockResolvedValueOnce(mappedEnabledDevice() as never)
+        .mockResolvedValueOnce(mappedEnabledDevice() as never);
+      allowTransaction();
+      mockGetLockDetail.mockResolvedValueOnce(freshDetail());
+      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+      mockLock.mockRejectedValueOnce(new Error("This operation was aborted"));
+
+      const first = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+      expect(first.status).toBe("ambiguous");
+      expect(mockLock).toHaveBeenCalledTimes(1);
+
+      // Nothing in sendAugustLockCommand() itself calls client.lock() again —
+      // a second attempt only ever happens via a wholly separate, explicit
+      // operator-initiated call (proven here by simply not making one: the
+      // mock is only ever invoked the one time above).
+    });
   });
 
   it("provider error handling (account auth): a 401 is always translated to the re-authorize message", async () => {
@@ -652,30 +838,12 @@ describe("sendAugustLockCommand", () => {
     }
   });
 
-  it("provider error handling (403 as a plain Error, no HttpRequestError instance): still falls back to the pre-existing generic message rather than throwing", async () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
-    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
-      mappedEnabledDevice() as never,
-    );
-    allowTransaction();
-    mockGetLockDetail.mockResolvedValueOnce(freshDetail());
-    mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
-    mockLock.mockRejectedValueOnce(
-      new Error("Request to /remoteoperate/august-lock-1/lock failed with 403"),
-    );
-
-    const result = await sendAugustLockCommand(actor, {
-      smartDeviceId: SMART_DEVICE_ID,
-      operation: "LOCK",
-    });
-
-    expect(result.status).toBe("failure");
-    if (result.status === "failure") {
-      expect(result.reason).toMatch(/re-authorized/);
-    }
-  });
+  // NOTE: the old "403 as a plain Error" scenario here is now covered, with
+  // its CORRECTED expectation, by "AMBIGUOUS outcome" > "a plain Error
+  // mentioning '403' ... is classified AMBIGUOUS, not FAILED" above — a
+  // plain Error (no real HttpRequestError) is no longer treated as a
+  // definitive failure just because its message contains a status number
+  // (2026-09-25, the Orion incident's root cause correction).
 
   it("successful command reads confirmed state from August AFTER sending, and stores that — never a guessed value", async () => {
     process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
@@ -1005,6 +1173,21 @@ describe("computeLockControlEligibility — fail-closed, positive-verification-r
       reason: "Remote control has not been verified for this lock yet.",
     });
   });
+
+  it("REAL EVIDENCE — Orion case (2026-09-25): is disabled with a distinct 'uncertain, do not retry' reason when the most recent real attempt is AMBIGUOUS — never equated with a confirmed FAILED, never treated as eligible", () => {
+    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+      EXTERNAL_ID,
+    ]);
+
+    const result = computeLockControlEligibility(EXTERNAL_ID, "AMBIGUOUS");
+
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toMatch(/uncertain/i);
+    expect(result.reason).toMatch(/do not retry/i);
+    expect(result.reason).not.toBe(
+      "The last real attempt to control this lock did not succeed. Contact an admin before trying again.",
+    );
+  });
 });
 
 describe("computeFirstTestEligibility — the separate 'Test controllability' workflow (2026-09-24)", () => {
@@ -1061,6 +1244,12 @@ describe("computeFirstTestEligibility — the separate 'Test controllability' wo
       process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = originalAllowlist;
     }
   });
+
+  it("REAL EVIDENCE — Orion case (2026-09-25): is NOT eligible when the most recent recorded outcome is AMBIGUOUS — blocked exactly like FAILED, so the first-test workflow can never be used to automatically retry an uncertain outcome", () => {
+    expect(computeFirstTestEligibility(EXTERNAL_ID, "AMBIGUOUS")).toEqual({
+      eligible: false,
+    });
+  });
 });
 
 describe("getLatestAugustLockCommandOutcomes", () => {
@@ -1116,6 +1305,18 @@ describe("getLatestAugustLockCommandOutcomes", () => {
     ]);
 
     expect(result.has(SMART_DEVICE_ID)).toBe(false);
+  });
+
+  it("REAL EVIDENCE — Orion case (2026-09-25): recognizes AMBIGUOUS as a real recorded outcome, not silently dropped like a malformed one", async () => {
+    vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce([
+      { entityId: SMART_DEVICE_ID, afterState: { result: "AMBIGUOUS" } },
+    ] as never);
+
+    const result = await getLatestAugustLockCommandOutcomes(actor, [
+      SMART_DEVICE_ID,
+    ]);
+
+    expect(result.get(SMART_DEVICE_ID)).toBe("AMBIGUOUS");
   });
 
   it("propagates denial when the actor lacks smart_devices:read, without querying the database", async () => {

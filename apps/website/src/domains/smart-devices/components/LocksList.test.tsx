@@ -756,6 +756,37 @@ describe("LocksList — 'Test controllability' first-verification workflow (2026
     ).toBe(true);
   });
 
+  it("AMBIGUOUS/uncertain lock (real EVIDENCE — Orion case, 2026-09-25): never shows 'Test controllability' — an uncertain outcome is blocked exactly like a confirmed FAILED, never automatically retryable", () => {
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              name: "Orion - Front Door",
+              controlEligibility: {
+                eligible: false,
+                reason:
+                  "Command outcome uncertain. Do not retry until the lock's physical/provider state has been verified. Contact an admin.",
+              },
+              firstTestEligibility: { eligible: false },
+            }),
+          ] as never
+        }
+        canControlLocks={true}
+        lockCommandAction={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /test controllability/i }),
+    ).toBeNull();
+    expect(
+      (screen.getByRole("button", { name: "Lock" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(screen.getByText(/uncertain/i)).toBeTruthy();
+  });
+
   it("unmapped/disabled lock: never shows 'Test controllability' — firstTestEligibility is null when the row isn't August/controllable at all", () => {
     render(
       <LocksList
@@ -811,8 +842,12 @@ describe("LocksList — 'Test controllability' first-verification workflow (2026
     });
     expect(testButtons).toHaveLength(2);
 
-    expect(within(rowFor("Row A")).getByDisplayValue("lock-aaa")).toBeTruthy();
-    expect(within(rowFor("Row B")).getByDisplayValue("lock-bbb")).toBeTruthy();
+    // Two forms per row (LOCK + UNLOCK), each with its own hidden
+    // smartDeviceId input — both must carry that exact row's own id.
+    const rowAIds = within(rowFor("Row A")).getAllByDisplayValue("lock-aaa");
+    const rowBIds = within(rowFor("Row B")).getAllByDisplayValue("lock-bbb");
+    expect(rowAIds).toHaveLength(2);
+    expect(rowBIds).toHaveLength(2);
     // Never the other row's id anywhere within this row's own subtree.
     expect(within(rowFor("Row A")).queryByDisplayValue("lock-bbb")).toBeNull();
     expect(within(rowFor("Row B")).queryByDisplayValue("lock-aaa")).toBeNull();

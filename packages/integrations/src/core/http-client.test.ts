@@ -70,15 +70,13 @@ describe("HttpClient", () => {
   });
 
   it("still retries a 5xx response up to maxRetries, then throws with detail", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        fakeResponse({
-          ok: false,
-          status: 503,
-          body: { message: "bridge overloaded" },
-        }),
-      );
+    const fetchMock = vi.fn().mockResolvedValue(
+      fakeResponse({
+        ok: false,
+        status: 503,
+        body: { message: "bridge overloaded" },
+      }),
+    );
     global.fetch = fetchMock;
     const client = new HttpClient({
       baseUrl: "https://example.test",
@@ -165,6 +163,89 @@ describe("HttpClient", () => {
       status: 403,
       providerErrorCode: undefined,
       providerMessage: undefined,
+    });
+  });
+
+  describe("per-call maxRetries override (2026-09-25, physical-write single-attempt correction)", () => {
+    it("a per-call { maxRetries: 0 } makes exactly ONE fetch attempt on a network-level failure (abort/timeout), even though the client's own configured maxRetries is higher", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockRejectedValue(new Error("This operation was aborted"));
+      global.fetch = fetchMock;
+      const client = new HttpClient({
+        baseUrl: "https://example.test",
+        maxRetries: 2, // the client's own default is still 2 — proves the override, not a global change
+      });
+
+      await expect(
+        client.request(
+          "/remoteoperate/x/lock",
+          { method: "PUT" },
+          { maxRetries: 0 },
+        ),
+      ).rejects.toThrow("This operation was aborted");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("a per-call { maxRetries: 0 } makes exactly ONE fetch attempt on a 5xx response too, never retrying even a transient-looking server error", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          fakeResponse({
+            ok: false,
+            status: 503,
+            body: { message: "bridge overloaded" },
+          }),
+        );
+      global.fetch = fetchMock;
+      const client = new HttpClient({
+        baseUrl: "https://example.test",
+        maxRetries: 2,
+      });
+
+      await expect(
+        client.request(
+          "/remoteoperate/x/unlock",
+          { method: "PUT" },
+          { maxRetries: 0 },
+        ),
+      ).rejects.toMatchObject({ status: 503 });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("omitting the per-call option preserves this client's existing configured retry behavior unchanged — proves ordinary read calls are unaffected by this correction", async () => {
+      const fetchMock = vi.fn().mockRejectedValue(new Error("network blip"));
+      global.fetch = fetchMock;
+      const client = new HttpClient({
+        baseUrl: "https://example.test",
+        maxRetries: 2,
+      });
+
+      await expect(client.request("/locks/mine")).rejects.toThrow(
+        "network blip",
+      );
+      // Same as the pre-existing 5xx-retry test above: 1 initial + 2 retries = 3 total.
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it("a per-call override still respects the immediate-throw-on-4xx rule — a 403 is never retried even if maxRetries were higher", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(fakeResponse({ ok: false, status: 403 }));
+      global.fetch = fetchMock;
+      const client = new HttpClient({
+        baseUrl: "https://example.test",
+        maxRetries: 5,
+      });
+
+      await expect(
+        client.request(
+          "/remoteoperate/x/lock",
+          { method: "PUT" },
+          { maxRetries: 0 },
+        ),
+      ).rejects.toBeInstanceOf(HttpRequestError);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -302,6 +302,23 @@ export class AugustClient
    * either. This method only proves the HTTP round trip succeeded (a 4xx/
    * 5xx throws, same as every other method on this client) — the *meaning*
    * of success is established by that follow-up read, not here.
+   *
+   * `{ maxRetries: 0 }` (2026-09-25, the Orion incident's root-cause
+   * correction): HttpClient's normal exponential-backoff retry-on-network-
+   * failure behavior is exactly right for a read, but wrong for a physical
+   * write — if this request times out or the connection aborts, we have no
+   * way to know whether August/the bridge already received and is
+   * processing the command, so silently retransmitting it could send a
+   * second real physical command on top of a first one we never confirmed.
+   * With this option, ANY failure here — a real HTTP error response or a
+   * network-level abort/timeout — is thrown immediately after this single
+   * attempt, never retried by this client; the resulting uncertainty is
+   * exactly what sendAugustLockCommand()'s AMBIGUOUS classification exists
+   * to represent honestly, one layer up. Every read method on this class
+   * (getLockDetail, getLockCapabilities, listLocks, connect/healthCheck/
+   * validateCredentials) is unaffected — none of them pass this option, so
+   * they keep this client's normal configured retry behavior via
+   * HttpClient's own default.
    */
   private async operate(
     lockId: string,
@@ -310,6 +327,7 @@ export class AugustClient
     await this.http.request<unknown>(
       `/remoteoperate/${encodeURIComponent(lockId)}/${segment}`,
       { method: "PUT" },
+      { maxRetries: 0 },
     );
   }
 
