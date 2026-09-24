@@ -7,6 +7,10 @@ import {
   updateReservationStatusSchema,
 } from "./schemas/reservations.schema";
 import {
+  syncOwnerRezReservations,
+  type OwnerRezReservationSyncResult,
+} from "./services/ownerrez-reservation-sync.service";
+import {
   createReservation,
   updateReservationStatus,
 } from "./services/reservations.service";
@@ -42,4 +46,53 @@ export async function updateReservationStatusAction(formData: FormData) {
 
   await updateReservationStatus(actor, reservationId, input);
   revalidatePath("/reservations");
+}
+
+export type SyncOwnerRezReservationsActionState =
+  | { status: "idle" }
+  | ({ status: "success"; syncedAt: string } & OwnerRezReservationSyncResult)
+  | { status: "already_running" }
+  | { status: "failure"; error: string };
+
+/**
+ * Manual "Sync Now" trigger for the real OwnerRez -> Reservation
+ * synchronization (see ownerrez-reservation-sync.service.ts's own doc
+ * comment for the full read/write boundary and matching discipline). Same
+ * guarded-outcome handling shape as refreshAugustAction
+ * (smart-devices/actions.ts) — already_running/failure are real outcomes
+ * from the service itself, not exceptions, so both are handled the same
+ * way as an unexpected thrown error.
+ */
+export async function syncOwnerRezReservationsAction(
+  _prevState: SyncOwnerRezReservationsActionState,
+): Promise<SyncOwnerRezReservationsActionState> {
+  try {
+    const actor = await getCurrentUser();
+    const result = await syncOwnerRezReservations(actor);
+
+    if (result.status === "already_running") {
+      return { status: "already_running" };
+    }
+    if (result.status === "failed") {
+      return { status: "failure", error: result.reason };
+    }
+
+    revalidatePath("/reservations");
+    revalidatePath("/");
+    return {
+      status: "success",
+      syncedAt: new Date().toISOString(),
+      created: result.created,
+      updated: result.updated,
+      unmatchedProperty: result.unmatchedProperty,
+      unrecognizedStatus: result.unrecognizedStatus,
+      guestErrors: result.guestErrors,
+    };
+  } catch (err) {
+    console.error("syncOwnerRezReservationsAction failed:", err);
+    return {
+      status: "failure",
+      error: "Something went wrong syncing OwnerRez reservations.",
+    };
+  }
 }

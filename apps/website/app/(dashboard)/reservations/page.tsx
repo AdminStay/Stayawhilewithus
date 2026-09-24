@@ -1,10 +1,13 @@
+import { hasPermission } from "@stayw/auth";
 import { DialogTrigger, Metric, MetricStrip, PageHeader } from "@stayw/ui";
 import { TrendingUp, Wallet } from "lucide-react";
 
 import { listGuests } from "@/domains/guests/services/guests.service";
 import { listProperties } from "@/domains/properties/services/properties.service";
+import { syncOwnerRezReservationsAction } from "@/domains/reservations/actions";
 import { CreateReservationForm } from "@/domains/reservations/components/CreateReservationForm";
 import { ReservationList } from "@/domains/reservations/components/ReservationList";
+import { SyncOwnerRezReservationsButton } from "@/domains/reservations/components/SyncOwnerRezReservationsButton";
 import {
   listReservations,
   type Reservation,
@@ -42,11 +45,14 @@ function computeRevenueMetrics(reservations: Reservation[]) {
 
 export default async function ReservationsPage() {
   const actor = await getCurrentUser();
-  const [reservations, properties, guests] = await Promise.all([
-    listReservations(actor),
-    listProperties(actor),
-    listGuests(actor),
-  ]);
+  const [reservations, properties, guests, canSyncOwnerRez] = await Promise.all(
+    [
+      listReservations(actor),
+      listProperties(actor),
+      listGuests(actor),
+      hasPermission(actor, "reservations:update"),
+    ],
+  );
 
   const { revenue, adr } = computeRevenueMetrics(reservations);
 
@@ -56,9 +62,19 @@ export default async function ReservationsPage() {
         title="Reservations"
         subtitle={`${reservations.length} ${reservations.length === 1 ? "reservation" : "reservations"} on the books`}
         actions={
-          <DialogTrigger label="Create reservation" title="Create reservation">
-            <CreateReservationForm properties={properties} guests={guests} />
-          </DialogTrigger>
+          <>
+            {canSyncOwnerRez && (
+              <SyncOwnerRezReservationsButton
+                action={syncOwnerRezReservationsAction}
+              />
+            )}
+            <DialogTrigger
+              label="Create reservation"
+              title="Create reservation"
+            >
+              <CreateReservationForm properties={properties} guests={guests} />
+            </DialogTrigger>
+          </>
         }
       />
       <MetricStrip xlColumns={3} className="mb-8">

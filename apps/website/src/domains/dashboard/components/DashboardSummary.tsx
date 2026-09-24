@@ -482,130 +482,124 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
             )}
           </div>
 
-          {(summary.arrivalsToday.length > 0 ||
-            summary.departuresToday.length > 0) && (
-            <div>
-              <SectionHeader title="Today's Check-ins & Check-outs" />
-              <div className="grid divide-y divide-border rounded-card border border-border sm:grid-cols-2 sm:divide-x sm:divide-y-0">
-                <div className="p-5">
-                  <h3 className="text-xs font-medium uppercase tracking-wide text-ink-muted">
-                    Arriving today
-                  </h3>
-                  {summary.arrivalsToday.length === 0 ? (
-                    <p className="mt-2 text-sm text-ink-muted">
-                      No arrivals today.
-                    </p>
-                  ) : (
-                    <ul className="mt-3 space-y-2 text-sm text-ink">
-                      {summary.arrivalsToday.map((r) => (
-                        <li
-                          key={r.id}
-                          className="flex items-center justify-between"
-                        >
-                          <span>{guestName(r.primaryGuest)}</span>
-                          <span className="text-ink-muted">
-                            {r.property?.name ?? "Property"}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                <div className="p-5">
-                  <h3 className="text-xs font-medium uppercase tracking-wide text-ink-muted">
-                    Checking out today
-                  </h3>
-                  {summary.departuresToday.length === 0 ? (
-                    <p className="mt-2 text-sm text-ink-muted">
-                      No check-outs today.
-                    </p>
-                  ) : (
-                    <ul className="mt-3 space-y-2 text-sm text-ink">
-                      {summary.departuresToday.map((r) => (
-                        <li
-                          key={r.id}
-                          className="flex items-center justify-between"
-                        >
-                          <span>{guestName(r.primaryGuest)}</span>
-                          <span className="text-ink-muted">
-                            {r.property?.name ?? "Property"}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
+          <div>
+            <SectionHeader title="Today's Check-ins & Check-outs" />
+            <div className="grid divide-y divide-border rounded-card border border-border sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+              <div className="p-5">
+                <h3 className="text-xs font-medium uppercase tracking-wide text-ink-muted">
+                  Arriving today
+                </h3>
+                {summary.arrivalsToday.length === 0 ? (
+                  <p className="mt-2 text-sm text-ink-muted">
+                    No arrivals today.
+                  </p>
+                ) : (
+                  <ul className="mt-3 space-y-2 text-sm text-ink">
+                    {summary.arrivalsToday.map((r) => (
+                      <li
+                        key={r.id}
+                        className="flex items-center justify-between"
+                      >
+                        <span>{guestName(r.primaryGuest)}</span>
+                        <span className="text-ink-muted">
+                          {r.property?.name ?? "Property"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="p-5">
+                <h3 className="text-xs font-medium uppercase tracking-wide text-ink-muted">
+                  Checking out today
+                </h3>
+                {summary.departuresToday.length === 0 ? (
+                  <p className="mt-2 text-sm text-ink-muted">
+                    No check-outs today.
+                  </p>
+                ) : (
+                  <ul className="mt-3 space-y-2 text-sm text-ink">
+                    {summary.departuresToday.map((r) => (
+                      <li
+                        key={r.id}
+                        className="flex items-center justify-between"
+                      >
+                        <span>{guestName(r.primaryGuest)}</span>
+                        <span className="text-ink-muted">
+                          {r.property?.name ?? "Property"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </div>
-          )}
+          </div>
 
-          {(summary.upcomingCheckIns.length > 0 ||
-            summary.upcomingCheckOuts.length > 0) && (
-            <div>
-              <SectionHeader
-                title="Coming Up"
-                description="Next few days, beyond today"
-              />
-              <div className="grid divide-y divide-border rounded-card border border-border sm:grid-cols-2 sm:divide-x sm:divide-y-0">
-                <div className="p-5">
-                  <h3 className="text-xs font-medium uppercase tracking-wide text-ink-muted">
-                    Upcoming check-ins
-                  </h3>
-                  {summary.upcomingCheckIns.length === 0 ? (
-                    <p className="mt-2 text-sm text-ink-muted">
-                      No upcoming check-ins.
-                    </p>
-                  ) : (
-                    <ul className="mt-3 space-y-2 text-sm text-ink">
-                      {summary.upcomingCheckIns.map((r) => (
-                        <li
-                          key={r.id}
-                          className="flex items-center justify-between gap-3"
-                        >
-                          <span className="min-w-0 truncate">
-                            {guestName(r.primaryGuest)}
-                          </span>
-                          <span className="shrink-0 text-right text-xs text-ink-muted">
-                            {r.property?.name ?? "Property"}
-                            <br />
-                            {formatUtcDate(r.checkInDate)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                <div className="p-5">
-                  <h3 className="text-xs font-medium uppercase tracking-wide text-ink-muted">
-                    Upcoming check-outs
-                  </h3>
-                  {summary.upcomingCheckOuts.length === 0 ? (
-                    <p className="mt-2 text-sm text-ink-muted">
-                      No upcoming check-outs.
-                    </p>
-                  ) : (
-                    <ul className="mt-3 space-y-2 text-sm text-ink">
-                      {summary.upcomingCheckOuts.map((r) => (
-                        <li
-                          key={r.id}
-                          className="flex items-center justify-between gap-3"
-                        >
-                          <span className="min-w-0 truncate">
-                            {guestName(r.primaryGuest)}
-                          </span>
-                          <span className="shrink-0 text-right text-xs text-ink-muted">
-                            {r.property?.name ?? "Property"}
-                            <br />
-                            {formatUtcDate(r.checkOutDate)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
+          <div>
+            <SectionHeader
+              title="Coming Up"
+              description="Next few days, beyond today"
+            />
+            <div className="grid divide-y divide-border rounded-card border border-border sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+              <div className="p-5">
+                <h3 className="text-xs font-medium uppercase tracking-wide text-ink-muted">
+                  Upcoming check-ins
+                </h3>
+                {summary.upcomingCheckIns.length === 0 ? (
+                  <p className="mt-2 text-sm text-ink-muted">
+                    No upcoming check-ins.
+                  </p>
+                ) : (
+                  <ul className="mt-3 space-y-2 text-sm text-ink">
+                    {summary.upcomingCheckIns.map((r) => (
+                      <li
+                        key={r.id}
+                        className="flex items-center justify-between gap-3"
+                      >
+                        <span className="min-w-0 truncate">
+                          {guestName(r.primaryGuest)}
+                        </span>
+                        <span className="shrink-0 text-right text-xs text-ink-muted">
+                          {r.property?.name ?? "Property"}
+                          <br />
+                          {formatUtcDate(r.checkInDate)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div className="p-5">
+                <h3 className="text-xs font-medium uppercase tracking-wide text-ink-muted">
+                  Upcoming check-outs
+                </h3>
+                {summary.upcomingCheckOuts.length === 0 ? (
+                  <p className="mt-2 text-sm text-ink-muted">
+                    No upcoming check-outs.
+                  </p>
+                ) : (
+                  <ul className="mt-3 space-y-2 text-sm text-ink">
+                    {summary.upcomingCheckOuts.map((r) => (
+                      <li
+                        key={r.id}
+                        className="flex items-center justify-between gap-3"
+                      >
+                        <span className="min-w-0 truncate">
+                          {guestName(r.primaryGuest)}
+                        </span>
+                        <span className="shrink-0 text-right text-xs text-ink-muted">
+                          {r.property?.name ?? "Property"}
+                          <br />
+                          {formatUtcDate(r.checkOutDate)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </div>
-          )}
+          </div>
         </div>
 
         {/* Supporting information — deliberately quieter than the left column. */}
