@@ -323,7 +323,21 @@ export async function sendAugustLockCommandAction(
     operation: formData.get("operation"),
   });
   const result = await sendAugustLockCommand(actor, input);
-  if (result.status === "success") revalidatePath(LOCKS_PAGE_PATH);
+  // Revalidate on every real, on-record outcome (2026-09-24) — not just
+  // success. A FAILED first-verification test must immediately re-derive
+  // this device as BLOCKED (computeLockControlEligibility/
+  // computeFirstTestEligibility both read AuditLog history fresh on every
+  // render), so the next page render can never still offer the same
+  // not-yet-refreshed "Test controllability" control for a device that
+  // just failed. "already_running" is deliberately excluded — nothing was
+  // actually attempted, so there is no new outcome to reflect.
+  if (
+    result.status === "success" ||
+    result.status === "failure" ||
+    result.status === "rejected"
+  ) {
+    revalidatePath(LOCKS_PAGE_PATH);
+  }
   return result;
 }
 

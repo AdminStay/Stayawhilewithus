@@ -12,6 +12,7 @@ import { BulkRefreshDialog } from "@/domains/smart-devices/components/BulkRefres
 import { LocksList } from "@/domains/smart-devices/components/LocksList";
 import { RefreshLocksButton } from "@/domains/smart-devices/components/RefreshLocksButton";
 import {
+  computeFirstTestEligibility,
   computeLockControlEligibility,
   getLatestAugustLockCommandOutcomes,
 } from "@/domains/smart-devices/services/august-commands.service";
@@ -73,16 +74,27 @@ export default async function LocksPage() {
   const lastCommandOutcomes = canControlLocks
     ? await getLatestAugustLockCommandOutcomes(actor, augustLockIds)
     : new Map();
-  const locksWithEligibility = locks.map((lock) => ({
-    ...lock,
-    controlEligibility:
-      lock.provider === "AUGUST" && canControlLocks
-        ? computeLockControlEligibility(
-            lock.providerDevice?.externalDeviceId ?? null,
-            lastCommandOutcomes.get(lock.id),
-          )
+  const locksWithEligibility = locks.map((lock) => {
+    const externalDeviceId = lock.providerDevice?.externalDeviceId ?? null;
+    const lastOutcome = lastCommandOutcomes.get(lock.id);
+    const isAugust = lock.provider === "AUGUST" && canControlLocks;
+    return {
+      ...lock,
+      controlEligibility: isAugust
+        ? computeLockControlEligibility(externalDeviceId, lastOutcome)
         : null,
-  }));
+      // Real per-lock "Test controllability" eligibility (2026-09-24) — the
+      // narrowly-scoped first-verification workflow. See
+      // computeFirstTestEligibility's own doc comment for why this is a
+      // separate function from computeLockControlEligibility above, not a
+      // relaxed version of it: this one deliberately never reads the real
+      // AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS allowlist, so its true/false
+      // value can never let a viewer infer which devices are allowlisted.
+      firstTestEligibility: isAugust
+        ? computeFirstTestEligibility(externalDeviceId, lastOutcome)
+        : null,
+    };
+  });
 
   return (
     <div>

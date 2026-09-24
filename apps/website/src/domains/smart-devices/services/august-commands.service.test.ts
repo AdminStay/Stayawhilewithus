@@ -62,6 +62,7 @@ import { prisma } from "@stayw/database";
 import { HttpRequestError } from "@stayw/integrations/core";
 
 import {
+  computeFirstTestEligibility,
   computeLockControlEligibility,
   getLatestAugustLockCommandOutcomes,
   isAugustLockCommandTestDevice,
@@ -1003,6 +1004,62 @@ describe("computeLockControlEligibility — fail-closed, positive-verification-r
       eligible: false,
       reason: "Remote control has not been verified for this lock yet.",
     });
+  });
+});
+
+describe("computeFirstTestEligibility — the separate 'Test controllability' workflow (2026-09-24)", () => {
+  it("is NOT eligible when there is no real, enabled ProviderDevice mapping (externalDeviceId is null) — unmapped/disabled locks never get this workflow either", () => {
+    expect(computeFirstTestEligibility(null, undefined)).toEqual({
+      eligible: false,
+    });
+    expect(computeFirstTestEligibility(null, "REJECTED")).toEqual({
+      eligible: false,
+    });
+  });
+
+  it("REAL EVIDENCE — Aqua Palm case: a device with a recorded SUCCEEDED outcome is NOT eligible — it's already VERIFIED and belongs to ordinary Lock/Unlock, not this one-time workflow", () => {
+    expect(computeFirstTestEligibility(EXTERNAL_ID, "SUCCEEDED")).toEqual({
+      eligible: false,
+    });
+  });
+
+  it("REAL EVIDENCE — MJ case: a device with a recorded FAILED outcome is NOT eligible — permanently BLOCKED, must never be retried through this workflow either", () => {
+    expect(computeFirstTestEligibility(EXTERNAL_ID, "FAILED")).toEqual({
+      eligible: false,
+    });
+  });
+
+  it("IS eligible for a mapped/enabled device with no attempt on record at all — this is exactly the not-yet-verified candidate this workflow exists for", () => {
+    expect(computeFirstTestEligibility(EXTERNAL_ID, undefined)).toEqual({
+      eligible: true,
+    });
+  });
+
+  it("IS eligible for a mapped/enabled device whose only record is a REJECTED pre-flight refusal — a REJECTED history is non-blocking, same as computeLockControlEligibility's own treatment of it", () => {
+    expect(computeFirstTestEligibility(EXTERNAL_ID, "REJECTED")).toEqual({
+      eligible: true,
+    });
+  });
+
+  it("never reads AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS — its result is identical regardless of the real allowlist's contents, so the UI can never leak which devices are allowlisted", () => {
+    const originalAllowlist = process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS;
+    try {
+      delete process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS;
+      const notAllowlisted = computeFirstTestEligibility(
+        EXTERNAL_ID,
+        undefined,
+      );
+
+      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+        EXTERNAL_ID,
+      ]);
+      const allowlisted = computeFirstTestEligibility(EXTERNAL_ID, undefined);
+
+      expect(notAllowlisted).toEqual(allowlisted);
+      expect(notAllowlisted).toEqual({ eligible: true });
+    } finally {
+      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = originalAllowlist;
+    }
   });
 });
 

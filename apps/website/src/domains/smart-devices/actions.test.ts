@@ -198,7 +198,7 @@ describe("sendAugustLockCommandAction", () => {
     expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
   });
 
-  it("does not revalidate on a rejected/failed result — never implies success", async () => {
+  it("REVALIDATES on a rejected result too (2026-09-24) — a NOT-YET-VERIFIED/BLOCKED device's real eligibility must refresh immediately, not implying success", async () => {
     mockSendAugustLockCommand.mockResolvedValueOnce({
       status: "rejected",
       reason: "This device is not enabled for control.",
@@ -210,6 +210,35 @@ describe("sendAugustLockCommandAction", () => {
     const result = await sendAugustLockCommandAction(IDLE_COMMAND, formData);
 
     expect(result.status).toBe("rejected");
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+  });
+
+  it("REVALIDATES on a failure result too (2026-09-24) — the first-verification-test safety requirement that a FAILED device becomes BLOCKED immediately, so a stale page can never offer another attempt", async () => {
+    mockSendAugustLockCommand.mockResolvedValueOnce({
+      status: "failure",
+      reason: "August refused the command for this specific lock.",
+    });
+    const formData = new FormData();
+    formData.set("smartDeviceId", SMART_DEVICE_ID);
+    formData.set("operation", "LOCK");
+
+    const result = await sendAugustLockCommandAction(IDLE_COMMAND, formData);
+
+    expect(result.status).toBe("failure");
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+  });
+
+  it("does NOT revalidate on already_running — nothing was actually attempted, so there is no new outcome to reflect", async () => {
+    mockSendAugustLockCommand.mockResolvedValueOnce({
+      status: "already_running",
+    });
+    const formData = new FormData();
+    formData.set("smartDeviceId", SMART_DEVICE_ID);
+    formData.set("operation", "LOCK");
+
+    const result = await sendAugustLockCommandAction(IDLE_COMMAND, formData);
+
+    expect(result.status).toBe("already_running");
     expect(mockRevalidatePath).not.toHaveBeenCalled();
   });
 

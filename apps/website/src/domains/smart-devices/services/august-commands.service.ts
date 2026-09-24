@@ -160,6 +160,59 @@ export function computeLockControlEligibility(
   return { eligible: false, reason: NOT_YET_VERIFIED_REASON };
 }
 
+/** What LocksList shows in place of the ordinary Lock/Unlock controls, for a device that hasn't earned either state yet — see computeFirstTestEligibility()'s own doc comment. */
+export interface FirstTestEligibility {
+  eligible: boolean;
+}
+
+/**
+ * Decides whether a lock should show the separate, deliberately-distinct
+ * "Test controllability" workflow (2026-09-24) — the fix for the gap
+ * computeLockControlEligibility() itself created: once that function
+ * started requiring a real on-record SUCCEEDED outcome before showing
+ * Lock/Unlock as available, no not-yet-tested device could ever earn its
+ * first SUCCEEDED outcome through the dashboard at all (the only control
+ * that could produce one was the one now disabled until one already
+ * exists). This function is that missing first rung, not a relaxation of
+ * the positive-verification rule above it.
+ *
+ * Deliberately NEVER reads AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS (unlike
+ * isAugustLockCommandTestDevice/computeLockControlEligibility) — this
+ * function's true/false must never let a viewer infer which devices are or
+ * aren't in that allowlist. The real allowlist stays a server-side-only,
+ * fail-closed final gate inside sendAugustLockCommand() itself: a device
+ * that's eligible here but NOT actually allowlisted will still be REJECTED
+ * the instant a real test is attempted, before any provider call. Eligible
+ * here only means "safe, non-secret criteria say this lock's first-test
+ * workflow may be offered" — never "this test would succeed."
+ *
+ * Eligible exactly when:
+ *   - the device has a real, enabled ProviderDevice mapping
+ *     (externalDeviceId present) — same signal computeLockControlEligibility
+ *     uses for "mapped and enabled," reused rather than re-derived.
+ *   - its most recent real recorded outcome is NOT `SUCCEEDED` — already
+ *     VERIFIED; belongs to the ordinary Lock/Unlock controls now, not this
+ *     one-time workflow (e.g. Aqua Palm).
+ *   - its most recent real recorded outcome is NOT `FAILED` — permanently
+ *     BLOCKED; must never be retried through this or any other control
+ *     (e.g. MJ - Front Door's real 403).
+ *
+ * `undefined` (no real attempt on record at all) and `"REJECTED"` (only a
+ * pre-flight refusal, never a real provider-level attempt) are both
+ * eligible — exactly the two cases computeLockControlEligibility treats as
+ * "not yet verified," which is precisely what this workflow exists to
+ * resolve.
+ */
+export function computeFirstTestEligibility(
+  externalDeviceId: string | null,
+  lastOutcome: AugustLockCommandRecordedOutcome | undefined,
+): FirstTestEligibility {
+  if (externalDeviceId === null) return { eligible: false };
+  if (lastOutcome === "SUCCEEDED") return { eligible: false };
+  if (lastOutcome === "FAILED") return { eligible: false };
+  return { eligible: true };
+}
+
 /**
  * A 403 alone is ambiguous: August returns it both for a genuinely
  * unauthorized/expired connection AND for a specific device/operation it

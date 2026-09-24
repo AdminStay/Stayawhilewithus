@@ -88,13 +88,16 @@ type LockFixture = {
   updatedAt: Date;
   property: { name: string };
   controlEligibility: { eligible: boolean; reason: string | null } | null;
+  firstTestEligibility: { eligible: boolean } | null;
 };
 
-// Defaults to eligible: real /locks usage always computes a real
-// controlEligibility for every August row once canControlLocks is true
-// (see page.tsx) — never leaves it undefined the way an unrelated-field
-// test fixture otherwise might. Tests that specifically exercise the
-// ineligible/disabled case override this explicitly.
+// Defaults to eligible/not-eligible-for-first-test: real /locks usage
+// always computes both a real controlEligibility AND a real
+// firstTestEligibility for every August row once canControlLocks is true
+// (see page.tsx) — never leaves either undefined the way an
+// unrelated-field test fixture otherwise might. Tests that specifically
+// exercise the first-test workflow override firstTestEligibility
+// explicitly.
 function makeLock(overrides: Partial<LockFixture> = {}): LockFixture {
   return {
     id: "lock-1",
@@ -107,6 +110,7 @@ function makeLock(overrides: Partial<LockFixture> = {}): LockFixture {
     updatedAt: new Date("2026-09-01T00:00:00.000Z"),
     property: { name: "Test Property" },
     controlEligibility: { eligible: true, reason: null },
+    firstTestEligibility: { eligible: false },
     ...overrides,
   };
 }
@@ -657,6 +661,161 @@ describe("LocksList — per-row physical lock-control gating", () => {
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Lock" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Unlock" })).toBeTruthy();
+  });
+});
+
+describe("LocksList — 'Test controllability' first-verification workflow (2026-09-24)", () => {
+  it("NOT-YET-VERIFIED candidate: shows ONLY 'Test controllability' when firstTestEligibility.eligible is true — never alongside the routine Lock/Unlock buttons", () => {
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              name: "Orion - Front Door",
+              controlEligibility: {
+                eligible: false,
+                reason:
+                  "Remote control has not been verified for this lock yet.",
+              },
+              firstTestEligibility: { eligible: true },
+            }),
+          ] as never
+        }
+        canControlLocks={true}
+        lockCommandAction={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: /test controllability/i }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Lock" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unlock" })).toBeNull();
+    // The routine ineligibility caption must not also render underneath —
+    // the Test button's own dialog already explains everything.
+    expect(
+      screen.queryByText(
+        "Remote control has not been verified for this lock yet.",
+      ),
+    ).toBeNull();
+  });
+
+  it("VERIFIED lock (real EVIDENCE — Aqua Palm case): never shows 'Test controllability', only the now-enabled routine Lock/Unlock controls", () => {
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              name: "Aqua Palm - Front Door",
+              controlEligibility: { eligible: true, reason: null },
+              firstTestEligibility: { eligible: false },
+            }),
+          ] as never
+        }
+        canControlLocks={true}
+        lockCommandAction={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /test controllability/i }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Lock" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Unlock" })).toBeTruthy();
+  });
+
+  it("BLOCKED/FAILED lock (real EVIDENCE — MJ case): never shows 'Test controllability' — absolutely no retry path through this workflow", () => {
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              name: "MJ - Front Door",
+              controlEligibility: {
+                eligible: false,
+                reason:
+                  "The last real attempt to control this lock did not succeed. Contact an admin before trying again.",
+              },
+              firstTestEligibility: { eligible: false },
+            }),
+          ] as never
+        }
+        canControlLocks={true}
+        lockCommandAction={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /test controllability/i }),
+    ).toBeNull();
+    // Routine controls still render, disabled, with the real BLOCKED reason
+    // — unchanged from the pre-existing eligibility test above.
+    expect(
+      (screen.getByRole("button", { name: "Lock" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("unmapped/disabled lock: never shows 'Test controllability' — firstTestEligibility is null when the row isn't August/controllable at all", () => {
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              name: "Unmapped Lock",
+              controlEligibility: {
+                eligible: false,
+                reason:
+                  "This device is not enabled for control — map and enable it from Discovered Devices first.",
+              },
+              firstTestEligibility: { eligible: false },
+            }),
+          ] as never
+        }
+        canControlLocks={true}
+        lockCommandAction={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: /test controllability/i }),
+    ).toBeNull();
+  });
+
+  it("no bulk testing: each row renders exactly one 'Test controllability' trigger, and each row's own dialog form is scoped to that exact row's own SmartDevice.id — no fuzzy/shared targeting", () => {
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              id: "lock-aaa",
+              name: "Row A",
+              controlEligibility: { eligible: false, reason: "x" },
+              firstTestEligibility: { eligible: true },
+            }),
+            makeLock({
+              id: "lock-bbb",
+              name: "Row B",
+              controlEligibility: { eligible: false, reason: "x" },
+              firstTestEligibility: { eligible: true },
+            }),
+          ] as never
+        }
+        canControlLocks={true}
+        lockCommandAction={vi.fn()}
+      />,
+    );
+
+    const testButtons = screen.getAllByRole("button", {
+      name: /test controllability/i,
+    });
+    expect(testButtons).toHaveLength(2);
+
+    expect(within(rowFor("Row A")).getByDisplayValue("lock-aaa")).toBeTruthy();
+    expect(within(rowFor("Row B")).getByDisplayValue("lock-bbb")).toBeTruthy();
+    // Never the other row's id anywhere within this row's own subtree.
+    expect(within(rowFor("Row A")).queryByDisplayValue("lock-bbb")).toBeNull();
+    expect(within(rowFor("Row B")).queryByDisplayValue("lock-aaa")).toBeNull();
   });
 });
 

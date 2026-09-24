@@ -28,7 +28,10 @@ import type {
   RefreshAugustSpotActionState,
 } from "../actions";
 import { formatTimestamp } from "../lib/format-timestamp";
-import type { LockControlEligibility } from "../services/august-commands.service";
+import type {
+  FirstTestEligibility,
+  LockControlEligibility,
+} from "../services/august-commands.service";
 import {
   getBatteryLevel,
   getLockState,
@@ -39,6 +42,7 @@ import {
   type SmartDevice,
 } from "../services/smart-devices.service";
 
+import { AugustFirstTestButton } from "./AugustFirstTestButton";
 import { AugustLockControlButton } from "./AugustLockControlButton";
 import { LockSpotRefreshButton } from "./LockSpotRefreshButton";
 
@@ -46,6 +50,8 @@ type LockWithProperty = SmartDevice & {
   property: { name: string };
   /** Real per-lock Lock/Unlock eligibility (see computeLockControlEligibility) — null for a non-August device, or when the viewer can't control locks at all (canControlLocks is false, so it's never rendered anyway). */
   controlEligibility: LockControlEligibility | null;
+  /** Real per-lock "Test controllability" eligibility (see computeFirstTestEligibility) — null under the same conditions as controlEligibility above. Mutually exclusive with controlEligibility.eligible by construction: a device is never eligible for both at once. */
+  firstTestEligibility: FirstTestEligibility | null;
 };
 
 /**
@@ -339,42 +345,56 @@ export function LocksList({
                     {isAugust ? (
                       <div className="flex flex-col gap-1">
                         <div className="flex flex-wrap items-center gap-2">
-                          {canControlLocks && lockCommandAction && (
-                            <>
-                              <AugustLockControlButton
+                          {canControlLocks &&
+                            lockCommandAction &&
+                            (lock.firstTestEligibility?.eligible ? (
+                              // Deliberately the ONLY control shown for a
+                              // not-yet-verified device — never alongside
+                              // the disabled routine Lock/Unlock buttons,
+                              // so this never looks like ordinary control.
+                              <AugustFirstTestButton
                                 smartDeviceId={lock.id}
-                                operation="LOCK"
                                 lockName={lock.name}
                                 propertyName={lock.property.name}
+                                currentLockState={lockState}
                                 action={lockCommandAction}
-                                disabled={!lock.controlEligibility?.eligible}
-                                disabledReason={
-                                  lock.controlEligibility?.reason ?? undefined
-                                }
-                                emphasis={
-                                  normalizedLockState === "locked"
-                                    ? "subdued"
-                                    : "primary"
-                                }
                               />
-                              <AugustLockControlButton
-                                smartDeviceId={lock.id}
-                                operation="UNLOCK"
-                                lockName={lock.name}
-                                propertyName={lock.property.name}
-                                action={lockCommandAction}
-                                disabled={!lock.controlEligibility?.eligible}
-                                disabledReason={
-                                  lock.controlEligibility?.reason ?? undefined
-                                }
-                                emphasis={
-                                  normalizedLockState === "unlocked"
-                                    ? "subdued"
-                                    : "primary"
-                                }
-                              />
-                            </>
-                          )}
+                            ) : (
+                              <>
+                                <AugustLockControlButton
+                                  smartDeviceId={lock.id}
+                                  operation="LOCK"
+                                  lockName={lock.name}
+                                  propertyName={lock.property.name}
+                                  action={lockCommandAction}
+                                  disabled={!lock.controlEligibility?.eligible}
+                                  disabledReason={
+                                    lock.controlEligibility?.reason ?? undefined
+                                  }
+                                  emphasis={
+                                    normalizedLockState === "locked"
+                                      ? "subdued"
+                                      : "primary"
+                                  }
+                                />
+                                <AugustLockControlButton
+                                  smartDeviceId={lock.id}
+                                  operation="UNLOCK"
+                                  lockName={lock.name}
+                                  propertyName={lock.property.name}
+                                  action={lockCommandAction}
+                                  disabled={!lock.controlEligibility?.eligible}
+                                  disabledReason={
+                                    lock.controlEligibility?.reason ?? undefined
+                                  }
+                                  emphasis={
+                                    normalizedLockState === "unlocked"
+                                      ? "subdued"
+                                      : "primary"
+                                  }
+                                />
+                              </>
+                            ))}
                           {canRefresh && spotRefreshAction && (
                             <LockSpotRefreshButton
                               smartDeviceId={lock.id}
@@ -401,6 +421,7 @@ export function LocksList({
                         </div>
                         {canControlLocks &&
                           lockCommandAction &&
+                          !lock.firstTestEligibility?.eligible &&
                           lock.controlEligibility &&
                           !lock.controlEligibility.eligible && (
                             <p className="text-[10px] text-ink-faint">
