@@ -174,12 +174,16 @@ export interface AugustLockDetail {
 
 /**
  * `PUT /remoteoperate/{lockId}/{lock|unlock|unlatch}` — verified against
- * yalexs's actual source (api_async.py, 2026-09-18): the synchronous variant
- * of each (no `?type=async` query param) blocks until the physical
- * operation completes and returns a result the library parses into a lock
- * status — the async variant exists too but requires a separate follow-up
- * status poll, deliberately not used here. "Unlatch" is a distinct
- * device-dependent partial-open operation, not merely a slower unlock.
+ * yalexs's actual source (api_async.py, 2026-09-18). Two variants exist: a
+ * synchronous one (no `?type=async`) that blocks until the physical
+ * operation completes, and an async one that acknowledges quickly and
+ * requires a separate follow-up status poll. This client now uses the
+ * async variant (2026-09-25, Phase 2 of the Orion incident's root-cause
+ * correction — see AugustClient.operate()'s own doc comment for why: a
+ * single long-blocking synchronous request is itself a real risk for a
+ * physical actuator, on top of everything already wrong with a single
+ * fixed timeout). "Unlatch" is a distinct device-dependent partial-open
+ * operation, not merely a slower unlock.
  */
 export type AugustLockOperation = "LOCK" | "UNLOCK" | "UNLATCH";
 

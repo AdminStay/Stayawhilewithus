@@ -283,40 +283,40 @@ describe("AugustClient", () => {
   });
 
   describe("lock() / unlock() / unlatch()", () => {
-    it("lock() sends PUT /remoteoperate/{lockId}/lock with maxRetries: 0 (2026-09-25, physical-write single-attempt correction — see operate()'s own doc comment)", async () => {
+    it("lock() sends PUT /remoteoperate/{lockId}/lock?type=async with maxRetries: 0 (2026-09-25: async mode is Phase 2, single-attempt is Phase 1 of the Orion incident's root-cause correction — see operate()'s own doc comment)", async () => {
       mockRequest.mockResolvedValueOnce({});
       const client = new AugustClient(credentials);
 
       await client.lock("lock-1");
 
       expect(mockRequest).toHaveBeenCalledWith(
-        "/remoteoperate/lock-1/lock",
+        "/remoteoperate/lock-1/lock?type=async",
         { method: "PUT" },
         { maxRetries: 0 },
       );
     });
 
-    it("unlock() sends PUT /remoteoperate/{lockId}/unlock with maxRetries: 0", async () => {
+    it("unlock() sends PUT /remoteoperate/{lockId}/unlock?type=async with maxRetries: 0", async () => {
       mockRequest.mockResolvedValueOnce({});
       const client = new AugustClient(credentials);
 
       await client.unlock("lock-1");
 
       expect(mockRequest).toHaveBeenCalledWith(
-        "/remoteoperate/lock-1/unlock",
+        "/remoteoperate/lock-1/unlock?type=async",
         { method: "PUT" },
         { maxRetries: 0 },
       );
     });
 
-    it("unlatch() sends PUT /remoteoperate/{lockId}/unlatch with maxRetries: 0", async () => {
+    it("unlatch() sends PUT /remoteoperate/{lockId}/unlatch?type=async with maxRetries: 0", async () => {
       mockRequest.mockResolvedValueOnce({});
       const client = new AugustClient(credentials);
 
       await client.unlatch("lock-1");
 
       expect(mockRequest).toHaveBeenCalledWith(
-        "/remoteoperate/lock-1/unlatch",
+        "/remoteoperate/lock-1/unlatch?type=async",
         { method: "PUT" },
         { maxRetries: 0 },
       );

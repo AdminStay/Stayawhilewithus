@@ -5,6 +5,7 @@ import { prisma, type Prisma } from "@stayw/database";
 import {
   AugustClient,
   isAugustBrand,
+  type AugustLockDetail,
   type AugustLockOperation,
 } from "@stayw/integrations/august";
 import { HttpRequestError } from "@stayw/integrations/core";
@@ -27,15 +28,106 @@ export interface SendAugustLockCommandInput {
 
 /**
  * Same reasoning/derivation class as nest-commands.service.ts's
- * STALE_COMMAND_THRESHOLD_MS — a real command here makes up to 3 sequential
- * real HTTP calls (a fresh getLockDetail() capability-refresh read, the
- * capabilities GET, the PUT command itself, then a second getLockDetail()
- * confirmation read — 4 total), each bounded by HttpClient's own 10s
- * timeout x up to 3 attempts with backoff. 5 minutes gives comfortable
- * margin over that worst case without leaving a genuinely crashed request
- * locked out for long.
+ * STALE_COMMAND_THRESHOLD_MS — recomputed 2026-09-25 for Phase 2 (async
+ * command mode + bounded confirmation polling). Worst case is now: the
+ * pre-command capability refresh read and the capabilities read (each
+ * still HttpClient's default up to 3 attempts x 10s + backoff, ~31s worst
+ * case each, since only the physical write itself is single-attempt) +
+ * the async command PUT itself (single attempt, maxRetries: 0, ~10s worst
+ * case) + up to CONFIRMATION_POLL_ATTEMPTS confirmation reads (each also
+ * ~31s worst case) with CONFIRMATION_POLL_DELAY_MS between them. With the
+ * constants below (4 poll attempts, 3s apart) that's roughly
+ * 31 + 31 + 10 + (4 x 31) + (3 x 3) ≈ 205 seconds in the most pathological
+ * case where every single read also exhausts its own retry budget — far
+ * from typical (reads have consistently been fast in practice, generally
+ * sub-second), but still comfortably (~32% margin) under this 5-minute
+ * threshold. In the realistic/typical case (reads succeed on their first
+ * attempt), the whole confirmation window adds roughly 9-13 seconds of
+ * actual wall-clock time — this repo has no configured Vercel
+ * `maxDuration` for this route today, so the exact hosting function time
+ * limit is unknown; these numbers were chosen to stay reasonable under any
+ * plausible default (a few seconds typical, well under a minute even in an
+ * unlucky-but-not-pathological case) rather than against a specific known
+ * ceiling — confirm the real configured limit if a stronger guarantee is
+ * ever needed.
  */
 const STALE_COMMAND_THRESHOLD_MS = 5 * 60 * 1000;
+
+/**
+ * Bounded confirmation window after the async command PUT acknowledges
+ * receipt (2026-09-25, Phase 2 of the Orion incident's root-cause
+ * correction) — deliberately conservative starting constants, not a
+ * scientifically-derived optimum: 4 attempts, 3 seconds apart (12 seconds
+ * of enforced pause across the window, plus the reads' own time — up from
+ * the original 3x2s=6s), giving August's bridge/lock more real chances,
+ * over a longer real-world window, to report the requested state before
+ * this function gives up and reports AMBIGUOUS. Every individual read here
+ * still uses this client's normal, unchanged retry behavior (up to 3
+ * attempts internally) — this loop adds POLL ATTEMPTS on top of that, it
+ * does not touch or duplicate HttpClient's own retry logic. See
+ * STALE_COMMAND_THRESHOLD_MS's own comment for why this stays well under
+ * that 5-minute ceiling even in the worst case.
+ */
+const CONFIRMATION_POLL_ATTEMPTS = 4;
+const CONFIRMATION_POLL_DELAY_MS = 3000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * The one and only state August's real API ever reports for each
+ * operation (verified against py-august's source plus a live field audit —
+ * see AugustLockDetail's own doc comment, types.ts: the provider's
+ * LockStatus.status vocabulary is exactly "locked"/"unlocked", nothing
+ * else, and UNLATCH's own result is reported as "unlocked" too — there is
+ * no distinct provider-reported "unlatched" state to check against; this
+ * is a real, verified provider fact, not a guess).
+ */
+function expectedLockStateFor(
+  operation: AugustLockOperation,
+): "locked" | "unlocked" {
+  return operation === "LOCK" ? "locked" : "unlocked";
+}
+
+/**
+ * Polls getLockDetail() up to CONFIRMATION_POLL_ATTEMPTS times, pausing
+ * CONFIRMATION_POLL_DELAY_MS between attempts, until August reports a
+ * real, valid lock state that MATCHES the requested operation (2026-09-25
+ * correction — with async mode, an early poll can legitimately still
+ * report the OLD state, e.g. still "locked" shortly after an UNLOCK was
+ * sent, before the bridge has actually relayed the change; accepting the
+ * first non-null reading unconditionally could record that old state as a
+ * "confirmed" SUCCEEDED result, falsely verifying a lock that never
+ * physically moved). A reading whose `lockState` is `null` (provider
+ * didn't mark it valid — see AugustLockDetail's own doc comment, never
+ * fabricated) or whose `lockState` doesn't match `expectedLockStateFor()`
+ * is treated as "not yet confirmed" and polling continues. Returns the
+ * first genuinely matching reading, used exactly as reported (never
+ * further guessed beyond the equality check itself). Returns `null`
+ * (never throws) if every attempt is exhausted without ever reporting the
+ * expected state — the caller (sendAugustLockCommand()) treats that as
+ * AMBIGUOUS, never a guessed success.
+ */
+async function pollForConfirmedLockState(
+  client: AugustClient,
+  externalDeviceId: string,
+  operation: AugustLockOperation,
+): Promise<AugustLockDetail | null> {
+  const expected = expectedLockStateFor(operation);
+  for (let attempt = 0; attempt < CONFIRMATION_POLL_ATTEMPTS; attempt++) {
+    if (attempt > 0) await sleep(CONFIRMATION_POLL_DELAY_MS);
+    try {
+      const detail = await client.getLockDetail(externalDeviceId);
+      if (detail.lockState?.toLowerCase() === expected) return detail;
+    } catch {
+      // A read failure (after its own internal retries) is treated the
+      // same as "no confirmation yet" — try again on the next poll rather
+      // than aborting the whole confirmation window on one bad read.
+    }
+  }
+  return null;
+}
 
 /**
  * The Production physical-execution safety gate (2026-09-18) — see
@@ -546,9 +638,39 @@ export async function sendAugustLockCommand(
       await client.unlatch(externalDeviceId);
     }
 
-    // Confirmation — read what August actually reports now, never assume
-    // the command produced exactly the requested state.
-    const confirmed = await client.getLockDetail(externalDeviceId);
+    // Confirmation (2026-09-25, Phase 2 — async mode + bounded polling):
+    // the PUT above only acknowledged receipt, it does not itself prove
+    // the physical operation completed (see operate()'s own doc comment,
+    // packages/integrations/src/august/client.ts). Poll for a bounded
+    // window for August to report the real, provider-confirmed state that
+    // actually MATCHES the requested operation — an early poll reporting
+    // the OLD state (e.g. still "locked" shortly after an UNLOCK) must
+    // never be accepted as confirmation; only a matching state counts
+    // toward SUCCEEDED/verified.
+    const confirmed = await pollForConfirmedLockState(
+      client,
+      externalDeviceId,
+      input.operation,
+    );
+    if (!confirmed) {
+      // August acknowledged the request (no HttpRequestError was thrown
+      // above — that path already returns FAILED), but no definitive lock
+      // state was ever confirmed within the polling window. This is
+      // exactly the "command transmission/result cannot be established"
+      // case AMBIGUOUS exists for — never guessed as a success, never
+      // recorded as a confirmed failure (August never told us it failed).
+      await recordAuditSafely({
+        actor,
+        smartDeviceId: smartDevice.id,
+        propertyId,
+        operation: input.operation,
+        previousMetadata,
+        result: "AMBIGUOUS",
+        errorDetail:
+          "Command was sent and acknowledged by August, but no definitive lock state was confirmed within the polling window.",
+      });
+      return { status: "ambiguous", reason: AMBIGUOUS_OUTCOME_BLOCKED_REASON };
+    }
     // Merged onto previousMetadata (captured above, before this command
     // ever ran) rather than replaced wholesale (2026-09-23 release-review
     // Fix 4) — this write is structurally unreachable for a currently

@@ -664,31 +664,202 @@ describe("sendAugustLockCommand", () => {
       );
     });
 
-    it("a failure during the POST-command confirmation read (the command call itself succeeded) is classified AMBIGUOUS when no definitive response comes back — we sent it, but can't confirm the result", async () => {
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-        EXTERNAL_ID,
-      ]);
-      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
-        mappedEnabledDevice() as never,
-      );
-      allowTransaction();
-      mockGetLockDetail
-        .mockResolvedValueOnce(freshDetail()) // pre-command capability refresh succeeds
-        .mockRejectedValueOnce(new Error("This operation was aborted")); // confirmation read aborts
-      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+    it("a failure during EVERY POST-command confirmation poll attempt (the command call itself succeeded) is classified AMBIGUOUS when no definitive response ever comes back — we sent it, but can't confirm the result", async () => {
+      vi.useFakeTimers();
+      try {
+        process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+          EXTERNAL_ID,
+        ]);
+        vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+          mappedEnabledDevice() as never,
+        );
+        allowTransaction();
+        mockGetLockDetail
+          .mockResolvedValueOnce(freshDetail()) // pre-command capability refresh succeeds
+          .mockRejectedValue(new Error("This operation was aborted")); // every confirmation poll attempt aborts
+        mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
 
-      const result = await sendAugustLockCommand(actor, {
-        smartDeviceId: SMART_DEVICE_ID,
-        operation: "LOCK",
-      });
+        const resultPromise = sendAugustLockCommand(actor, {
+          smartDeviceId: SMART_DEVICE_ID,
+          operation: "LOCK",
+        });
+        await vi.runAllTimersAsync();
+        const result = await resultPromise;
 
-      expect(mockLock).toHaveBeenCalledWith(EXTERNAL_ID);
-      expect(result.status).toBe("ambiguous");
-      expect(mockRecordAudit).toHaveBeenCalledWith(
-        expect.objectContaining({
-          afterState: expect.objectContaining({ result: "AMBIGUOUS" }),
-        }),
-      );
+        expect(mockLock).toHaveBeenCalledWith(EXTERNAL_ID);
+        expect(mockLock).toHaveBeenCalledTimes(1); // still single-attempt for the write itself
+        // 1 pre-command read + CONFIRMATION_POLL_ATTEMPTS (4) poll attempts, all rejecting.
+        expect(mockGetLockDetail).toHaveBeenCalledTimes(5);
+        expect(result.status).toBe("ambiguous");
+        expect(mockRecordAudit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            afterState: expect.objectContaining({ result: "AMBIGUOUS" }),
+          }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("polling recovers on a later attempt: the first confirmation poll is invalid/fails, a later one reports a real state — result is SUCCEEDED, not AMBIGUOUS", async () => {
+      vi.useFakeTimers();
+      try {
+        process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+          EXTERNAL_ID,
+        ]);
+        vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+          mappedEnabledDevice() as never,
+        );
+        allowTransaction();
+        mockGetLockDetail
+          .mockResolvedValueOnce(freshDetail()) // pre-command capability refresh succeeds
+          .mockRejectedValueOnce(new Error("This operation was aborted")) // poll attempt 1: no answer
+          .mockResolvedValueOnce(freshDetail({ lockState: "locked" })); // poll attempt 2: confirmed
+        mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+
+        const resultPromise = sendAugustLockCommand(actor, {
+          smartDeviceId: SMART_DEVICE_ID,
+          operation: "LOCK",
+        });
+        await vi.runAllTimersAsync();
+        const result = await resultPromise;
+
+        expect(mockLock).toHaveBeenCalledTimes(1);
+        expect(mockGetLockDetail).toHaveBeenCalledTimes(3); // pre-command + poll 1 (fails) + poll 2 (confirms)
+        expect(result).toEqual({ status: "success", lockState: "locked" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("polling stops at the first valid reading — does not keep polling past confirmation", async () => {
+      vi.useFakeTimers();
+      try {
+        process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+          EXTERNAL_ID,
+        ]);
+        vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+          mappedEnabledDevice() as never,
+        );
+        allowTransaction();
+        mockGetLockDetail
+          .mockResolvedValueOnce(freshDetail()) // pre-command capability refresh
+          .mockResolvedValueOnce(freshDetail({ lockState: "unlocked" })); // poll attempt 1: confirmed immediately
+        mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+
+        const resultPromise = sendAugustLockCommand(actor, {
+          smartDeviceId: SMART_DEVICE_ID,
+          operation: "UNLOCK",
+        });
+        await vi.runAllTimersAsync();
+        const result = await resultPromise;
+
+        expect(mockGetLockDetail).toHaveBeenCalledTimes(2); // pre-command + exactly one poll, no more
+        expect(result).toEqual({ status: "success", lockState: "unlocked" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("AMBIGUOUS from exhausted polling never sets confirmedLockState — no physical state is ever guessed", async () => {
+      vi.useFakeTimers();
+      try {
+        process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+          EXTERNAL_ID,
+        ]);
+        vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+          mappedEnabledDevice() as never,
+        );
+        allowTransaction();
+        mockGetLockDetail
+          .mockResolvedValueOnce(freshDetail())
+          .mockResolvedValue(freshDetail({ lockState: null })); // never a valid reading, any number of times
+        mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+
+        const resultPromise = sendAugustLockCommand(actor, {
+          smartDeviceId: SMART_DEVICE_ID,
+          operation: "LOCK",
+        });
+        await vi.runAllTimersAsync();
+        await resultPromise;
+
+        const auditCall = mockRecordAudit.mock.calls[0]![0];
+        expect(auditCall.afterState.result).toBe("AMBIGUOUS");
+        expect(auditCall.afterState).not.toHaveProperty("confirmedLockState");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("OPERATION-MATCH CORRECTION (2026-09-25): an early poll reporting the OLD state (still 'locked' shortly after an UNLOCK was sent) does NOT count as confirmation — polling continues until a matching state arrives", async () => {
+      vi.useFakeTimers();
+      try {
+        process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+          EXTERNAL_ID,
+        ]);
+        vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+          mappedEnabledDevice() as never,
+        );
+        allowTransaction();
+        mockGetLockDetail
+          .mockResolvedValueOnce(freshDetail()) // pre-command capability refresh
+          .mockResolvedValueOnce(freshDetail({ lockState: "locked" })) // poll 1: STALE — bridge hasn't relayed the UNLOCK yet
+          .mockResolvedValueOnce(freshDetail({ lockState: "locked" })) // poll 2: still stale
+          .mockResolvedValueOnce(freshDetail({ lockState: "unlocked" })); // poll 3: finally matches
+        mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+
+        const resultPromise = sendAugustLockCommand(actor, {
+          smartDeviceId: SMART_DEVICE_ID,
+          operation: "UNLOCK",
+        });
+        await vi.runAllTimersAsync();
+        const result = await resultPromise;
+
+        // Never resolved/succeeded on either of the two stale "locked"
+        // readings — only the genuinely matching "unlocked" one counted.
+        expect(result).toEqual({ status: "success", lockState: "unlocked" });
+        expect(mockGetLockDetail).toHaveBeenCalledTimes(4); // pre-command + 3 polls (2 stale, 1 matching)
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("OPERATION-MATCH CORRECTION (2026-09-25): a mismatch through the ENTIRE polling window (every reading is the old state, the correct one never arrives) is classified AMBIGUOUS, never SUCCEEDED — a lock that never physically moved must never be marked verified", async () => {
+      vi.useFakeTimers();
+      try {
+        process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
+          EXTERNAL_ID,
+        ]);
+        vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+          mappedEnabledDevice() as never,
+        );
+        allowTransaction();
+        mockGetLockDetail
+          .mockResolvedValueOnce(freshDetail()) // pre-command capability refresh
+          .mockResolvedValue(freshDetail({ lockState: "locked" })); // EVERY poll still reports "locked" — an UNLOCK was requested, never confirmed
+        mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+
+        const resultPromise = sendAugustLockCommand(actor, {
+          smartDeviceId: SMART_DEVICE_ID,
+          operation: "UNLOCK",
+        });
+        await vi.runAllTimersAsync();
+        const result = await resultPromise;
+
+        expect(result.status).toBe("ambiguous");
+        expect(result.status).not.toBe("success");
+        expect(mockGetLockDetail).toHaveBeenCalledTimes(5); // pre-command + all 4 poll attempts, all mismatched
+        expect(mockRecordAudit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            afterState: expect.objectContaining({ result: "AMBIGUOUS" }),
+          }),
+        );
+        // Never recorded as if the lock had actually unlocked.
+        const auditCall = mockRecordAudit.mock.calls[0]![0];
+        expect(auditCall.afterState).not.toHaveProperty("confirmedLockState");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("AMBIGUOUS never sets confirmedLockState — no physical state is ever guessed", async () => {

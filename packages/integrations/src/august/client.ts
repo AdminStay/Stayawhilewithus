@@ -291,26 +291,33 @@ export class AugustClient
   }
 
   /**
-   * Shared implementation for lock()/unlock()/unlatch() below — the
-   * synchronous variant of each (no `?type=async`), which blocks until the
-   * physical operation completes or the provider reports a failure (see
-   * AugustLockOperation's doc comment in ./types.ts). Deliberately does NOT
-   * trust this response's own `status` field as proof of the resulting lock
-   * state — the caller (august-commands.service.ts) always follows this
-   * with an independent getLockDetail() read, exactly like this codebase's
-   * existing Nest-command pattern never trusts a command response alone
-   * either. This method only proves the HTTP round trip succeeded (a 4xx/
-   * 5xx throws, same as every other method on this client) — the *meaning*
-   * of success is established by that follow-up read, not here.
+   * `?type=async` (2026-09-25, Phase 2 of the Orion incident's root-cause
+   * correction — chosen over simply raising the timeout; see the comparison
+   * in HANDOFF/PR notes) — the async variant August's own API supports:
+   * this PUT returns almost immediately once August has acknowledged
+   * receipt, WITHOUT blocking on the physical operation actually
+   * completing. This deliberately trades the old synchronous variant's
+   * single long-blocking connection (a real risk of a serverless function's
+   * own execution-time limit, on top of everything already wrong with a
+   * single fixed timeout for a physical actuator) for a fast, low-risk
+   * write plus a separate, bounded, already-safe series of ordinary reads
+   * to confirm the result — see sendAugustLockCommand()'s
+   * pollForConfirmedLockState() (august-commands.service.ts) for that
+   * confirmation loop. Deliberately does NOT trust this acknowledgment
+   * response's own body/status as proof of the resulting lock state, same
+   * discipline as the old synchronous variant — the *meaning* of success
+   * is established entirely by the follow-up read(s), never here. This
+   * method only proves August acknowledged the request (a 4xx/5xx throws,
+   * same as every other method on this client).
    *
-   * `{ maxRetries: 0 }` (2026-09-25, the Orion incident's root-cause
-   * correction): HttpClient's normal exponential-backoff retry-on-network-
-   * failure behavior is exactly right for a read, but wrong for a physical
-   * write — if this request times out or the connection aborts, we have no
-   * way to know whether August/the bridge already received and is
-   * processing the command, so silently retransmitting it could send a
-   * second real physical command on top of a first one we never confirmed.
-   * With this option, ANY failure here — a real HTTP error response or a
+   * `{ maxRetries: 0 }` (2026-09-25, Phase 1 of the same correction):
+   * HttpClient's normal exponential-backoff retry-on-network-failure
+   * behavior is exactly right for a read, but wrong for a physical write —
+   * if this request times out or the connection aborts, we have no way to
+   * know whether August/the bridge already received and is processing the
+   * command, so silently retransmitting it could send a second real
+   * physical command on top of a first one we never confirmed. With this
+   * option, ANY failure here — a real HTTP error response or a
    * network-level abort/timeout — is thrown immediately after this single
    * attempt, never retried by this client; the resulting uncertainty is
    * exactly what sendAugustLockCommand()'s AMBIGUOUS classification exists
@@ -325,7 +332,7 @@ export class AugustClient
     segment: "lock" | "unlock" | "unlatch",
   ): Promise<void> {
     await this.http.request<unknown>(
-      `/remoteoperate/${encodeURIComponent(lockId)}/${segment}`,
+      `/remoteoperate/${encodeURIComponent(lockId)}/${segment}?type=async`,
       { method: "PUT" },
       { maxRetries: 0 },
     );
