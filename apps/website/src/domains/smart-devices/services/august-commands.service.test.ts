@@ -129,6 +129,7 @@ function allowTransaction(commandInProgressAt: Date | null = null) {
   mockTransaction.mockImplementationOnce(async (fn) =>
     fn({
       $queryRaw: vi.fn().mockResolvedValue([{ locked: true }]),
+      $executeRaw: vi.fn().mockResolvedValue(0),
       smartDevice: {
         findUniqueOrThrow: vi.fn().mockResolvedValue({ commandInProgressAt }),
         update: vi.fn().mockResolvedValue({}),
@@ -499,6 +500,7 @@ describe("sendAugustLockCommand", () => {
       mockTransaction.mockImplementationOnce(async (fn) =>
         fn({
           $queryRaw: vi.fn().mockResolvedValue([{ locked: true }]),
+          $executeRaw: vi.fn().mockResolvedValue(0),
           smartDevice: {
             findUniqueOrThrow: vi
               .fn()
@@ -590,6 +592,7 @@ describe("sendAugustLockCommand", () => {
     mockTransaction.mockImplementationOnce(async (fn) =>
       fn({
         $queryRaw: vi.fn().mockResolvedValue([{ locked: false }]),
+        $executeRaw: vi.fn().mockResolvedValue(0),
         smartDevice: { findUniqueOrThrow: vi.fn(), update: vi.fn() },
       }),
     );
@@ -602,6 +605,34 @@ describe("sendAugustLockCommand", () => {
     expect(result).toEqual({ status: "already_running" });
     expect(mockGetLockDetail).not.toHaveBeenCalled();
     expect(mockLock).not.toHaveBeenCalled();
+  });
+
+  it("the account-wide slots lock is taken with $executeRaw (void result), never $queryRaw (2026-09-25 incident)", async () => {
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      mappedEnabledDevice() as never,
+    );
+    const txQueryRaw = vi.fn().mockResolvedValue([{ locked: false }]);
+    const txExecuteRaw = vi.fn().mockResolvedValue(0);
+    mockTransaction.mockImplementationOnce(async (fn) =>
+      fn({
+        $queryRaw: txQueryRaw,
+        $executeRaw: txExecuteRaw,
+        smartDevice: { findUniqueOrThrow: vi.fn(), update: vi.fn() },
+      }),
+    );
+
+    await sendAugustLockCommand(actor, {
+      smartDeviceId: SMART_DEVICE_ID,
+      operation: "LOCK",
+    });
+
+    expect(txExecuteRaw).toHaveBeenCalledTimes(1);
+    expect(String(txExecuteRaw.mock.calls[0]![0])).toContain(
+      "pg_advisory_xact_lock(hashtext('august_command_slots'))",
+    );
+    for (const call of txQueryRaw.mock.calls) {
+      expect(String(call[0])).not.toContain("pg_advisory_xact_lock(");
+    }
   });
 
   it("duplicate-command prevention: a fresh (non-stale) in-progress marker read INSIDE the lock blocks the command", async () => {

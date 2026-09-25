@@ -10,6 +10,7 @@ import {
 } from "@stayw/integrations/august";
 import { HttpRequestError } from "@stayw/integrations/core";
 
+import { acquireAugustCommandSlotsLock } from "./august-command-locks";
 import { readLockControlSetting } from "./lock-control-settings.service";
 import { mergeAugustLockMetadata } from "./lock-refresh.service";
 
@@ -578,7 +579,7 @@ export async function sendAugustLockCommand(
   const lockResult = await prisma.$transaction(async (tx) => {
     // Serializes the account-wide in-flight count below across concurrent
     // requests for different locks (held only for this short transaction).
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('august_command_slots'))`;
+    await acquireAugustCommandSlotsLock(tx);
     const lockRows = await tx.$queryRaw<{ locked: boolean }[]>`
       SELECT pg_try_advisory_xact_lock(hashtext('device_command'), hashtext(${smartDevice.id})) AS locked
     `;
