@@ -30,14 +30,16 @@ vi.mock("@/platform/audit/record-audit", () => ({
   recordAudit: mockRecordAudit,
 }));
 
+vi.mock("./lock-operational-hold.service", () => ({
+  readActiveOperationalHold: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock("./lock-control-settings.service", () => ({
-  readLockControlSetting: vi
-    .fn()
-    .mockResolvedValue({
-      enabled: true,
-      updatedAt: null,
-      updatedByUserId: null,
-    }),
+  readLockControlSetting: vi.fn().mockResolvedValue({
+    enabled: true,
+    updatedAt: null,
+    updatedByUserId: null,
+  }),
 }));
 
 import { prisma } from "@stayw/database";

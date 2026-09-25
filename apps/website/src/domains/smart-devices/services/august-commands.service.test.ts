@@ -9,6 +9,7 @@ const {
   mockGetLockCapabilities,
   mockRecordAudit,
   mockReadLockControlSetting,
+  mockReadActiveOperationalHold,
 } = vi.hoisted(() => ({
   mockTransaction: vi.fn(),
   mockLock: vi.fn(),
@@ -18,6 +19,7 @@ const {
   mockGetLockCapabilities: vi.fn(),
   mockRecordAudit: vi.fn().mockResolvedValue({}),
   mockReadLockControlSetting: vi.fn(),
+  mockReadActiveOperationalHold: vi.fn(),
 }));
 
 vi.mock("@stayw/database", () => ({
@@ -61,6 +63,10 @@ vi.mock("@/platform/audit/record-audit", () => ({
 
 vi.mock("./lock-control-settings.service", () => ({
   readLockControlSetting: mockReadLockControlSetting,
+}));
+
+vi.mock("./lock-operational-hold.service", () => ({
+  readActiveOperationalHold: mockReadActiveOperationalHold,
 }));
 
 import { assertPermission } from "@stayw/auth";
@@ -170,6 +176,7 @@ describe("sendAugustLockCommand", () => {
       updatedAt: null,
       updatedByUserId: null,
     });
+    mockReadActiveOperationalHold.mockReset().mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -340,6 +347,38 @@ describe("sendAugustLockCommand", () => {
 
     expect(result.status).toBe("rejected");
     expect(mockUnlock).not.toHaveBeenCalled();
+  });
+
+  describe("admin operational hold (2026-09-26)", () => {
+    it("an active hold refuses the command before any August call, audited as REJECTED", async () => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      mockReadActiveOperationalHold.mockResolvedValueOnce({
+        kind: "OUT_OF_SERVICE",
+        note: "Jammed per August app; replacement ordered.",
+        setAt: "2026-09-26T00:00:00.000Z",
+        setByUserId: "admin-1",
+      });
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "UNLOCK",
+      });
+
+      expect(result.status).toBe("rejected");
+      expect(result).toMatchObject({
+        reason: expect.stringContaining(
+          "On hold: Out of service. Jammed per August app; replacement ordered.",
+        ),
+      });
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(mockGetLockDetail).not.toHaveBeenCalled();
+      expect(mockUnlock).not.toHaveBeenCalled();
+      expect(mockRecordAudit.mock.calls[0]![0].metadata.errorDetail).toBe(
+        "Blocked by operational hold (OUT_OF_SERVICE).",
+      );
+    });
   });
 
   describe("dynamic eligibility gates (2026-09-25, replaces the env allowlist)", () => {
@@ -1719,6 +1758,22 @@ describe("computeLockControlEligibility / computeFirstTestEligibility — fully 
       expect(isAdminResetAvailable(lastOutcome)).toBe(true);
     },
   );
+
+  it("an operational hold blocks both workflows, even for a verified online lock", () => {
+    const hold = { label: "Out of service", note: "Replacement ordered." };
+    const verified = {
+      ...base,
+      lastOutcome: "SUCCEEDED" as const,
+      operationalHold: hold,
+    };
+    expect(computeLockControlEligibility(verified)).toEqual({
+      eligible: false,
+      reason: expect.stringContaining("On hold: Out of service."),
+    });
+    expect(
+      computeFirstTestEligibility({ ...base, operationalHold: hold }),
+    ).toEqual({ eligible: false });
+  });
 
   it("admin reset is only available for FAILED/AMBIGUOUS", () => {
     expect(isAdminResetAvailable(undefined)).toBe(false);

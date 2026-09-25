@@ -235,9 +235,54 @@ export function buildLockHealthUpdate(
   };
 }
 
+/**
+ * Admin-recorded operational hold (2026-09-26): a human decision that a lock
+ * must not be remotely operated or tested, whatever its telemetry says —
+ * e.g. Florisun's jam reported in the August app and a replacement ordered.
+ * Recorded as AuditLog rows (action "smart_device.lock_operational_hold"),
+ * never in SmartDevice.metadata, so no telemetry refresh can overwrite or
+ * clear it; the newest row wins, and clearing is itself a new row
+ * (lock-operational-hold.service.ts).
+ */
+export type OperationalHoldKind =
+  "OUT_OF_SERVICE" | "ONSITE_INSPECTION_REQUIRED" | "EXCLUDED_FROM_TESTING";
+
+export interface OperationalHold {
+  kind: OperationalHoldKind;
+  note: string;
+  setAt: string;
+  setByUserId: string;
+}
+
+export const OPERATIONAL_HOLD_LABELS: Record<OperationalHoldKind, string> = {
+  OUT_OF_SERVICE: "Out of service",
+  ONSITE_INSPECTION_REQUIRED: "Onsite inspection required",
+  EXCLUDED_FROM_TESTING: "Excluded from testing",
+};
+
+/** Parses one hold AuditLog afterState: the active hold, or null for a "cleared" row / anything unrecognized. */
+export function parseOperationalHold(
+  afterState: unknown,
+): OperationalHold | null {
+  const value =
+    afterState && typeof afterState === "object"
+      ? (afterState as Record<string, unknown>).hold
+      : null;
+  if (!value || typeof value !== "object") return null;
+  const hold = value as Partial<OperationalHold>;
+  return hold.kind &&
+    hold.kind in OPERATIONAL_HOLD_LABELS &&
+    typeof hold.note === "string" &&
+    typeof hold.setAt === "string"
+    ? (hold as OperationalHold)
+    : null;
+}
+
 export type LockHealthSeverity = "red" | "orange" | "yellow";
 
 export type LockHealthFlagCode =
+  | "OPERATIONAL_HOLD"
+  | "COMMAND_BLOCKED"
   | "DOOR_OPEN_UNLOCKED"
   | "UNLOCKED"
   | "NO_BRIDGE"
@@ -264,8 +309,10 @@ export interface LockHealthInput {
   now: Date;
   /** known → unknown transitions recorded in the last 24h. */
   recentUnknownTransitions: number;
-  /** Latest recorded command outcome, when the viewer can see it. */
+  /** Latest recorded command outcome (getLatestAugustLockCommandOutcomes). */
   lastCommandOutcome?: string | null;
+  /** Active admin hold (getActiveOperationalHolds), if any. */
+  operationalHold?: OperationalHold | null;
 }
 
 const POSSIBLE_PROBLEM_LABEL =
@@ -299,6 +346,32 @@ export function classifyLockHealth(input: LockHealthInput): LockHealthFlag[] {
   const flags: LockHealthFlag[] = [];
   const add = (flag: LockHealthFlag) => flags.push(flag);
 
+  // Human decisions and command blocks come first and never depend on
+  // telemetry: a healthy-looking reading can't hide them.
+  const hold = input.operationalHold ?? null;
+  if (hold) {
+    add({
+      code: "OPERATIONAL_HOLD",
+      severity: "red",
+      label: OPERATIONAL_HOLD_LABELS[hold.kind],
+      detail: `${hold.note} Remote commands and testing are blocked until an admin clears this.`,
+      since: hold.setAt,
+    });
+  }
+  const outcome = input.lastCommandOutcome ?? null;
+  if (outcome === "FAILED" || outcome === "AMBIGUOUS") {
+    add({
+      code: "COMMAND_BLOCKED",
+      severity: "orange",
+      label: `Command blocked (${outcome})`,
+      detail:
+        "Last remote command was " +
+        outcome +
+        ". Needs a truthful in-person check and an admin Reset after physical check before any further remote command.",
+      since: null,
+    });
+  }
+
   if (!s) {
     add({
       code: "STALE_LOCK_TELEMETRY",
@@ -307,7 +380,9 @@ export function classifyLockHealth(input: LockHealthInput): LockHealthFlag[] {
       detail: "Waiting for the next August refresh to record lock health.",
       since: null,
     });
-    return flags;
+    return flags.sort(
+      (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity],
+    );
   }
 
   const unlockedFor = ageMs(s.lockStateSince, input.now);
@@ -384,11 +459,7 @@ export function classifyLockHealth(input: LockHealthInput): LockHealthFlag[] {
     });
   }
 
-  const outcome = input.lastCommandOutcome ?? null;
   const problemReasons = [
-    outcome === "FAILED" || outcome === "AMBIGUOUS"
-      ? `Last remote command was ${outcome}.`
-      : null,
     s.lockState === "unknown" && s.unknownReason
       ? `August reported ${s.unknownReason}.`
       : null,

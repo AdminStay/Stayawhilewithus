@@ -10,8 +10,11 @@ import {
 } from "@stayw/integrations/august";
 import { HttpRequestError } from "@stayw/integrations/core";
 
+import { OPERATIONAL_HOLD_LABELS } from "../lib/lock-health";
+
 import { acquireAugustCommandSlotsLock } from "./august-command-locks";
 import { readLockControlSetting } from "./lock-control-settings.service";
+import { readActiveOperationalHold } from "./lock-operational-hold.service";
 import { mergeAugustLockMetadata } from "./lock-refresh.service";
 
 import { recordAudit } from "@/platform/audit/record-audit";
@@ -259,6 +262,16 @@ export interface LockControlContext {
   lastOutcome: AugustLockCommandRecordedOutcome | undefined;
   /** The global kill switch (readLockControlSetting). */
   lockControlEnabled: boolean;
+  /**
+   * Active admin operational hold for this lock (2026-09-26), if any — e.g.
+   * out of service / onsite inspection required / excluded from testing.
+   * Blocks both workflows regardless of telemetry.
+   */
+  operationalHold?: { label: string; note: string } | null;
+}
+
+function onHoldReason(hold: { label: string; note: string }): string {
+  return `On hold: ${hold.label}. ${hold.note} Remote commands and testing are blocked until an admin clears the hold.`;
 }
 
 /** Exact same copy sendAugustLockCommand() itself returns when providerDevice is missing/disabled — reused, not paraphrased, so a pre-click and a post-click message never disagree. */
@@ -308,6 +321,9 @@ export function computeLockControlEligibility(
   if (!ctx.lockControlEnabled) {
     return { eligible: false, reason: KILL_SWITCH_OFF_REASON };
   }
+  if (ctx.operationalHold) {
+    return { eligible: false, reason: onHoldReason(ctx.operationalHold) };
+  }
   if (ctx.externalDeviceId === null) {
     return { eligible: false, reason: NOT_ENABLED_FOR_CONTROL_REASON };
   }
@@ -342,6 +358,7 @@ export function computeFirstTestEligibility(
   ctx: LockControlContext,
 ): FirstTestEligibility {
   if (!ctx.lockControlEnabled) return { eligible: false };
+  if (ctx.operationalHold) return { eligible: false };
   if (ctx.externalDeviceId === null) return { eligible: false };
   if (ctx.connectivity !== "ONLINE") return { eligible: false };
   if (
@@ -550,6 +567,26 @@ export async function sendAugustLockCommand(
       errorDetail: "Blocked by the global lock-control kill switch (OFF).",
     });
     return { status: "rejected", reason: KILL_SWITCH_OFF_REASON };
+  }
+  // Admin operational hold (2026-09-26): refused before any August call.
+  const hold = await readActiveOperationalHold(smartDevice.id);
+  if (hold) {
+    await recordAuditSafely({
+      actor,
+      smartDeviceId: smartDevice.id,
+      propertyId: smartDevice.propertyId,
+      operation: input.operation,
+      previousMetadata: smartDevice.metadata,
+      result: "REJECTED",
+      errorDetail: `Blocked by operational hold (${hold.kind}).`,
+    });
+    return {
+      status: "rejected",
+      reason: onHoldReason({
+        label: OPERATIONAL_HOLD_LABELS[hold.kind],
+        note: hold.note,
+      }),
+    };
   }
   const lastOutcome = await getMostRecentRecordedOutcome(smartDevice.id);
   if (lastOutcome === "FAILED" || lastOutcome === "AMBIGUOUS") {

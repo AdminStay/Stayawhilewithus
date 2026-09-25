@@ -25,6 +25,7 @@ import {
 
 import type {
   AugustLockCommandActionState,
+  OperationalHoldActionState,
   RefreshAugustSpotActionState,
   ResetAugustLockActionState,
 } from "../actions";
@@ -47,6 +48,7 @@ import { AdminResetLockButton } from "./AdminResetLockButton";
 import { AugustFirstTestButton } from "./AugustFirstTestButton";
 import { AugustLockControlButton } from "./AugustLockControlButton";
 import { LockSpotRefreshButton } from "./LockSpotRefreshButton";
+import { OperationalHoldButton } from "./OperationalHoldButton";
 import { RelockPrompt } from "./RelockPrompt";
 
 type LockWithProperty = SmartDevice & {
@@ -57,7 +59,14 @@ type LockWithProperty = SmartDevice & {
   firstTestEligibility: FirstTestEligibility | null;
   /** True when the lock is blocked by a FAILED/AMBIGUOUS outcome, so an admin may reset it after an in-person check. */
   adminResetAvailable: boolean;
+  /** Label of the lock's active admin operational hold, or null. */
+  operationalHoldLabel?: string | null;
 };
+
+type HoldAction = (
+  prevState: OperationalHoldActionState,
+  formData: FormData,
+) => Promise<OperationalHoldActionState>;
 
 /**
  * Short label for the compact Status dot (2026-09-18 /locks UI cleanup) —
@@ -168,6 +177,7 @@ export function LocksList({
   lockCommandAction,
   retireAction,
   resetAction,
+  holdActions,
 }: {
   locks: LockWithProperty[];
   /** UX-only gate, matching every other write-capable button in this domain — assertPermission inside the server action remains the real enforcement. */
@@ -205,6 +215,8 @@ export function LocksList({
     prevState: ResetAugustLockActionState,
     formData: FormData,
   ) => Promise<ResetAugustLockActionState>;
+  /** Admin operational hold set/clear (2026-09-26) — shown only with canControlLocks. */
+  holdActions?: { set: HoldAction; clear: HoldAction };
 }) {
   const total = locks.length;
   const online = locks.filter((l) => l.status === "ONLINE").length;
@@ -416,6 +428,18 @@ export function LocksList({
                                 action={resetAction}
                               />
                             )}
+                          {canControlLocks && holdActions && (
+                            <OperationalHoldButton
+                              smartDeviceId={lock.id}
+                              lockName={lock.name}
+                              propertyName={lock.property.name}
+                              activeHoldLabel={
+                                lock.operationalHoldLabel ?? null
+                              }
+                              setAction={holdActions.set}
+                              clearAction={holdActions.clear}
+                            />
+                          )}
                           {canRefresh && spotRefreshAction && (
                             <LockSpotRefreshButton
                               smartDeviceId={lock.id}

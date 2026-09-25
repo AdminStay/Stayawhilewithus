@@ -5,9 +5,11 @@ import { revalidatePath } from "next/cache";
 
 import { fahrenheitToCelsius } from "./lib/temperature";
 import {
+  clearLockOperationalHoldSchema,
   resetAugustLockSchema,
   sendAugustLockCommandSchema,
   setLockControlEnabledSchema,
+  setLockOperationalHoldSchema,
 } from "./schemas/august-lock-command.schema";
 import {
   refreshAugustBatchSchema,
@@ -36,6 +38,11 @@ import {
   setLockControlEnabled,
   type SetLockControlResult,
 } from "./services/lock-control-settings.service";
+import {
+  clearLockOperationalHold,
+  setLockOperationalHold,
+  type OperationalHoldResult,
+} from "./services/lock-operational-hold.service";
 import {
   logLockRefresh,
   refreshAugustTelemetry,
@@ -414,6 +421,56 @@ export async function resetAugustLockAction(
     };
   }
   const result = await resetAugustLockAfterPhysicalCheck(actor, parsed.data);
+  if (result.status === "success") revalidatePath(LOCKS_PAGE_PATH);
+  return result;
+}
+
+export type OperationalHoldActionState =
+  | { status: "idle" }
+  | OperationalHoldResult
+  | { status: "invalid"; reason: string };
+
+/**
+ * Admin operational hold on one lock (2026-09-26). Records a new AuditLog
+ * row only — never sends a command. RBAC and validation live server-side.
+ */
+export async function setLockOperationalHoldAction(
+  _prevState: OperationalHoldActionState,
+  formData: FormData,
+): Promise<OperationalHoldActionState> {
+  const actor = await getCurrentUser();
+  const parsed = setLockOperationalHoldSchema.safeParse({
+    smartDeviceId: formData.get("smartDeviceId"),
+    kind: formData.get("kind"),
+    note: formData.get("note") ?? "",
+  });
+  if (!parsed.success) {
+    return {
+      status: "invalid",
+      reason: "Choose a hold type and describe the reason.",
+    };
+  }
+  const result = await setLockOperationalHold(actor, parsed.data);
+  if (result.status === "success") revalidatePath(LOCKS_PAGE_PATH);
+  return result;
+}
+
+export async function clearLockOperationalHoldAction(
+  _prevState: OperationalHoldActionState,
+  formData: FormData,
+): Promise<OperationalHoldActionState> {
+  const actor = await getCurrentUser();
+  const parsed = clearLockOperationalHoldSchema.safeParse({
+    smartDeviceId: formData.get("smartDeviceId"),
+    note: formData.get("note") ?? "",
+  });
+  if (!parsed.success) {
+    return {
+      status: "invalid",
+      reason: "Describe why the hold is being cleared.",
+    };
+  }
+  const result = await clearLockOperationalHold(actor, parsed.data);
   if (result.status === "success") revalidatePath(LOCKS_PAGE_PATH);
   return result;
 }

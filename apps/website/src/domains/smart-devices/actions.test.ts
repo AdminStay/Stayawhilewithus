@@ -22,7 +22,11 @@ const {
   mockRetireSmartDevice,
   mockSetLockControlEnabled,
   mockResetAugustLock,
+  mockSetHold,
+  mockClearHold,
 } = vi.hoisted(() => ({
+  mockSetHold: vi.fn(),
+  mockClearHold: vi.fn(),
   mockSetLockControlEnabled: vi.fn(),
   mockResetAugustLock: vi.fn(),
   mockRevalidatePath: vi.fn(),
@@ -71,6 +75,11 @@ vi.mock("./services/lock-control-settings.service", () => ({
   setLockControlEnabled: mockSetLockControlEnabled,
 }));
 
+vi.mock("./services/lock-operational-hold.service", () => ({
+  setLockOperationalHold: mockSetHold,
+  clearLockOperationalHold: mockClearHold,
+}));
+
 vi.mock("./services/thermostat-refresh.service", () => ({
   refreshThermostats: mockRefreshThermostats,
   logThermostatRefresh: mockLogThermostatRefresh,
@@ -98,10 +107,12 @@ import {
   refreshAugustTelemetryBatchAction,
   refreshAugustTelemetrySpotAction,
   refreshThermostatsAction,
+  clearLockOperationalHoldAction,
   resetAugustLockAction,
   retireSmartDeviceAction,
   sendAugustLockCommandAction,
   setLockControlEnabledAction,
+  setLockOperationalHoldAction,
 } from "./actions";
 
 const IDLE = { status: "idle" as const };
@@ -1051,5 +1062,57 @@ describe("resetAugustLockAction (2026-09-25)", () => {
     );
     expect(result).toEqual({ status: "success" });
     expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+  });
+});
+
+describe("lock operational hold actions (2026-09-26)", () => {
+  const DEVICE = "11111111-1111-1111-1111-111111111111";
+
+  beforeEach(() => {
+    mockSetHold.mockReset().mockResolvedValue({ status: "success" });
+    mockClearHold.mockReset().mockResolvedValue({ status: "success" });
+    mockRevalidatePath.mockClear();
+  });
+
+  it("set: requires a hold type and a reason; passes them through and revalidates /locks", async () => {
+    const missing = new FormData();
+    missing.set("smartDeviceId", DEVICE);
+    expect(
+      (await setLockOperationalHoldAction({ status: "idle" }, missing)).status,
+    ).toBe("invalid");
+    expect(mockSetHold).not.toHaveBeenCalled();
+
+    const fd = new FormData();
+    fd.set("smartDeviceId", DEVICE);
+    fd.set("kind", "OUT_OF_SERVICE");
+    fd.set("note", "  Lock replacement required.  ");
+    expect(await setLockOperationalHoldAction({ status: "idle" }, fd)).toEqual({
+      status: "success",
+    });
+    expect(mockSetHold).toHaveBeenCalledWith(
+      { userId: "user-1" },
+      {
+        smartDeviceId: DEVICE,
+        kind: "OUT_OF_SERVICE",
+        note: "Lock replacement required.",
+      },
+    );
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+  });
+
+  it("clear: requires a reason", async () => {
+    const fd = new FormData();
+    fd.set("smartDeviceId", DEVICE);
+    expect(
+      (await clearLockOperationalHoldAction({ status: "idle" }, fd)).status,
+    ).toBe("invalid");
+    fd.set("note", "Replaced and checked on site.");
+    expect(
+      await clearLockOperationalHoldAction({ status: "idle" }, fd),
+    ).toEqual({ status: "success" });
+    expect(mockClearHold).toHaveBeenCalledWith(
+      { userId: "user-1" },
+      { smartDeviceId: DEVICE, note: "Replaced and checked on site." },
+    );
   });
 });

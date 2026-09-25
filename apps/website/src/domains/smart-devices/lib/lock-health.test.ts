@@ -301,14 +301,80 @@ describe("classifyLockHealth", () => {
     expect(JSON.stringify(flags).toLowerCase()).not.toContain("jammed");
   });
 
-  it("frequent unknown (3 in 24 h) or a FAILED/AMBIGUOUS last command raises 'possible lock problem'", () => {
+  it("frequent unknown (3 in 24 h) raises 'possible lock problem'", () => {
     expect(flagsFor({}, { recentUnknownTransitions: 3 })).toEqual([
       "POSSIBLE_LOCK_PROBLEM",
     ]);
-    expect(flagsFor({}, { lastCommandOutcome: "AMBIGUOUS" })).toEqual([
-      "POSSIBLE_LOCK_PROBLEM",
-    ]);
     expect(flagsFor({}, { lastCommandOutcome: "SUCCEEDED" })).toEqual([]);
+  });
+
+  it("FAILED/AMBIGUOUS history is its own 'Command blocked' flag, shown whatever the telemetry says", () => {
+    const [blocked] = classifyLockHealth({
+      metadata: snapshot(),
+      connectivity: "ONLINE",
+      now: T0,
+      recentUnknownTransitions: 0,
+      lastCommandOutcome: "AMBIGUOUS",
+    });
+    expect(blocked).toMatchObject({
+      code: "COMMAND_BLOCKED",
+      severity: "orange",
+      label: "Command blocked (AMBIGUOUS)",
+    });
+    expect(blocked!.detail).toContain("in-person check");
+  });
+
+  it("an admin operational hold is always red and first — healthy telemetry can't clear it (Florisun)", () => {
+    const flags = classifyLockHealth({
+      metadata: snapshot(),
+      connectivity: "ONLINE",
+      now: T0,
+      recentUnknownTransitions: 0,
+      operationalHold: {
+        kind: "OUT_OF_SERVICE",
+        note: "Lock replacement required.",
+        setAt: "2026-09-26T00:00:00.000Z",
+        setByUserId: "admin-1",
+      },
+    });
+    expect(flags).toEqual([
+      expect.objectContaining({
+        code: "OPERATIONAL_HOLD",
+        severity: "red",
+        label: "Out of service",
+        since: "2026-09-26T00:00:00.000Z",
+      }),
+    ]);
+  });
+
+  it("holds and command blocks still show for a lock with no health snapshot yet", () => {
+    const codes = classifyLockHealth({
+      metadata: {},
+      connectivity: "ONLINE",
+      now: T0,
+      recentUnknownTransitions: 0,
+      lastCommandOutcome: "FAILED",
+      operationalHold: {
+        kind: "EXCLUDED_FROM_TESTING",
+        note: "Connection instability.",
+        setAt: "2026-09-26T00:00:00.000Z",
+        setByUserId: "a",
+      },
+    }).map((f) => f.code);
+    expect(codes).toEqual([
+      "OPERATIONAL_HOLD",
+      "COMMAND_BLOCKED",
+      "STALE_LOCK_TELEMETRY",
+    ]);
+  });
+
+  it("door OPEN is only claimed from a real 'open' reading: init/unknown door sensors never produce a door-open flag", () => {
+    expect(flagsFor({ lockState: "unlocked", doorState: "init" })).toEqual([
+      "UNLOCKED",
+    ]);
+    expect(flagsFor({ lockState: "unlocked", doorState: "unknown" })).toEqual([
+      "UNLOCKED",
+    ]);
   });
 
   it("battery: under 30% yellow, under 20% or an August warning orange", () => {

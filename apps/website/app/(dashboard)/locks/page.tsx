@@ -5,17 +5,22 @@ import {
   refreshAugustAction,
   refreshAugustTelemetryBatchAction,
   refreshAugustTelemetrySpotAction,
+  clearLockOperationalHoldAction,
   resetAugustLockAction,
   retireSmartDeviceAction,
   sendAugustLockCommandAction,
   setLockControlEnabledAction,
+  setLockOperationalHoldAction,
 } from "@/domains/smart-devices/actions";
 import { BulkRefreshDialog } from "@/domains/smart-devices/components/BulkRefreshDialog";
 import { LockControlKillSwitch } from "@/domains/smart-devices/components/LockControlKillSwitch";
 import { LockHealthPanel } from "@/domains/smart-devices/components/LockHealthPanel";
 import { LocksList } from "@/domains/smart-devices/components/LocksList";
 import { RefreshLocksButton } from "@/domains/smart-devices/components/RefreshLocksButton";
-import { classifyLockHealth } from "@/domains/smart-devices/lib/lock-health";
+import {
+  classifyLockHealth,
+  OPERATIONAL_HOLD_LABELS,
+} from "@/domains/smart-devices/lib/lock-health";
 import {
   computeFirstTestEligibility,
   computeLockControlEligibility,
@@ -24,6 +29,7 @@ import {
 } from "@/domains/smart-devices/services/august-commands.service";
 import { getLockControlSetting } from "@/domains/smart-devices/services/lock-control-settings.service";
 import { getRecentUnknownTransitionCounts } from "@/domains/smart-devices/services/lock-health.service";
+import { getActiveOperationalHolds } from "@/domains/smart-devices/services/lock-operational-hold.service";
 import {
   isDemoSmartDevice,
   isLockVisible,
@@ -91,9 +97,16 @@ export default async function LocksPage() {
   const augustLockIds = locks
     .filter((lock) => lock.provider === "AUGUST")
     .map((lock) => lock.id);
-  const lastCommandOutcomes = canControlLocks
-    ? await getLatestAugustLockCommandOutcomes(actor, augustLockIds)
-    : new Map();
+  // Read for every viewer (smart_devices:read): the lock-health list shows
+  // command blocks and admin holds to everyone, not only to admins.
+  const lastCommandOutcomes = await getLatestAugustLockCommandOutcomes(
+    actor,
+    augustLockIds,
+  );
+  const operationalHolds = await getActiveOperationalHolds(
+    actor,
+    augustLockIds,
+  );
   const locksWithEligibility = locks.map((lock) => {
     const mapping = lock.providerDevice;
     // Mirrors sendAugustLockCommand()'s own mapping check exactly.
@@ -101,17 +114,22 @@ export default async function LocksPage() {
       mapping?.enabled && mapping.propertyId ? mapping.externalDeviceId : null;
     const lastOutcome = lastCommandOutcomes.get(lock.id);
     const isAugust = lock.provider === "AUGUST" && canControlLocks;
+    const hold = operationalHolds.get(lock.id) ?? null;
     const ctx = {
       externalDeviceId,
       connectivity: lock.status,
       lastOutcome,
       lockControlEnabled: lockControl.enabled,
+      operationalHold: hold
+        ? { label: OPERATIONAL_HOLD_LABELS[hold.kind], note: hold.note }
+        : null,
     };
     return {
       ...lock,
       controlEligibility: isAugust ? computeLockControlEligibility(ctx) : null,
       firstTestEligibility: isAugust ? computeFirstTestEligibility(ctx) : null,
       adminResetAvailable: isAugust && isAdminResetAvailable(lastOutcome),
+      operationalHoldLabel: hold ? OPERATIONAL_HOLD_LABELS[hold.kind] : null,
     };
   });
 
@@ -135,6 +153,7 @@ export default async function LocksPage() {
       now: healthNow,
       recentUnknownTransitions: unknownCounts.get(lock.id) ?? 0,
       lastCommandOutcome: lastCommandOutcomes.get(lock.id) ?? null,
+      operationalHold: operationalHolds.get(lock.id) ?? null,
     }),
   }));
 
@@ -178,6 +197,10 @@ export default async function LocksPage() {
         lockCommandAction={sendAugustLockCommandAction}
         retireAction={retireSmartDeviceAction}
         resetAction={resetAugustLockAction}
+        holdActions={{
+          set: setLockOperationalHoldAction,
+          clear: clearLockOperationalHoldAction,
+        }}
       />
     </div>
   );

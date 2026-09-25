@@ -4,12 +4,12 @@ import { assertPermission, type AuthContext } from "@stayw/auth";
 import { prisma, type Prisma } from "@stayw/database";
 import { AugustClient, isAugustBrand } from "@stayw/integrations/august";
 
+import { buildLockHealthUpdate } from "../lib/lock-health";
 import {
   refreshAugustSpotSchema,
   type RefreshAugustSpotInput,
 } from "../schemas/lock-spot-refresh.schema";
 
-import { buildLockHealthUpdate } from "../lib/lock-health";
 import { AUGUST_DETAIL_CONCURRENCY, chunk } from "./provider-devices.service";
 import { isDemoSmartDevice } from "./smart-devices.service";
 

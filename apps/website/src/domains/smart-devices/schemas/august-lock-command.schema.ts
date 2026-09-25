@@ -23,3 +23,19 @@ export const resetAugustLockSchema = z.object({
   confirmedInPerson: z.literal("on"),
   note: z.string().trim().max(500).optional(),
 });
+
+/** Admin operational hold (2026-09-26). A note is required so the reason is always recorded. */
+export const setLockOperationalHoldSchema = z.object({
+  smartDeviceId: z.string().uuid(),
+  kind: z.enum([
+    "OUT_OF_SERVICE",
+    "ONSITE_INSPECTION_REQUIRED",
+    "EXCLUDED_FROM_TESTING",
+  ]),
+  note: z.string().trim().min(3).max(500),
+});
+
+export const clearLockOperationalHoldSchema = z.object({
+  smartDeviceId: z.string().uuid(),
+  note: z.string().trim().min(3).max(500),
+});
