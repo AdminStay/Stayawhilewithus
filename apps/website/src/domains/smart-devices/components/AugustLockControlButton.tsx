@@ -6,6 +6,8 @@ import { useActionState, useState } from "react";
 
 import type { AugustLockCommandActionState } from "../actions";
 
+import { RelockPrompt } from "./RelockPrompt";
+
 const INITIAL_STATE: AugustLockCommandActionState = { status: "idle" };
 
 const OPERATION_LABEL = { LOCK: "Lock", UNLOCK: "Unlock" } as const;
@@ -83,10 +85,10 @@ function resultTone(state: AugustLockCommandActionState): string {
  * cosmetic preference. When `disabled` is true the trigger itself is
  * unclickable and shows `disabledReason` as its tooltip, so the confirm
  * dialog never opens at all — this is what stops the dashboard from
- * presenting a lock as remotely controllable when the real, authoritative
- * server-side gate (AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS) would refuse it,
- * or when the last real attempt against this exact device is on record as
- * having failed. Purely additional UX/clarity — sendAugustLockCommand()
+ * presenting a lock as remotely controllable when the real server-side
+ * checks (kill switch, online, verified history) would refuse it, or when
+ * the last real attempt against this exact device is on record as having
+ * failed. Purely additional UX/clarity — sendAugustLockCommand()
  * re-checks every one of these conditions live and unconditionally
  * regardless of what this prop says; nothing here weakens or replaces that
  * enforcement.
@@ -180,6 +182,14 @@ export function AugustLockControlButton({
             )}
           </div>
         </form>
+
+        {/* Outside the command form above, so its own single-button LOCK
+            form is never nested inside another form. */}
+        {operation === "UNLOCK" && state.status === "success" && (
+          <div className="mt-4">
+            <RelockPrompt smartDeviceId={smartDeviceId} action={action} />
+          </div>
+        )}
       </Dialog>
     </>
   );

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   mockRevalidatePath,
@@ -20,7 +20,11 @@ const {
   mockRefreshAugustTelemetryForSelectedLocks,
   mockLogLockSpotRefresh,
   mockRetireSmartDevice,
+  mockSetLockControlEnabled,
+  mockResetAugustLock,
 } = vi.hoisted(() => ({
+  mockSetLockControlEnabled: vi.fn(),
+  mockResetAugustLock: vi.fn(),
   mockRevalidatePath: vi.fn(),
   mockDiscoverNestDevices: vi.fn(),
   mockDiscoverAugustDevices: vi.fn(),
@@ -60,6 +64,11 @@ vi.mock("./services/nest-commands.service", () => ({
 
 vi.mock("./services/august-commands.service", () => ({
   sendAugustLockCommand: mockSendAugustLockCommand,
+  resetAugustLockAfterPhysicalCheck: mockResetAugustLock,
+}));
+
+vi.mock("./services/lock-control-settings.service", () => ({
+  setLockControlEnabled: mockSetLockControlEnabled,
 }));
 
 vi.mock("./services/thermostat-refresh.service", () => ({
@@ -89,8 +98,10 @@ import {
   refreshAugustTelemetryBatchAction,
   refreshAugustTelemetrySpotAction,
   refreshThermostatsAction,
+  resetAugustLockAction,
   retireSmartDeviceAction,
   sendAugustLockCommandAction,
+  setLockControlEnabledAction,
 } from "./actions";
 
 const IDLE = { status: "idle" as const };
@@ -954,5 +965,91 @@ describe("retireSmartDeviceAction", () => {
     await expect(retireSmartDeviceAction(formData)).rejects.toThrow(
       "This device is already retired.",
     );
+  });
+});
+
+describe("setLockControlEnabledAction (2026-09-25)", () => {
+  beforeEach(() => {
+    mockSetLockControlEnabled.mockReset();
+    mockRevalidatePath.mockClear();
+  });
+
+  it.each([
+    ["false", false],
+    ["true", true],
+  ])(
+    "passes enabled=%s through as a boolean and revalidates /locks",
+    async (raw, expected) => {
+      mockSetLockControlEnabled.mockResolvedValueOnce({
+        status: "success",
+        enabled: expected,
+      });
+      const formData = new FormData();
+      formData.set("enabled", raw);
+
+      const result = await setLockControlEnabledAction(
+        { status: "idle" },
+        formData,
+      );
+
+      expect(mockSetLockControlEnabled).toHaveBeenCalledWith(
+        { userId: "user-1" },
+        expected,
+      );
+      expect(result).toEqual({ status: "success", enabled: expected });
+      expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+    },
+  );
+
+  it("rejects a malformed value without calling the service", async () => {
+    const formData = new FormData();
+    formData.set("enabled", "yes");
+    await expect(
+      setLockControlEnabledAction({ status: "idle" }, formData),
+    ).rejects.toThrow();
+    expect(mockSetLockControlEnabled).not.toHaveBeenCalled();
+  });
+});
+
+describe("resetAugustLockAction (2026-09-25)", () => {
+  const DEVICE = "11111111-1111-1111-1111-111111111111";
+
+  beforeEach(() => {
+    mockResetAugustLock.mockReset();
+    mockRevalidatePath.mockClear();
+  });
+
+  it("requires the in-person confirmation and an observed state — invalid, service never called", async () => {
+    const formData = new FormData();
+    formData.set("smartDeviceId", DEVICE);
+    formData.set("observedLockState", "locked");
+
+    const result = await resetAugustLockAction({ status: "idle" }, formData);
+
+    expect(result.status).toBe("invalid");
+    expect(mockResetAugustLock).not.toHaveBeenCalled();
+  });
+
+  it("passes a complete, confirmed reset through and revalidates /locks on success", async () => {
+    mockResetAugustLock.mockResolvedValueOnce({ status: "success" });
+    const formData = new FormData();
+    formData.set("smartDeviceId", DEVICE);
+    formData.set("observedLockState", "unlocked");
+    formData.set("confirmedInPerson", "on");
+    formData.set("note", "  checked on site  ");
+
+    const result = await resetAugustLockAction({ status: "idle" }, formData);
+
+    expect(mockResetAugustLock).toHaveBeenCalledWith(
+      { userId: "user-1" },
+      {
+        smartDeviceId: DEVICE,
+        observedLockState: "unlocked",
+        confirmedInPerson: "on",
+        note: "checked on site",
+      },
+    );
+    expect(result).toEqual({ status: "success" });
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
   });
 });

@@ -201,12 +201,10 @@ describe("AugustFirstTestButton", () => {
   });
 
   it("after a real FAILED outcome, both operation buttons disappear — the dialog cannot be used to immediately retry", () => {
-    const action = vi
-      .fn()
-      .mockResolvedValue({
-        status: "failure",
-        reason: "August refused the command for this specific lock.",
-      });
+    const action = vi.fn().mockResolvedValue({
+      status: "failure",
+      reason: "August refused the command for this specific lock.",
+    });
     render(
       <AugustFirstTestButton
         smartDeviceId="lock-1"
@@ -269,12 +267,10 @@ describe("AugustFirstTestButton", () => {
   });
 
   it("OUTCOME CLARITY: FAILED renders in the error tone, distinct from REJECTED/ALREADY_RUNNING's tone", () => {
-    const action = vi
-      .fn()
-      .mockResolvedValue({
-        status: "failure",
-        reason: "August refused the command for this specific lock.",
-      });
+    const action = vi.fn().mockResolvedValue({
+      status: "failure",
+      reason: "August refused the command for this specific lock.",
+    });
     render(
       <AugustFirstTestButton
         smartDeviceId="lock-1"
@@ -416,7 +412,7 @@ describe("AugustFirstTestButton", () => {
         smartDeviceId="lock-1"
         lockName="Orion - Front Door"
         propertyName="Orion's Landing"
-        currentLockState="locked"
+        currentLockState="unlocked"
         action={action}
       />,
     );

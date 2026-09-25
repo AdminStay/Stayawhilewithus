@@ -89,6 +89,7 @@ type LockFixture = {
   property: { name: string };
   controlEligibility: { eligible: boolean; reason: string | null } | null;
   firstTestEligibility: { eligible: boolean } | null;
+  adminResetAvailable?: boolean;
 };
 
 // Defaults to eligible/not-eligible-for-first-test: real /locks usage
@@ -258,7 +259,7 @@ describe("LocksList — UNKNOWN connectivity explanation (item A)", () => {
 
     const unknownCell = statusCellFor("Unknown Lock");
     expect(unknownCell.querySelector("[title]")?.getAttribute("title")).toBe(
-      "August has not reported reliable connectivity for this lock.",
+      "August isn't reporting live status for this lock (no WiFi bridge connection is reported for it), so its online status and lock state are unknown and it can't be controlled remotely.",
     );
     expect(unknownCell.querySelector("svg")).toBeTruthy();
 
@@ -266,7 +267,10 @@ describe("LocksList — UNKNOWN connectivity explanation (item A)", () => {
     expect(statusCellFor("Offline Lock").querySelector("[title]")).toBeNull();
   });
 
-  it("the explanation never claims the lock is offline, broken, missing its bridge, a specific hardware generation, or uncontrollable", () => {
+  // 2026-09-25: a live fleet check showed UNKNOWN means August itself reports
+  // no bridge and lock status "unknown", and only ONLINE locks are eligible
+  // for control, so the text now says so. It still never over-claims.
+  it("the explanation states what August reports, but never claims the lock is offline, broken, or a specific hardware generation", () => {
     renderLocks([makeLock({ name: "Unknown Lock", status: "UNKNOWN" })]);
 
     const title = statusCellFor("Unknown Lock")
@@ -275,9 +279,8 @@ describe("LocksList — UNKNOWN connectivity explanation (item A)", () => {
     expect(title).toBeTruthy();
     expect(title).not.toMatch(/offline/i);
     expect(title).not.toMatch(/broken|fail/i);
-    expect(title).not.toMatch(/bridge/i);
+    expect(title).toMatch(/no WiFi bridge connection is reported/i);
     expect(title).not.toMatch(/generation|model|hardware/i);
-    expect(title).not.toMatch(/control/i);
   });
 
   it("a known LOCKED state can coexist with UNKNOWN connectivity — state and connectivity are never collapsed into each other", () => {
@@ -936,5 +939,112 @@ describe("LocksList — Retire this lock (2026-09-23, item C)", () => {
     ) as HTMLInputElement;
     expect(hiddenInput.name).toBe("smartDeviceId");
     confirmSpy.mockRestore();
+  });
+});
+
+describe("LocksList — admin reset after physical check (2026-09-25)", () => {
+  const noop = vi.fn();
+
+  it("shows 'Reset after physical check' only for a blocked lock, only to lock controllers", () => {
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              id: "blocked",
+              name: "Blocked Lock",
+              controlEligibility: { eligible: false, reason: "blocked" },
+              adminResetAvailable: true,
+            }),
+            makeLock({
+              id: "fine",
+              name: "Fine Lock",
+              adminResetAvailable: false,
+            }),
+          ] as never
+        }
+        canControlLocks
+        lockCommandAction={noop}
+        resetAction={noop}
+      />,
+    );
+
+    expect(
+      within(rowFor("Blocked Lock")).getByRole("button", {
+        name: /reset after physical check/i,
+      }),
+    ).toBeTruthy();
+    expect(
+      within(rowFor("Fine Lock")).queryByRole("button", {
+        name: /reset after physical check/i,
+      }),
+    ).toBeNull();
+  });
+
+  it("never shows the reset button to someone who can't control locks", () => {
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({ name: "Blocked Lock", adminResetAvailable: true }),
+          ] as never
+        }
+        canControlLocks={false}
+        resetAction={noop}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: /reset after physical check/i }),
+    ).toBeNull();
+  });
+});
+
+describe("LocksList — row re-lock prompt (2026-09-25)", () => {
+  const noop = vi.fn();
+
+  it("a controllable lock reporting unlocked shows a prominent 'lock it again' prompt in its row", () => {
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              id: "u",
+              name: "Open Door",
+              metadata: { lockState: "unlocked" },
+            }),
+            makeLock({
+              id: "l",
+              name: "Shut Door",
+              metadata: { lockState: "locked" },
+            }),
+          ] as never
+        }
+        canControlLocks
+        lockCommandAction={noop}
+      />,
+    );
+    expect(within(rowFor("Open Door")).getByRole("alert").textContent).toMatch(
+      /lock it again/i,
+    );
+    expect(within(rowFor("Shut Door")).queryByRole("alert")).toBeNull();
+  });
+
+  it("no prompt for an unlocked lock that isn't controllable (e.g. offline or unverified)", () => {
+    render(
+      <LocksList
+        locks={
+          [
+            makeLock({
+              name: "Open Door",
+              metadata: { lockState: "unlocked" },
+              controlEligibility: { eligible: false, reason: "offline" },
+            }),
+          ] as never
+        }
+        canControlLocks
+        lockCommandAction={noop}
+      />,
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

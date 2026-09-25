@@ -26,6 +26,7 @@ import {
 import type {
   AugustLockCommandActionState,
   RefreshAugustSpotActionState,
+  ResetAugustLockActionState,
 } from "../actions";
 import { formatTimestamp } from "../lib/format-timestamp";
 import type {
@@ -42,9 +43,11 @@ import {
   type SmartDevice,
 } from "../services/smart-devices.service";
 
+import { AdminResetLockButton } from "./AdminResetLockButton";
 import { AugustFirstTestButton } from "./AugustFirstTestButton";
 import { AugustLockControlButton } from "./AugustLockControlButton";
 import { LockSpotRefreshButton } from "./LockSpotRefreshButton";
+import { RelockPrompt } from "./RelockPrompt";
 
 type LockWithProperty = SmartDevice & {
   property: { name: string };
@@ -52,6 +55,8 @@ type LockWithProperty = SmartDevice & {
   controlEligibility: LockControlEligibility | null;
   /** Real per-lock "Test controllability" eligibility (see computeFirstTestEligibility) — null under the same conditions as controlEligibility above. Mutually exclusive with controlEligibility.eligible by construction: a device is never eligible for both at once. */
   firstTestEligibility: FirstTestEligibility | null;
+  /** True when the lock is blocked by a FAILED/AMBIGUOUS outcome, so an admin may reset it after an in-person check. */
+  adminResetAvailable: boolean;
 };
 
 /**
@@ -90,7 +95,7 @@ const CONNECTIVITY_LABEL: Record<LockWithProperty["status"], string> = {
  * connectivity read.
  */
 const AUGUST_UNKNOWN_CONNECTIVITY_EXPLANATION =
-  "August has not reported reliable connectivity for this lock.";
+  "August isn't reporting live status for this lock (no WiFi bridge connection is reported for it), so its online status and lock state are unknown and it can't be controlled remotely.";
 
 const CONNECTIVITY_TONE: Record<LockWithProperty["status"], Tone> = {
   ONLINE: "success",
@@ -162,6 +167,7 @@ export function LocksList({
   canControlLocks = false,
   lockCommandAction,
   retireAction,
+  resetAction,
 }: {
   locks: LockWithProperty[];
   /** UX-only gate, matching every other write-capable button in this domain — assertPermission inside the server action remains the real enforcement. */
@@ -173,8 +179,8 @@ export function LocksList({
   /**
    * UX-only gate for the physical Lock/Unlock controls — deliberately
    * separate from `canRefresh` (`smart_devices:update`, monitoring/mapping)
-   * since this one is scoped to `locks:manage`. The real enforcement,
-   * including the Production test allowlist, lives entirely in
+   * since this one is scoped to `locks:manage`. The real enforcement
+   * (kill switch, online check, verified history) lives entirely in
    * sendAugustLockCommand — this flag only decides whether the button
    * renders at all for an operator who could never succeed anyway.
    */
@@ -194,6 +200,11 @@ export function LocksList({
    * spotRefreshAction/lockCommandAction above.
    */
   retireAction?: (formData: FormData) => void | Promise<void>;
+  /** Admin "reset after physical check" — shown only with canControlLocks, for a lock whose adminResetAvailable is true. */
+  resetAction?: (
+    prevState: ResetAugustLockActionState,
+    formData: FormData,
+  ) => Promise<ResetAugustLockActionState>;
 }) {
   const total = locks.length;
   const online = locks.filter((l) => l.status === "ONLINE").length;
@@ -395,6 +406,16 @@ export function LocksList({
                                 />
                               </>
                             ))}
+                          {canControlLocks &&
+                            resetAction &&
+                            lock.adminResetAvailable && (
+                              <AdminResetLockButton
+                                smartDeviceId={lock.id}
+                                lockName={lock.name}
+                                propertyName={lock.property.name}
+                                action={resetAction}
+                              />
+                            )}
                           {canRefresh && spotRefreshAction && (
                             <LockSpotRefreshButton
                               smartDeviceId={lock.id}
@@ -419,6 +440,16 @@ export function LocksList({
                             </form>
                           )}
                         </div>
+                        {canControlLocks &&
+                          lockCommandAction &&
+                          lock.controlEligibility?.eligible &&
+                          normalizedLockState === "unlocked" && (
+                            <RelockPrompt
+                              variant="row"
+                              smartDeviceId={lock.id}
+                              action={lockCommandAction}
+                            />
+                          )}
                         {canControlLocks &&
                           lockCommandAction &&
                           !lock.firstTestEligibility?.eligible &&

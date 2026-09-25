@@ -6,6 +6,8 @@ import { useActionState, useState } from "react";
 
 import type { AugustLockCommandActionState } from "../actions";
 
+import { RelockPrompt } from "./RelockPrompt";
+
 const INITIAL_STATE: AugustLockCommandActionState = { status: "idle" };
 
 /**
@@ -99,8 +101,8 @@ function resultTone(state: AugustLockCommandActionState): string {
  * sendAugustLockCommandAction -> sendAugustLockCommand() path as ordinary
  * Lock/Unlock — every existing safety layer (mapping/enabled check,
  * property-scoped locks:manage RBAC, the advisory-lock duplicate-command
- * guard, the fresh live capability check, the server-side-only
- * AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS allowlist, the post-command
+ * guard, the fresh live capability check, the kill switch and online
+ * check, the post-command
  * provider-confirmation read, and AuditLog recording) applies identically
  * and is not reimplemented here. This component adds no new command
  * backend — only a new, narrower trigger onto the old one.
@@ -123,12 +125,15 @@ function resultTone(state: AugustLockCommandActionState): string {
  * (two entirely separate component instances, one per operation) rather
  * than inventing a new one.
  *
- * No allowlist/environment value is read, held, or displayed anywhere in
- * this file — eligibility to even show this control comes from the
- * caller's `FirstTestEligibility` (safe, non-secret criteria only); the
- * real allowlist stays a server-side-only final gate that can still
- * REJECT this exact same attempt before any provider call, exactly as it
- * always has.
+ * Eligibility to even show this control comes from the caller's
+ * `FirstTestEligibility`; the server re-checks everything and can still
+ * REJECT the attempt before any provider call. The test button for the
+ * state the lock already reports is disabled — a test must command the
+ * opposite state so a success proves the lock physically moved (the server
+ * enforces the same rule).
+ *
+ * After a confirmed UNLOCK test, a prominent RelockPrompt asks the operator
+ * to lock the door again.
  *
  * Once a real outcome is on record (success, failure, a pre-flight
  * rejection, or an ambiguous/uncertain result), both operation buttons
@@ -179,6 +184,12 @@ export function AugustFirstTestButton({
     state.status === "failure" ||
     state.status === "rejected" ||
     state.status === "ambiguous";
+
+  // A test must command the OPPOSITE of the known state (the server enforces
+  // this too), so the same-state button is disabled with a hint.
+  const knownState = currentLockState?.toLowerCase();
+  const lockAlreadyLocked = knownState === "locked";
+  const lockAlreadyUnlocked = knownState === "unlocked";
 
   function handleClose() {
     if (isPending) return;
@@ -257,7 +268,16 @@ export function AugustFirstTestButton({
                     value={smartDeviceId}
                   />
                   <input type="hidden" name="operation" value="LOCK" />
-                  <Button type="submit" variant="primary" disabled={isPending}>
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    disabled={isPending || lockAlreadyLocked}
+                    title={
+                      lockAlreadyLocked
+                        ? "This lock is already locked. Test Unlock instead."
+                        : undefined
+                    }
+                  >
                     <Lock className="h-3.5 w-3.5" />
                     {lockPending ? "Testing…" : "Confirm — test LOCK"}
                   </Button>
@@ -269,7 +289,16 @@ export function AugustFirstTestButton({
                     value={smartDeviceId}
                   />
                   <input type="hidden" name="operation" value="UNLOCK" />
-                  <Button type="submit" variant="danger" disabled={isPending}>
+                  <Button
+                    type="submit"
+                    variant="danger"
+                    disabled={isPending || lockAlreadyUnlocked}
+                    title={
+                      lockAlreadyUnlocked
+                        ? "This lock is already unlocked. Test Lock instead."
+                        : undefined
+                    }
+                  >
                     <Unlock className="h-3.5 w-3.5" />
                     {unlockPending ? "Testing…" : "Confirm — test UNLOCK"}
                   </Button>
@@ -277,6 +306,16 @@ export function AugustFirstTestButton({
               </>
             )}
           </div>
+          {!decided && (lockAlreadyLocked || lockAlreadyUnlocked) && (
+            <p className="text-xs text-ink-muted">
+              This lock already reports {knownState}, so test{" "}
+              {lockAlreadyLocked ? "Unlock" : "Lock"} to prove it physically
+              moves.
+            </p>
+          )}
+          {unlockState.status === "success" && (
+            <RelockPrompt smartDeviceId={smartDeviceId} action={action} />
+          )}
         </div>
       </Dialog>
     </>

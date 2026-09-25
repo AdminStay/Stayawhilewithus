@@ -5,17 +5,22 @@ import {
   refreshAugustAction,
   refreshAugustTelemetryBatchAction,
   refreshAugustTelemetrySpotAction,
+  resetAugustLockAction,
   retireSmartDeviceAction,
   sendAugustLockCommandAction,
+  setLockControlEnabledAction,
 } from "@/domains/smart-devices/actions";
 import { BulkRefreshDialog } from "@/domains/smart-devices/components/BulkRefreshDialog";
+import { LockControlKillSwitch } from "@/domains/smart-devices/components/LockControlKillSwitch";
 import { LocksList } from "@/domains/smart-devices/components/LocksList";
 import { RefreshLocksButton } from "@/domains/smart-devices/components/RefreshLocksButton";
 import {
   computeFirstTestEligibility,
   computeLockControlEligibility,
   getLatestAugustLockCommandOutcomes,
+  isAdminResetAvailable,
 } from "@/domains/smart-devices/services/august-commands.service";
+import { getLockControlSetting } from "@/domains/smart-devices/services/lock-control-settings.service";
 import {
   isDemoSmartDevice,
   isLockVisible,
@@ -72,11 +77,14 @@ export default async function LocksPage() {
   // re-checks locks:manage server-side regardless of what this decides.
   const canControlLocks = await hasPermission(actor, "locks:manage");
 
-  // Real per-lock eligibility for the Lock/Unlock controls — never "mapped
-  // + enabled alone" (see computeLockControlEligibility's own doc comment).
-  // Only computed when canControlLocks is true: nobody who can't see the
-  // buttons at all needs this, and getLatestAugustLockCommandOutcomes()
-  // still independently checks smart_devices:read regardless.
+  // Global kill switch — shown to everyone who can see /locks; only an admin
+  // (global locks:manage) can toggle it.
+  const lockControl = await getLockControlSetting(actor);
+
+  // Fully dynamic per-lock eligibility (2026-09-25, "enable all locks"):
+  // mapped + enabled + ONLINE + verified history + kill switch ON. No env
+  // allowlist and nothing per-lock hard-coded. UX only — sendAugustLockCommand()
+  // re-checks all of it server-side with a fresh August read.
   const augustLockIds = locks
     .filter((lock) => lock.provider === "AUGUST")
     .map((lock) => lock.id);
@@ -84,24 +92,23 @@ export default async function LocksPage() {
     ? await getLatestAugustLockCommandOutcomes(actor, augustLockIds)
     : new Map();
   const locksWithEligibility = locks.map((lock) => {
-    const externalDeviceId = lock.providerDevice?.externalDeviceId ?? null;
+    const mapping = lock.providerDevice;
+    // Mirrors sendAugustLockCommand()'s own mapping check exactly.
+    const externalDeviceId =
+      mapping?.enabled && mapping.propertyId ? mapping.externalDeviceId : null;
     const lastOutcome = lastCommandOutcomes.get(lock.id);
     const isAugust = lock.provider === "AUGUST" && canControlLocks;
+    const ctx = {
+      externalDeviceId,
+      connectivity: lock.status,
+      lastOutcome,
+      lockControlEnabled: lockControl.enabled,
+    };
     return {
       ...lock,
-      controlEligibility: isAugust
-        ? computeLockControlEligibility(externalDeviceId, lastOutcome)
-        : null,
-      // Real per-lock "Test controllability" eligibility (2026-09-24) — the
-      // narrowly-scoped first-verification workflow. See
-      // computeFirstTestEligibility's own doc comment for why this is a
-      // separate function from computeLockControlEligibility above, not a
-      // relaxed version of it: this one deliberately never reads the real
-      // AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS allowlist, so its true/false
-      // value can never let a viewer infer which devices are allowlisted.
-      firstTestEligibility: isAugust
-        ? computeFirstTestEligibility(externalDeviceId, lastOutcome)
-        : null,
+      controlEligibility: isAugust ? computeLockControlEligibility(ctx) : null,
+      firstTestEligibility: isAugust ? computeFirstTestEligibility(ctx) : null,
+      adminResetAvailable: isAugust && isAdminResetAvailable(lastOutcome),
     };
   });
 
@@ -127,6 +134,13 @@ export default async function LocksPage() {
           </>
         }
       />
+      <div className="mb-4">
+        <LockControlKillSwitch
+          enabled={lockControl.enabled}
+          canToggle={canControlLocks}
+          action={setLockControlEnabledAction}
+        />
+      </div>
       <LocksList
         locks={locksWithEligibility}
         canRefresh={canRefresh}
@@ -134,6 +148,7 @@ export default async function LocksPage() {
         canControlLocks={canControlLocks}
         lockCommandAction={sendAugustLockCommandAction}
         retireAction={retireSmartDeviceAction}
+        resetAction={resetAugustLockAction}
       />
     </div>
   );

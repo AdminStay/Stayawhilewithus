@@ -8,6 +8,7 @@ const {
   mockGetLockDetail,
   mockGetLockCapabilities,
   mockRecordAudit,
+  mockReadLockControlSetting,
 } = vi.hoisted(() => ({
   mockTransaction: vi.fn(),
   mockLock: vi.fn(),
@@ -16,6 +17,7 @@ const {
   mockGetLockDetail: vi.fn(),
   mockGetLockCapabilities: vi.fn(),
   mockRecordAudit: vi.fn().mockResolvedValue({}),
+  mockReadLockControlSetting: vi.fn(),
 }));
 
 vi.mock("@stayw/database", () => ({
@@ -57,6 +59,10 @@ vi.mock("@/platform/audit/record-audit", () => ({
   recordAudit: mockRecordAudit,
 }));
 
+vi.mock("./lock-control-settings.service", () => ({
+  readLockControlSetting: mockReadLockControlSetting,
+}));
+
 import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
 import { HttpRequestError } from "@stayw/integrations/core";
@@ -65,7 +71,8 @@ import {
   computeFirstTestEligibility,
   computeLockControlEligibility,
   getLatestAugustLockCommandOutcomes,
-  isAugustLockCommandTestDevice,
+  isAdminResetAvailable,
+  resetAugustLockAfterPhysicalCheck,
   sendAugustLockCommand,
 } from "./august-commands.service";
 
@@ -125,6 +132,7 @@ function allowTransaction(commandInProgressAt: Date | null = null) {
       smartDevice: {
         findUniqueOrThrow: vi.fn().mockResolvedValue({ commandInProgressAt }),
         update: vi.fn().mockResolvedValue({}),
+        count: vi.fn().mockResolvedValue(0),
       },
     }),
   );
@@ -156,6 +164,11 @@ describe("sendAugustLockCommand", () => {
     mockUnlock.mockReset().mockResolvedValue(undefined);
     mockUnlatch.mockReset().mockResolvedValue(undefined);
     mockRecordAudit.mockClear();
+    mockReadLockControlSetting.mockReset().mockResolvedValue({
+      enabled: true,
+      updatedAt: null,
+      updatedByUserId: null,
+    });
   });
 
   afterEach(() => {
@@ -328,58 +341,210 @@ describe("sendAugustLockCommand", () => {
     expect(mockUnlock).not.toHaveBeenCalled();
   });
 
-  it("PRODUCTION SAFETY GATE: rejects a fully-authorized, fully-capable device when AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS is unset (fail-closed by default)", async () => {
-    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
-      mappedEnabledDevice() as never,
+  describe("dynamic eligibility gates (2026-09-25, replaces the env allowlist)", () => {
+    function history(...results: string[]) {
+      return results.map((result) => ({ afterState: { result } }));
+    }
+
+    it("kill switch OFF: rejects before any August call, audited as REJECTED", async () => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      mockReadLockControlSetting.mockResolvedValueOnce({
+        enabled: false,
+        updatedAt: null,
+        updatedByUserId: null,
+      });
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason:
+          "Remote lock control is turned off by an admin. No commands can be sent to any lock.",
+      });
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(mockGetLockDetail).not.toHaveBeenCalled();
+      expect(mockLock).not.toHaveBeenCalled();
+      expect(mockRecordAudit.mock.calls[0]![0].metadata.errorDetail).toContain(
+        "kill switch",
+      );
+    });
+
+    it("kill switch turned OFF mid-request: re-read right before sending stops the command", async () => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      mockReadLockControlSetting
+        .mockResolvedValueOnce({
+          enabled: true,
+          updatedAt: null,
+          updatedByUserId: null,
+        })
+        .mockResolvedValueOnce({
+          enabled: false,
+          updatedAt: null,
+          updatedByUserId: null,
+        });
+      mockGetLockDetail.mockResolvedValueOnce(freshDetail());
+      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result.status).toBe("rejected");
+      expect(mockLock).not.toHaveBeenCalled();
+    });
+
+    it.each(["FAILED", "AMBIGUOUS"])(
+      "last real outcome %s: rejected server-side before any August call (blocked until admin reset)",
+      async (blocking) => {
+        vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+          mappedEnabledDevice() as never,
+        );
+        vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce(
+          history(blocking) as never,
+        );
+
+        const result = await sendAugustLockCommand(actor, {
+          smartDeviceId: SMART_DEVICE_ID,
+          operation: "UNLOCK",
+        });
+
+        expect(result.status).toBe("rejected");
+        expect(result).toMatchObject({
+          reason: expect.stringContaining("admin"),
+        });
+        expect(mockTransaction).not.toHaveBeenCalled();
+        expect(mockGetLockDetail).not.toHaveBeenCalled();
+        expect(mockUnlock).not.toHaveBeenCalled();
+      },
     );
-    allowTransaction();
-    mockGetLockDetail.mockResolvedValueOnce(freshDetail());
-    mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
 
-    const result = await sendAugustLockCommand(actor, {
-      smartDeviceId: SMART_DEVICE_ID,
-      operation: "LOCK",
+    it("a newer REJECTED row never masks an older FAILED block", async () => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce(
+        history("REJECTED", "NO_ACTION_ALREADY_IN_STATE", "FAILED") as never,
+      );
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(result.status).toBe("rejected");
+      expect(mockLock).not.toHaveBeenCalled();
     });
 
-    expect(result).toEqual({
-      status: "rejected",
-      reason: "Live control isn't enabled for this lock yet.",
+    it("after an ADMIN_RESET the lock is no longer blocked (treated as not-yet-verified)", async () => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce(
+        history("ADMIN_RESET", "FAILED") as never,
+      );
+      mockGetLockDetail
+        .mockResolvedValueOnce(freshDetail({ lockState: "unlocked" }))
+        .mockResolvedValue(freshDetail({ lockState: "locked" }));
+      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(mockLock).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ status: "success", lockState: "locked" });
     });
-    expect(mockLock).not.toHaveBeenCalled();
-    expect(mockRecordAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        afterState: expect.objectContaining({ result: "REJECTED" }),
-        metadata: expect.objectContaining({
-          errorDetail: expect.stringContaining("allowlist"),
+
+    it.each(["UNKNOWN", "OFFLINE"])(
+      "fresh August connectivity %s: rejected before the capability check, no command sent",
+      async (connectivity) => {
+        vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+          mappedEnabledDevice() as never,
+        );
+        allowTransaction();
+        mockGetLockDetail.mockResolvedValueOnce(freshDetail({ connectivity }));
+
+        const result = await sendAugustLockCommand(actor, {
+          smartDeviceId: SMART_DEVICE_ID,
+          operation: "LOCK",
+        });
+
+        expect(result).toMatchObject({
+          status: "rejected",
+          reason: expect.stringContaining(
+            "isn't reporting this lock as online",
+          ),
+        });
+        expect(mockGetLockCapabilities).not.toHaveBeenCalled();
+        expect(mockLock).not.toHaveBeenCalled();
+      },
+    );
+
+    it("account-wide cap: with 3 other commands in flight, nothing is sent and the lock is not marked in progress", async () => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      const txUpdate = vi.fn();
+      mockTransaction.mockImplementationOnce(async (fn) =>
+        fn({
+          $queryRaw: vi.fn().mockResolvedValue([{ locked: true }]),
+          smartDevice: {
+            findUniqueOrThrow: vi
+              .fn()
+              .mockResolvedValue({ commandInProgressAt: null }),
+            update: txUpdate,
+            count: vi.fn().mockResolvedValue(3),
+          },
         }),
-      }),
-    );
-  });
+      );
 
-  it("PRODUCTION SAFETY GATE: rejects when the allowlist contains a DIFFERENT device's id, never a wildcard/partial match", async () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      "some-other-lock",
-    ]);
-    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
-      mappedEnabledDevice() as never,
-    );
-    allowTransaction();
-    mockGetLockDetail.mockResolvedValueOnce(freshDetail());
-    mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
 
-    const result = await sendAugustLockCommand(actor, {
-      smartDeviceId: SMART_DEVICE_ID,
-      operation: "LOCK",
+      expect(result).toEqual({
+        status: "rejected",
+        reason:
+          "Other lock commands are in progress right now, so nothing was sent. Try again in a few seconds.",
+      });
+      expect(txUpdate).not.toHaveBeenCalled();
+      expect(mockGetLockDetail).not.toHaveBeenCalled();
     });
 
-    expect(result.status).toBe("rejected");
-    expect(mockLock).not.toHaveBeenCalled();
+    it("no env allowlist is consulted: an ONLINE, mapped, enabled lock proceeds with the variable unset", async () => {
+      delete process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS;
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice() as never,
+      );
+      allowTransaction();
+      mockGetLockDetail
+        .mockResolvedValueOnce(freshDetail())
+        .mockResolvedValue(freshDetail({ lockState: "locked" }));
+      mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
+
+      const result = await sendAugustLockCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        operation: "LOCK",
+      });
+
+      expect(mockLock).toHaveBeenCalledTimes(1);
+      expect(result.status).toBe("success");
+    });
   });
 
   it("authorized LOCK command succeeds when explicitly allowlisted, capable, and authorized", async () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
     vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
       mappedEnabledDevice() as never,
     );
@@ -400,9 +565,6 @@ describe("sendAugustLockCommand", () => {
   });
 
   it("authorized UNLOCK command succeeds when explicitly allowlisted, capable, and authorized", async () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
     vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
       mappedEnabledDevice() as never,
     );
@@ -458,9 +620,6 @@ describe("sendAugustLockCommand", () => {
   });
 
   it("stale command marker recovery: an old in-progress marker (past the threshold) does not block a new command", async () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
     vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
       mappedEnabledDevice() as never,
     );
@@ -481,9 +640,6 @@ describe("sendAugustLockCommand", () => {
   });
 
   it("marker is cleared even when the provider call throws (finally runs on the error path)", async () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
     vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
       mappedEnabledDevice() as never,
     );
@@ -504,9 +660,6 @@ describe("sendAugustLockCommand", () => {
   });
 
   it("REAL EVIDENCE — a definitive HTTP 408 response (a genuine HttpRequestError, August's server actually answered) IS classified FAILED, translated to a safe message never returned raw", async () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
     vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
       mappedEnabledDevice() as never,
     );
@@ -539,9 +692,6 @@ describe("sendAugustLockCommand", () => {
   });
 
   it("REAL EVIDENCE — a definitive HTTP 422 response (bridge offline, August's server actually answered) IS classified FAILED, translated to a safe specific message", async () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
     vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
       mappedEnabledDevice() as never,
     );
@@ -572,9 +722,6 @@ describe("sendAugustLockCommand", () => {
 
   describe("AMBIGUOUS outcome (2026-09-25, the Orion incident's root cause correction)", () => {
     it("REAL EVIDENCE — Orion case: a plain Error with NO HttpRequestError instance (no definitive HTTP response ever received — e.g. HttpClient's own AbortController firing on its configured timeout, exactly like the real 'This operation was aborted' Orion hit) is classified AMBIGUOUS, never FAILED", async () => {
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-        EXTERNAL_ID,
-      ]);
       vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
         mappedEnabledDevice() as never,
       );
@@ -606,9 +753,6 @@ describe("sendAugustLockCommand", () => {
     });
 
     it("a plain Error whose message happens to contain a status-shaped substring (e.g. '408') is STILL classified AMBIGUOUS, not FAILED — no real HttpRequestError means no real evidence, regardless of what the message text says", async () => {
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-        EXTERNAL_ID,
-      ]);
       vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
         mappedEnabledDevice() as never,
       );
@@ -632,9 +776,6 @@ describe("sendAugustLockCommand", () => {
     });
 
     it("a plain Error mentioning '403' (no real HttpRequestError) is classified AMBIGUOUS, not FAILED — distinct from the real HttpRequestError(403) case tested elsewhere", async () => {
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-        EXTERNAL_ID,
-      ]);
       vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
         mappedEnabledDevice() as never,
       );
@@ -656,9 +797,6 @@ describe("sendAugustLockCommand", () => {
     });
 
     it("a failure during the PRE-command capability check (before the physical command is ever attempted) remains FAILED, never AMBIGUOUS — commandAttempted is still false at that point", async () => {
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-        EXTERNAL_ID,
-      ]);
       vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
         mappedEnabledDevice() as never,
       );
@@ -684,9 +822,6 @@ describe("sendAugustLockCommand", () => {
     it("a failure during EVERY POST-command confirmation poll attempt (the command call itself succeeded) is classified AMBIGUOUS when no definitive response ever comes back — we sent it, but can't confirm the result", async () => {
       vi.useFakeTimers();
       try {
-        process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-          EXTERNAL_ID,
-        ]);
         vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
           mappedEnabledDevice() as never,
         );
@@ -721,9 +856,6 @@ describe("sendAugustLockCommand", () => {
     it("polling recovers on a later attempt: the first confirmation poll is invalid/fails, a later one reports a real state — result is SUCCEEDED, not AMBIGUOUS", async () => {
       vi.useFakeTimers();
       try {
-        process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-          EXTERNAL_ID,
-        ]);
         vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
           mappedEnabledDevice() as never,
         );
@@ -752,9 +884,6 @@ describe("sendAugustLockCommand", () => {
     it("polling stops at the first valid reading — does not keep polling past confirmation", async () => {
       vi.useFakeTimers();
       try {
-        process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-          EXTERNAL_ID,
-        ]);
         vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
           mappedEnabledDevice() as never,
         );
@@ -781,9 +910,6 @@ describe("sendAugustLockCommand", () => {
     it("AMBIGUOUS from exhausted polling never sets confirmedLockState — no physical state is ever guessed", async () => {
       vi.useFakeTimers();
       try {
-        process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-          EXTERNAL_ID,
-        ]);
         vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
           mappedEnabledDevice() as never,
         );
@@ -811,9 +937,6 @@ describe("sendAugustLockCommand", () => {
     it("OPERATION-MATCH CORRECTION (2026-09-25): an early poll reporting the OLD state (still 'locked' shortly after an UNLOCK was sent) does NOT count as confirmation — polling continues until a matching state arrives", async () => {
       vi.useFakeTimers();
       try {
-        process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-          EXTERNAL_ID,
-        ]);
         vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
           mappedEnabledDevice() as never,
         );
@@ -844,9 +967,6 @@ describe("sendAugustLockCommand", () => {
     it("OPERATION-MATCH CORRECTION (2026-09-25): a mismatch through the ENTIRE polling window (every reading is the old state, the correct one never arrives) is classified AMBIGUOUS, never SUCCEEDED — a lock that never physically moved must never be marked verified", async () => {
       vi.useFakeTimers();
       try {
-        process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-          EXTERNAL_ID,
-        ]);
         vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
           mappedEnabledDevice() as never,
         );
@@ -880,9 +1000,6 @@ describe("sendAugustLockCommand", () => {
     });
 
     it("AMBIGUOUS never sets confirmedLockState — no physical state is ever guessed", async () => {
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-        EXTERNAL_ID,
-      ]);
       vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
         mappedEnabledDevice() as never,
       );
@@ -901,9 +1018,6 @@ describe("sendAugustLockCommand", () => {
     });
 
     it("AMBIGUOUS is never automatically retried — a second call after an AMBIGUOUS outcome is a wholly separate, independent invocation with its own full safety-check chain (no special-cased bypass exists)", async () => {
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-        EXTERNAL_ID,
-      ]);
       vi.mocked(prisma.smartDevice.findUnique)
         .mockResolvedValueOnce(mappedEnabledDevice() as never)
         .mockResolvedValueOnce(mappedEnabledDevice() as never);
@@ -927,9 +1041,6 @@ describe("sendAugustLockCommand", () => {
   });
 
   it("provider error handling (account auth): a 401 is always translated to the re-authorize message", async () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
     vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
       mappedEnabledDevice() as never,
     );
@@ -952,9 +1063,6 @@ describe("sendAugustLockCommand", () => {
   });
 
   it("provider error handling (403, no account-auth signal): reports a device-specific refusal, NOT the account-wide re-authorize message — this is the 2026-09-18 MJ - Front Door incident this fix targets", async () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
     vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
       mappedEnabledDevice() as never,
     );
@@ -1000,9 +1108,6 @@ describe("sendAugustLockCommand", () => {
   });
 
   it("provider error handling (403, with an account-auth signal in the provider's own message): escalates to the account-wide re-authorize message", async () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
     vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
       mappedEnabledDevice() as never,
     );
@@ -1034,9 +1139,6 @@ describe("sendAugustLockCommand", () => {
   // (2026-09-25, the Orion incident's root cause correction).
 
   it("successful command reads confirmed state from August AFTER sending, and stores that — never a guessed value", async () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
     vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
       mappedEnabledDevice() as never,
     );
@@ -1078,9 +1180,6 @@ describe("sendAugustLockCommand", () => {
         mappedEnabledDevice() as never,
       );
       allowTransaction();
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-        EXTERNAL_ID,
-      ]);
       mockGetLockDetail.mockResolvedValueOnce(
         freshDetail({ lockState: "locked" }),
       );
@@ -1204,9 +1303,6 @@ describe("sendAugustLockCommand", () => {
         mappedEnabledDevice() as never,
       );
       allowTransaction();
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-        EXTERNAL_ID,
-      ]);
       mockGetLockCapabilities.mockResolvedValueOnce(FULLY_CAPABLE);
       mockGetLockDetail
         .mockResolvedValueOnce(freshDetail({ lockState: null }))
@@ -1219,7 +1315,8 @@ describe("sendAugustLockCommand", () => {
 
       expect(mockLock).toHaveBeenCalledTimes(1);
       expect(result).toEqual({ status: "success", lockState: "locked" });
-      expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
+      // Only the single up-front history lookup — none for already-in-state.
+      expect(prisma.auditLog.findMany).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1230,9 +1327,6 @@ describe("sendAugustLockCommand", () => {
 
     beforeEach(() => {
       vi.useFakeTimers();
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-        EXTERNAL_ID,
-      ]);
       vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
         mappedEnabledDevice() as never,
       );
@@ -1328,9 +1422,6 @@ describe("sendAugustLockCommand", () => {
 
   describe("RETIREMENT-SAFETY (2026-09-23 release-review Fix 4): post-command confirmation write merges onto existing metadata instead of replacing it", () => {
     it("preserves an existing retiredAt in the confirmation write itself, while fresh battery/lockState/telemetry fields still update — a write-primitive test, not an assertion that Production should permit commands against retired devices (existing guards remain fail-closed and are untouched)", async () => {
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-        EXTERNAL_ID,
-      ]);
       vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
         mappedEnabledDevice({
           metadata: {
@@ -1373,9 +1464,6 @@ describe("sendAugustLockCommand", () => {
     });
 
     it("preserves an unrelated, unrecognized existing metadata key — a general merge, not a retiredAt special case", async () => {
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-        EXTERNAL_ID,
-      ]);
       vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
         mappedEnabledDevice({
           metadata: { lockState: "unlocked", someFutureField: "keep-me" },
@@ -1456,9 +1544,6 @@ describe("sendAugustLockCommand", () => {
   });
 
   it("successful command audit entry: records actor/property/device/provider/operation/result and the confirmed (not guessed) resulting lock state", async () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
     vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
       mappedEnabledDevice() as never,
     );
@@ -1495,9 +1580,6 @@ describe("sendAugustLockCommand", () => {
   });
 
   it("never logs an access token or install id in the audit entry", async () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
     vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
       mappedEnabledDevice() as never,
     );
@@ -1520,185 +1602,97 @@ describe("sendAugustLockCommand", () => {
   });
 });
 
-describe("isAugustLockCommandTestDevice", () => {
-  const ORIGINAL_ALLOWLIST = process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS;
-  afterEach(() => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = ORIGINAL_ALLOWLIST;
+describe("computeLockControlEligibility / computeFirstTestEligibility — fully dynamic (2026-09-25)", () => {
+  const base = {
+    externalDeviceId: EXTERNAL_ID as string | null,
+    connectivity: "ONLINE",
+    lastOutcome: undefined as
+      "SUCCEEDED" | "FAILED" | "AMBIGUOUS" | "ADMIN_RESET" | undefined,
+    lockControlEnabled: true,
+  };
+
+  it("VERIFIED + ONLINE + mapped + kill switch ON: routine controls eligible, first test not offered", () => {
+    const ctx = { ...base, lastOutcome: "SUCCEEDED" as const };
+    expect(computeLockControlEligibility(ctx)).toEqual({
+      eligible: true,
+      reason: null,
+    });
+    expect(computeFirstTestEligibility(ctx)).toEqual({ eligible: false });
   });
 
-  it("reads the exact same env var sendAugustLockCommand() itself enforces — never a second/separate allowlist", () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
-
-    expect(isAugustLockCommandTestDevice(EXTERNAL_ID)).toBe(true);
-    expect(isAugustLockCommandTestDevice("some-other-lock")).toBe(false);
-  });
-
-  it("fails closed (false) when the env var is unset, empty, or malformed — never 'allow everything'", () => {
-    delete process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS;
-    expect(isAugustLockCommandTestDevice(EXTERNAL_ID)).toBe(false);
-
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = "[]";
-    expect(isAugustLockCommandTestDevice(EXTERNAL_ID)).toBe(false);
-
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = "not valid json";
-    expect(isAugustLockCommandTestDevice(EXTERNAL_ID)).toBe(false);
-  });
-});
-
-describe("computeLockControlEligibility — fail-closed, positive-verification-required (2026-09-23 correction)", () => {
-  const ORIGINAL_ALLOWLIST = process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS;
-  afterEach(() => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = ORIGINAL_ALLOWLIST;
-  });
-
-  it("is disabled when the device has no ProviderDevice mapping at all (externalDeviceId is null) — never inferred as eligible just because a row exists", () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
-
-    const result = computeLockControlEligibility(null, undefined);
-
-    expect(result.eligible).toBe(false);
-    expect(result.reason).toBe(
-      "This device is not enabled for control — map and enable it from Discovered Devices first.",
-    );
-  });
-
-  it("is disabled, with the exact same copy sendAugustLockCommand() itself returns, when the device isn't in the real allowlist — even with a real recorded SUCCEEDED outcome, since the allowlist gate is checked first and independently", () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = "[]";
-
-    const result = computeLockControlEligibility(EXTERNAL_ID, "SUCCEEDED");
-
-    expect(result.eligible).toBe(false);
-    expect(result.reason).toBe("Live control isn't enabled for this lock yet.");
-  });
-
-  it("REAL EVIDENCE — Aqua Palm case: is eligible ONLY when allowlisted AND the most recent real attempt SUCCEEDED — real, positively-verified operability, not an absence of failure", () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
-
-    const result = computeLockControlEligibility(EXTERNAL_ID, "SUCCEEDED");
-
-    expect(result).toEqual({ eligible: true, reason: null });
-  });
-
-  it("REAL EVIDENCE — MJ case: is disabled with a distinct reason when the most recent real attempt against this exact device FAILED, even though it's allowlist-eligible — this is what stops MJ (real 403, UserType user) from ever being retried through the dashboard", () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
-
-    const result = computeLockControlEligibility(EXTERNAL_ID, "FAILED");
-
-    expect(result.eligible).toBe(false);
-    expect(result.reason).toBe(
-      "The last real attempt to control this lock did not succeed. Contact an admin before trying again.",
-    );
-  });
-
-  it("FAIL-CLOSED CORRECTION: is disabled/unverified — never eligible — when allowlisted but there is no recorded attempt at all. Absence of failure evidence is not proof of operability.", () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
-
-    const result = computeLockControlEligibility(EXTERNAL_ID, undefined);
-
-    expect(result).toEqual({
+  it("untested ONLINE mapped lock: first test offered, routine controls not", () => {
+    expect(computeFirstTestEligibility(base)).toEqual({ eligible: true });
+    expect(computeLockControlEligibility(base)).toEqual({
       eligible: false,
       reason: "Remote control has not been verified for this lock yet.",
     });
   });
 
-  it("FAIL-CLOSED CORRECTION: is disabled/unverified — never eligible — when the only real record is a REJECTED pre-flight refusal, since that record never reached August at all and is not proof a real command would succeed", () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
-
-    const result = computeLockControlEligibility(EXTERNAL_ID, "REJECTED");
-
-    expect(result).toEqual({
-      eligible: false,
-      reason: "Remote control has not been verified for this lock yet.",
-    });
+  it("ADMIN_RESET puts the lock back to not-yet-verified: first test offered, never routine", () => {
+    const ctx = { ...base, lastOutcome: "ADMIN_RESET" as const };
+    expect(computeFirstTestEligibility(ctx)).toEqual({ eligible: true });
+    expect(computeLockControlEligibility(ctx).eligible).toBe(false);
   });
 
-  it("REAL EVIDENCE — Orion case (2026-09-25): is disabled with a distinct 'uncertain, do not retry' reason when the most recent real attempt is AMBIGUOUS — never equated with a confirmed FAILED, never treated as eligible", () => {
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-      EXTERNAL_ID,
-    ]);
-
-    const result = computeLockControlEligibility(EXTERNAL_ID, "AMBIGUOUS");
-
-    expect(result.eligible).toBe(false);
-    expect(result.reason).toMatch(/uncertain/i);
-    expect(result.reason).toMatch(/do not retry/i);
-    expect(result.reason).not.toBe(
-      "The last real attempt to control this lock did not succeed. Contact an admin before trying again.",
-    );
-  });
-});
-
-describe("computeFirstTestEligibility — the separate 'Test controllability' workflow (2026-09-24)", () => {
-  it("is NOT eligible when there is no real, enabled ProviderDevice mapping (externalDeviceId is null) — unmapped/disabled locks never get this workflow either", () => {
-    expect(computeFirstTestEligibility(null, undefined)).toEqual({
+  it("kill switch OFF blocks everything, even a verified online lock", () => {
+    const ctx = {
+      ...base,
+      lastOutcome: "SUCCEEDED" as const,
+      lockControlEnabled: false,
+    };
+    expect(computeLockControlEligibility(ctx)).toEqual({
       eligible: false,
+      reason:
+        "Remote lock control is turned off by an admin. No commands can be sent to any lock.",
     });
-    expect(computeFirstTestEligibility(null, "REJECTED")).toEqual({
+    expect(
+      computeFirstTestEligibility({ ...base, lockControlEnabled: false }),
+    ).toEqual({
       eligible: false,
     });
   });
 
-  it("REAL EVIDENCE — Aqua Palm case: a device with a recorded SUCCEEDED outcome is NOT eligible — it's already VERIFIED and belongs to ordinary Lock/Unlock, not this one-time workflow", () => {
-    expect(computeFirstTestEligibility(EXTERNAL_ID, "SUCCEEDED")).toEqual({
-      eligible: false,
-    });
-  });
-
-  it("REAL EVIDENCE — MJ case: a device with a recorded FAILED outcome is NOT eligible — permanently BLOCKED, must never be retried through this workflow either", () => {
-    expect(computeFirstTestEligibility(EXTERNAL_ID, "FAILED")).toEqual({
-      eligible: false,
-    });
-  });
-
-  it("IS eligible for a mapped/enabled device with no attempt on record at all — this is exactly the not-yet-verified candidate this workflow exists for", () => {
-    expect(computeFirstTestEligibility(EXTERNAL_ID, undefined)).toEqual({
-      eligible: true,
-    });
-  });
-
-  it("IS eligible for a mapped/enabled device whose only record is a REJECTED pre-flight refusal — a REJECTED history is non-blocking, same as computeLockControlEligibility's own treatment of it", () => {
-    expect(computeFirstTestEligibility(EXTERNAL_ID, "REJECTED")).toEqual({
-      eligible: true,
-    });
-  });
-
-  it("never reads AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS — its result is identical regardless of the real allowlist's contents, so the UI can never leak which devices are allowlisted", () => {
-    const originalAllowlist = process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS;
-    try {
-      delete process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS;
-      const notAllowlisted = computeFirstTestEligibility(
-        EXTERNAL_ID,
-        undefined,
+  it.each(["UNKNOWN", "OFFLINE", "ERROR"])(
+    "connectivity %s: nothing is offered, with an explanation",
+    (connectivity) => {
+      const verified = {
+        ...base,
+        connectivity,
+        lastOutcome: "SUCCEEDED" as const,
+      };
+      expect(computeLockControlEligibility(verified).eligible).toBe(false);
+      expect(computeLockControlEligibility(verified).reason).toContain(
+        "isn't reporting this lock as online",
       );
+      expect(computeFirstTestEligibility({ ...base, connectivity })).toEqual({
+        eligible: false,
+      });
+    },
+  );
 
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = JSON.stringify([
-        EXTERNAL_ID,
-      ]);
-      const allowlisted = computeFirstTestEligibility(EXTERNAL_ID, undefined);
-
-      expect(notAllowlisted).toEqual(allowlisted);
-      expect(notAllowlisted).toEqual({ eligible: true });
-    } finally {
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS = originalAllowlist;
-    }
+  it("unmapped/disabled (externalDeviceId null): nothing is offered", () => {
+    const ctx = { ...base, externalDeviceId: null };
+    expect(computeLockControlEligibility(ctx).reason).toContain(
+      "not enabled for control",
+    );
+    expect(computeFirstTestEligibility(ctx)).toEqual({ eligible: false });
   });
 
-  it("REAL EVIDENCE — Orion case (2026-09-25): is NOT eligible when the most recent recorded outcome is AMBIGUOUS — blocked exactly like FAILED, so the first-test workflow can never be used to automatically retry an uncertain outcome", () => {
-    expect(computeFirstTestEligibility(EXTERNAL_ID, "AMBIGUOUS")).toEqual({
-      eligible: false,
-    });
+  it.each(["FAILED", "AMBIGUOUS"] as const)(
+    "%s blocks both workflows and points to an admin reset, even when online",
+    (lastOutcome) => {
+      const ctx = { ...base, lastOutcome };
+      expect(computeLockControlEligibility(ctx).eligible).toBe(false);
+      expect(computeLockControlEligibility(ctx).reason).toContain("admin");
+      expect(computeFirstTestEligibility(ctx)).toEqual({ eligible: false });
+      expect(isAdminResetAvailable(lastOutcome)).toBe(true);
+    },
+  );
+
+  it("admin reset is only available for FAILED/AMBIGUOUS", () => {
+    expect(isAdminResetAvailable(undefined)).toBe(false);
+    expect(isAdminResetAvailable("SUCCEEDED")).toBe(false);
+    expect(isAdminResetAvailable("ADMIN_RESET")).toBe(false);
   });
 });
 
@@ -1809,5 +1803,134 @@ describe("getLatestAugustLockCommandOutcomes", () => {
       getLatestAugustLockCommandOutcomes(actor, [SMART_DEVICE_ID]),
     ).rejects.toThrow();
     expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("getLatestAugustLockCommandOutcomes — REJECTED / ADMIN_RESET handling (2026-09-25)", () => {
+  beforeEach(() => {
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.auditLog.findMany).mockReset();
+  });
+
+  it("skips REJECTED rows so they never mask an older FAILED", async () => {
+    vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce([
+      { entityId: SMART_DEVICE_ID, afterState: { result: "REJECTED" } },
+      { entityId: SMART_DEVICE_ID, afterState: { result: "FAILED" } },
+    ] as never);
+
+    const result = await getLatestAugustLockCommandOutcomes(actor, [
+      SMART_DEVICE_ID,
+    ]);
+
+    expect(result.get(SMART_DEVICE_ID)).toBe("FAILED");
+  });
+
+  it("recognizes ADMIN_RESET as the latest outcome (not verified, not blocked)", async () => {
+    vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce([
+      { entityId: SMART_DEVICE_ID, afterState: { result: "ADMIN_RESET" } },
+      { entityId: SMART_DEVICE_ID, afterState: { result: "AMBIGUOUS" } },
+    ] as never);
+
+    const result = await getLatestAugustLockCommandOutcomes(actor, [
+      SMART_DEVICE_ID,
+    ]);
+
+    expect(result.get(SMART_DEVICE_ID)).toBe("ADMIN_RESET");
+  });
+});
+
+describe("resetAugustLockAfterPhysicalCheck (2026-09-25)", () => {
+  const input = {
+    smartDeviceId: SMART_DEVICE_ID,
+    observedLockState: "locked" as const,
+    note: "Kenny checked on site",
+  };
+
+  beforeEach(() => {
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.smartDevice.findUnique).mockReset();
+    vi.mocked(prisma.auditLog.findMany).mockReset().mockResolvedValue([]);
+    mockRecordAudit.mockClear();
+    mockLock.mockClear();
+    mockUnlock.mockClear();
+    mockGetLockDetail.mockClear();
+  });
+
+  it("requires a GLOBAL locks:manage grant (no propertyId scope) before reading anything", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(
+      resetAugustLockAfterPhysicalCheck(actor, input),
+    ).rejects.toThrow();
+    expect(assertPermission).toHaveBeenCalledWith(actor, "locks:manage");
+    expect(prisma.smartDevice.findUnique).not.toHaveBeenCalled();
+    expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+
+  it.each(["FAILED", "AMBIGUOUS"])(
+    "for a %s-blocked lock: writes one ADMIN_RESET audit row, sends no command, never SUCCEEDED",
+    async (blocking) => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce({
+        id: SMART_DEVICE_ID,
+        provider: "AUGUST",
+        propertyId: PROPERTY_ID,
+        metadata: {},
+      } as never);
+      vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce([
+        { afterState: { result: "REJECTED" } },
+        { afterState: { result: blocking } },
+      ] as never);
+
+      const result = await resetAugustLockAfterPhysicalCheck(actor, input);
+
+      expect(result).toEqual({ status: "success" });
+      expect(mockRecordAudit).toHaveBeenCalledTimes(1);
+      const audit = mockRecordAudit.mock.calls[0]![0];
+      expect(audit.action).toBe("smart_device.august_lock_command");
+      expect(audit.afterState).toEqual({
+        result: "ADMIN_RESET",
+        commandSent: false,
+        observedLockState: "locked",
+        resetFrom: blocking,
+      });
+      expect(audit.metadata.note).toBe("Kenny checked on site");
+      expect(mockLock).not.toHaveBeenCalled();
+      expect(mockUnlock).not.toHaveBeenCalled();
+      expect(mockGetLockDetail).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([[[]], [[{ afterState: { result: "SUCCEEDED" } }]]])(
+    "refuses when the lock isn't blocked (history %j)",
+    async (rows) => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce({
+        id: SMART_DEVICE_ID,
+        provider: "AUGUST",
+        propertyId: PROPERTY_ID,
+        metadata: {},
+      } as never);
+      vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce(rows as never);
+
+      const result = await resetAugustLockAfterPhysicalCheck(actor, input);
+
+      expect(result.status).toBe("rejected");
+      expect(mockRecordAudit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a non-August device", async () => {
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce({
+      id: SMART_DEVICE_ID,
+      provider: "NEST",
+      propertyId: PROPERTY_ID,
+      metadata: {},
+    } as never);
+
+    const result = await resetAugustLockAfterPhysicalCheck(actor, input);
+
+    expect(result).toEqual({ status: "rejected", reason: "Device not found." });
+    expect(mockRecordAudit).not.toHaveBeenCalled();
   });
 });

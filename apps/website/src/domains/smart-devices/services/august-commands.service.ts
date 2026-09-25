@@ -10,6 +10,7 @@ import {
 } from "@stayw/integrations/august";
 import { HttpRequestError } from "@stayw/integrations/core";
 
+import { readLockControlSetting } from "./lock-control-settings.service";
 import { mergeAugustLockMetadata } from "./lock-refresh.service";
 
 import { recordAudit } from "@/platform/audit/record-audit";
@@ -105,6 +106,18 @@ const PRE_COMMAND_DEADLINE_MS = 15_000;
 const SINGLE_READ_WORST_CASE_MS = 10_000;
 
 /** Operator-facing reason when pre-command reads were too slow to safely start a physical command inside the time budget. */
+/**
+ * Account-wide cap on physical commands in flight at once (2026-09-25,
+ * "enable all locks") — one command per lock is already enforced by the
+ * per-device guard; this keeps several operators testing different locks at
+ * the same time from overloading August's API. There is no bulk/"test all"
+ * path anywhere: every command is one lock, one confirmed click.
+ */
+const MAX_CONCURRENT_AUGUST_COMMANDS = 3;
+
+const COMMANDS_BUSY_REASON =
+  "Other lock commands are in progress right now, so nothing was sent. Try again in a few seconds.";
+
 const SLOW_PROVIDER_REJECTED_REASON =
   "August is responding too slowly right now, so no command was sent. Try again shortly.";
 
@@ -176,14 +189,9 @@ async function pollForConfirmedLockState(
 
 /**
  * Read-only, single-device lookup of the same history
- * getLatestAugustLockCommandOutcomes() reads for the whole dashboard —
- * used internally by sendAugustLockCommand()'s already-in-requested-state
- * check (2026-09-25) to decide whether THIS exact attempt is still a
- * first-verification one (never positively proven yet) or routine control
- * on an already-VERIFIED device. Deliberately not the exported,
- * permission-checked function: the caller here is already inside
- * sendAugustLockCommand() itself, past its own locks:manage RBAC check,
- * so a second smart_devices:read check would be redundant, not safer.
+ * getLatestAugustLockCommandOutcomes() reads for the whole dashboard. Used
+ * inside sendAugustLockCommand() (already past its own locks:manage RBAC
+ * check) and resetAugustLockAfterPhysicalCheck().
  */
 async function getMostRecentRecordedOutcome(
   smartDeviceId: string,
@@ -197,9 +205,6 @@ async function getMostRecentRecordedOutcome(
     orderBy: { occurredAt: "desc" },
     select: { afterState: true },
   });
-  // Skips NO_ACTION_ALREADY_IN_STATE rows (and anything else unrecognized)
-  // so a no-op can never mask this device's real SUCCEEDED/FAILED/AMBIGUOUS
-  // history — same rule as getLatestAugustLockCommandOutcomes().
   for (const row of rows) {
     const outcome = parseRecordedOutcome(row.afterState);
     if (outcome) return outcome;
@@ -208,10 +213,15 @@ async function getMostRecentRecordedOutcome(
 }
 
 /**
- * The one place an AuditLog `afterState` is turned into a recorded outcome.
- * Returns undefined for NO_ACTION_ALREADY_IN_STATE (no command was sent, so
- * it is not evidence of anything about remote-command operability) and for
- * any unrecognized value — callers then fall through to the next-older row.
+ * The one place an AuditLog `afterState` becomes a recorded outcome — the
+ * state that decides whether a lock is verified, blocked, or untested.
+ *
+ * Only rows that reflect something that actually happened to (or was
+ * physically checked on) the lock count: SUCCEEDED, FAILED, AMBIGUOUS, and
+ * ADMIN_RESET. REJECTED (stopped before anything was sent) and
+ * NO_ACTION_ALREADY_IN_STATE (no command needed) return undefined, so the
+ * caller falls through to the next-older row. That way neither can ever
+ * mask a real FAILED/AMBIGUOUS block, nor count toward "verified".
  */
 function parseRecordedOutcome(
   afterState: Prisma.JsonValue | null,
@@ -220,53 +230,12 @@ function parseRecordedOutcome(
   if (
     result === "SUCCEEDED" ||
     result === "FAILED" ||
-    result === "REJECTED" ||
-    result === "AMBIGUOUS"
+    result === "AMBIGUOUS" ||
+    result === "ADMIN_RESET"
   ) {
     return result;
   }
   return undefined;
-}
-
-/**
- * The Production physical-execution safety gate (2026-09-18) — see
- * .env.example's own doc comment on AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS.
- * Malformed or missing means "nothing allowed," same fail-closed convention
- * as every other JSON-array env var in this codebase
- * (AUGUST_EXCLUDED_LOCK_IDS), never "allow everything."
- */
-function parseTestDeviceAllowlist(raw: string | undefined): Set<string> {
-  if (!raw) return new Set();
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      return new Set(parsed.filter((v): v is string => typeof v === "string"));
-    }
-    return new Set();
-  } catch {
-    return new Set();
-  }
-}
-
-/**
- * UX-only read of the exact same real, live `AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS`
- * gate `sendAugustLockCommand()` itself enforces (step 5 in its own doc
- * comment) — never a second, separate allowlist, never a relaxed copy.
- * Exists so the dashboard can decide whether to even show Lock/Unlock as
- * available BEFORE a real command is attempted, rather than only learning
- * "Live control isn't enabled for this lock yet" after a full confirm
- * dialog round trip. Recomputed fresh on every call (no caching) so it's
- * never stale relative to the real env var. This function makes no
- * database call, no provider call, and cannot itself allow or deny a real
- * command — sendAugustLockCommand() re-checks this exact same env var
- * unconditionally regardless of what this returns.
- */
-export function isAugustLockCommandTestDevice(
-  externalDeviceId: string,
-): boolean {
-  return parseTestDeviceAllowlist(
-    process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS,
-  ).has(externalDeviceId);
 }
 
 /** What LocksList shows in place of the Lock/Unlock controls when they're not currently eligible — never rendered when `eligible` is true. */
@@ -275,164 +244,120 @@ export interface LockControlEligibility {
   reason: string | null;
 }
 
+/**
+ * Everything eligibility depends on (2026-09-25, "enable all locks") —
+ * fully dynamic, nothing per-lock hard-coded and no env allowlist. A lock
+ * added or renamed in August becomes eligible as soon as it is mapped,
+ * enabled, and reports online.
+ */
+export interface LockControlContext {
+  /** The enabled ProviderDevice mapping's externalDeviceId — null when the lock is unmapped or its mapping is disabled. */
+  externalDeviceId: string | null;
+  /** Last connectivity August reported (SmartDevice.status). Only ONLINE locks can be commanded remotely. */
+  connectivity: string;
+  lastOutcome: AugustLockCommandRecordedOutcome | undefined;
+  /** The global kill switch (readLockControlSetting). */
+  lockControlEnabled: boolean;
+}
+
 /** Exact same copy sendAugustLockCommand() itself returns when providerDevice is missing/disabled — reused, not paraphrased, so a pre-click and a post-click message never disagree. */
 const NOT_ENABLED_FOR_CONTROL_REASON =
   "This device is not enabled for control — map and enable it from Discovered Devices first.";
 
-/** Exact same copy sendAugustLockCommand() itself returns for the allowlist gate — reused, not paraphrased. */
-const NOT_IN_TEST_ALLOWLIST_REASON =
-  "Live control isn't enabled for this lock yet.";
-
-/** Deliberately generic and safe — never the raw stored `metadata.errorDetail` (that field is written for internal/audit inspection, not general operator-facing display; see recordAuditSafely()'s own doc comment). */
-const LAST_ATTEMPT_FAILED_REASON =
-  "The last real attempt to control this lock did not succeed. Contact an admin before trying again.";
+const KILL_SWITCH_OFF_REASON =
+  "Remote lock control is turned off by an admin. No commands can be sent to any lock.";
 
 /**
- * The "not yet positively verified" reason — covers both "no real command
- * attempt exists at all" and "the only real attempt on record was a
- * REJECTED pre-flight refusal, never a real provider-level command." Never
- * a failure message (nothing is known to be broken), and never treated as
- * eligible either — see computeLockControlEligibility()'s own doc comment
- * for why absence of failure evidence is not proof of operability.
+ * August only reports live status and accepts remote commands for a lock
+ * connected to its cloud (a WiFi bridge/connection it reports as online). A
+ * live fleet check on 2026-09-25 found 39 of 43 locks with no bridge
+ * reported and lock status "unknown" from August itself.
  */
+const NOT_ONLINE_REASON =
+  "August isn't reporting this lock as online, so it can't be controlled remotely. Check its WiFi bridge connection in the August/Yale app.";
+
+/** Deliberately generic and safe — never the raw stored `metadata.errorDetail`. */
+const LAST_ATTEMPT_FAILED_REASON =
+  "The last real attempt to control this lock did not succeed. An admin must check the door in person and reset it before it can be tried again.";
+
 const NOT_YET_VERIFIED_REASON =
   "Remote control has not been verified for this lock yet.";
 
 /**
- * Distinct from LAST_ATTEMPT_FAILED_REASON on purpose (2026-09-25, the
- * Orion incident) — an AMBIGUOUS outcome is not a confirmed provider
- * rejection, so telling an operator "did not succeed" would overclaim
- * evidence we don't have. This wording matches the operator-facing text
- * the ambiguous/uncertain case explicitly calls for: never implies the
- * command failed, never implies it succeeded, and is explicit that manual
- * investigation (not a retry) is what resolves it.
+ * Distinct from LAST_ATTEMPT_FAILED_REASON on purpose (the Orion incident) —
+ * never implies the command failed or succeeded.
  */
 const AMBIGUOUS_OUTCOME_BLOCKED_REASON =
-  "Command outcome uncertain. Do not retry until the lock's physical/provider state has been verified. Contact an admin.";
+  "Command outcome uncertain. Do not retry until the lock's physical state has been checked in person and an admin has reset it.";
 
 /**
- * Combines the real signals above into one UX decision — never "mapped +
- * enabled alone," and never "no evidence of failure" either. StayWhile's
- * requirement (2026-09-23 correction) is fail-closed and POSITIVE: a lock
- * is only ever shown as controllable when real remote-command operability
- * for that exact device has already been demonstrated — a real, on-record
- * `SUCCEEDED` outcome from an actual `sendAugustLockCommand()` attempt
- * (e.g. Aqua Palm's real controlled test). Every other case defaults to
- * disabled:
+ * Whether the routine Lock/Unlock controls are available. Fail-closed and
+ * positive: only a lock with a real on-record SUCCEEDED outcome (since any
+ * admin reset) is routine-controllable, and only while the kill switch is
+ * ON, the lock is mapped + enabled, and August reports it ONLINE.
+ * FAILED/AMBIGUOUS block until an admin reset. No outcome / ADMIN_RESET
+ * means "not yet verified" — the separate first-test workflow applies.
  *
- *   - no real, enabled ProviderDevice mapping (`externalDeviceId` null) —
- *     disabled (nothing to even check).
- *   - not in the real AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS allowlist —
- *     disabled (the command would be refused before ever reaching August).
- *   - most recent real attempt `FAILED` (e.g. MJ - Front Door's real
- *     `403`) — disabled, and MUST NOT be inferred as "fixed" by mere
- *     allowlist membership or the passage of time; only a later real
- *     `SUCCEEDED` attempt (not made by this function or this UI) would
- *     change that.
- *   - most recent real attempt `AMBIGUOUS` (2026-09-25 — no definitive
- *     response was ever received from August, e.g. Orion's real
- *     connection-abort) — disabled, for the same reason as `FAILED`: we
- *     have no evidence this device is safe to command again, only evidence
- *     that we don't know what happened. Never treated as equivalent to a
- *     real `FAILED` (it is not a confirmed rejection) and never treated as
- *     "fixed" by anything short of manual investigation.
- *   - no real attempt on record at all — disabled/unverified. An
- *     allowlisted-but-never-tested lock is NOT presented as ready; absence
- *     of failure evidence is not proof of operability.
- *   - most recent real attempt `REJECTED` only (StayWhile's own pre-flight
- *     refusal — mapping/capability/allowlist — never reached August at
- *     all) — disabled/unverified. A REJECTED record is never treated as
- *     equivalent to, or a step toward, a real SUCCEEDED outcome.
- *
- * This function makes no provider or database call, and — per explicit
- * instruction — never performs or triggers a real command to establish
- * verification; the only source of truth is already-existing AuditLog
- * history the caller supplies.
+ * UX only: sendAugustLockCommand() re-checks every one of these conditions
+ * server-side (connectivity from a fresh August read, not stored status).
  */
 export function computeLockControlEligibility(
-  externalDeviceId: string | null,
-  lastOutcome: AugustLockCommandRecordedOutcome | undefined,
+  ctx: LockControlContext,
 ): LockControlEligibility {
-  if (externalDeviceId === null) {
+  if (!ctx.lockControlEnabled) {
+    return { eligible: false, reason: KILL_SWITCH_OFF_REASON };
+  }
+  if (ctx.externalDeviceId === null) {
     return { eligible: false, reason: NOT_ENABLED_FOR_CONTROL_REASON };
   }
-  if (!isAugustLockCommandTestDevice(externalDeviceId)) {
-    return { eligible: false, reason: NOT_IN_TEST_ALLOWLIST_REASON };
-  }
-  if (lastOutcome === "SUCCEEDED") {
-    return { eligible: true, reason: null };
-  }
-  if (lastOutcome === "FAILED") {
+  if (ctx.lastOutcome === "FAILED") {
     return { eligible: false, reason: LAST_ATTEMPT_FAILED_REASON };
   }
-  if (lastOutcome === "AMBIGUOUS") {
+  if (ctx.lastOutcome === "AMBIGUOUS") {
     return { eligible: false, reason: AMBIGUOUS_OUTCOME_BLOCKED_REASON };
   }
-  // `undefined` (no real attempt on record) or `"REJECTED"` (a real attempt
-  // was refused before ever reaching August) — neither is proof of real
-  // remote-command operability.
+  if (ctx.connectivity !== "ONLINE") {
+    return { eligible: false, reason: NOT_ONLINE_REASON };
+  }
+  if (ctx.lastOutcome === "SUCCEEDED") {
+    return { eligible: true, reason: null };
+  }
   return { eligible: false, reason: NOT_YET_VERIFIED_REASON };
 }
 
-/** What LocksList shows in place of the ordinary Lock/Unlock controls, for a device that hasn't earned either state yet — see computeFirstTestEligibility()'s own doc comment. */
+/** Whether to offer the separate "Test controllability" first-verification workflow. */
 export interface FirstTestEligibility {
   eligible: boolean;
 }
 
 /**
- * Decides whether a lock should show the separate, deliberately-distinct
- * "Test controllability" workflow (2026-09-24) — the fix for the gap
- * computeLockControlEligibility() itself created: once that function
- * started requiring a real on-record SUCCEEDED outcome before showing
- * Lock/Unlock as available, no not-yet-tested device could ever earn its
- * first SUCCEEDED outcome through the dashboard at all (the only control
- * that could produce one was the one now disabled until one already
- * exists). This function is that missing first rung, not a relaxation of
- * the positive-verification rule above it.
- *
- * Deliberately NEVER reads AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS (unlike
- * isAugustLockCommandTestDevice/computeLockControlEligibility) — this
- * function's true/false must never let a viewer infer which devices are or
- * aren't in that allowlist. The real allowlist stays a server-side-only,
- * fail-closed final gate inside sendAugustLockCommand() itself: a device
- * that's eligible here but NOT actually allowlisted will still be REJECTED
- * the instant a real test is attempted, before any provider call. Eligible
- * here only means "safe, non-secret criteria say this lock's first-test
- * workflow may be offered" — never "this test would succeed."
- *
- * Eligible exactly when:
- *   - the device has a real, enabled ProviderDevice mapping
- *     (externalDeviceId present) — same signal computeLockControlEligibility
- *     uses for "mapped and enabled," reused rather than re-derived.
- *   - its most recent real recorded outcome is NOT `SUCCEEDED` — already
- *     VERIFIED; belongs to the ordinary Lock/Unlock controls now, not this
- *     one-time workflow (e.g. Aqua Palm).
- *   - its most recent real recorded outcome is NOT `FAILED` — permanently
- *     BLOCKED; must never be retried through this or any other control
- *     (e.g. MJ - Front Door's real 403).
- *   - its most recent real recorded outcome is NOT `AMBIGUOUS` (2026-09-25
- *     — Orion's real connection-abort, no definitive response ever
- *     received) — blocked exactly like `FAILED`: an uncertain outcome must
- *     never be automatically retryable, through this workflow or any
- *     other, until a human has manually investigated. Never conflated with
- *     `FAILED` itself (it is not evidence of a real rejection), but treated
- *     identically for eligibility purposes.
- *
- * `undefined` (no real attempt on record at all) and `"REJECTED"` (only a
- * pre-flight refusal, never a real provider-level attempt) are both
- * eligible — exactly the two cases computeLockControlEligibility treats as
- * "not yet verified," which is precisely what this workflow exists to
- * resolve.
+ * The first rung for a not-yet-verified lock: offered only when the kill
+ * switch is ON, the lock is mapped + enabled and ONLINE, and it has no
+ * blocking or verifying outcome (no history, or an ADMIN_RESET). Never
+ * offered alongside the routine controls, and never for a FAILED/AMBIGUOUS
+ * lock (those need an admin reset first).
  */
 export function computeFirstTestEligibility(
-  externalDeviceId: string | null,
-  lastOutcome: AugustLockCommandRecordedOutcome | undefined,
+  ctx: LockControlContext,
 ): FirstTestEligibility {
-  if (externalDeviceId === null) return { eligible: false };
-  if (lastOutcome === "SUCCEEDED") return { eligible: false };
-  if (lastOutcome === "FAILED") return { eligible: false };
-  if (lastOutcome === "AMBIGUOUS") return { eligible: false };
+  if (!ctx.lockControlEnabled) return { eligible: false };
+  if (ctx.externalDeviceId === null) return { eligible: false };
+  if (ctx.connectivity !== "ONLINE") return { eligible: false };
+  if (
+    ctx.lastOutcome === "SUCCEEDED" ||
+    ctx.lastOutcome === "FAILED" ||
+    ctx.lastOutcome === "AMBIGUOUS"
+  ) {
+    return { eligible: false };
+  }
   return { eligible: true };
+}
+
+/** An admin "reset after physical check" is offered only for a lock blocked by FAILED or AMBIGUOUS. */
+export function isAdminResetAvailable(
+  lastOutcome: AugustLockCommandRecordedOutcome | undefined,
+): boolean {
+  return lastOutcome === "FAILED" || lastOutcome === "AMBIGUOUS";
 }
 
 /**
@@ -542,21 +467,23 @@ function getAugustClientFromEnv(): AugustClient {
  *   2. Property-scoped RBAC via `locks:manage` — deliberately separate
  *      from `smart_devices:update` (monitoring/mapping, comparatively
  *      harmless) so granting mapping access never implicitly grants
- *      physical lock control. Only `admin` has it today (via the `*`
- *      wildcard); no other role was extended it.
+ *      physical lock control. Only `admin` is granted it in Production.
+ *   2a. Global kill switch (readLockControlSetting) and blocking history:
+ *      a lock whose last real outcome is FAILED or AMBIGUOUS is refused
+ *      until an admin resets it after an in-person check.
  *   3. Duplicate-command prevention: advisory-lock-guarded, in-progress
- *      marker read AND written inside the same locked transaction.
+ *      marker read AND written inside the same locked transaction, plus an
+ *      account-wide cap of MAX_CONCURRENT_AUGUST_COMMANDS in flight.
  *   4. Fresh capability refresh: a real getLockDetail() + getLockCapabilities()
  *      pair against August right now — never the stored
  *      ProviderDevice.rawMetadata snapshot, which could be arbitrarily old.
  *      A lock with no reported serialNumber, or whose capabilities don't
  *      confirm the requested operation, is rejected here — never assumed
  *      supported.
- *   5. PRODUCTION SAFETY GATE — the target's exact externalDeviceId must
- *      appear in AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS. This is checked AFTER
- *      every other real check has already passed (so a rejection here
- *      never masks a genuine mapping/RBAC/capability problem as "just not
- *      enabled yet"), and BEFORE any command is sent.
+ *   5. Dynamic eligibility (2026-09-25, replaces the old
+ *      AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS env allowlist): the fresh read
+ *      above must report the lock ONLINE, and the kill switch is re-read
+ *      right before sending so a toggle takes effect immediately.
  *   6. The real command (PUT /remoteoperate/.../{lock|unlock|unlatch}, the
  *      synchronous variant — see AugustClient.lock()/unlock()/unlatch()'s
  *      own doc comments), then a second fresh getLockDetail() to confirm
@@ -608,17 +535,55 @@ export async function sendAugustLockCommand(
     propertyId: smartDevice.propertyId,
   });
 
+  // Kill switch and blocking history, before any August call or command
+  // marker. A refusal here never reaches the lock.
+  const lockControl = await readLockControlSetting();
+  if (!lockControl.enabled) {
+    await recordAuditSafely({
+      actor,
+      smartDeviceId: smartDevice.id,
+      propertyId: smartDevice.propertyId,
+      operation: input.operation,
+      previousMetadata: smartDevice.metadata,
+      result: "REJECTED",
+      errorDetail: "Blocked by the global lock-control kill switch (OFF).",
+    });
+    return { status: "rejected", reason: KILL_SWITCH_OFF_REASON };
+  }
+  const lastOutcome = await getMostRecentRecordedOutcome(smartDevice.id);
+  if (lastOutcome === "FAILED" || lastOutcome === "AMBIGUOUS") {
+    await recordAuditSafely({
+      actor,
+      smartDeviceId: smartDevice.id,
+      propertyId: smartDevice.propertyId,
+      operation: input.operation,
+      previousMetadata: smartDevice.metadata,
+      result: "REJECTED",
+      errorDetail: `Blocked: last real outcome is ${lastOutcome}; requires an admin reset after an in-person check.`,
+    });
+    return {
+      status: "rejected",
+      reason:
+        lastOutcome === "FAILED"
+          ? LAST_ATTEMPT_FAILED_REASON
+          : AMBIGUOUS_OUTCOME_BLOCKED_REASON,
+    };
+  }
+
   // Atomic duplicate-command guard — identical shape to
   // sendNestThermostatCommand()'s: acquire the advisory lock, THEN read the
   // current marker from inside the same transaction (never the pre-fetched
   // `smartDevice` above, which could already be stale by the time we get
   // here).
   const lockResult = await prisma.$transaction(async (tx) => {
+    // Serializes the account-wide in-flight count below across concurrent
+    // requests for different locks (held only for this short transaction).
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext('august_command_slots'))`;
     const lockRows = await tx.$queryRaw<{ locked: boolean }[]>`
       SELECT pg_try_advisory_xact_lock(hashtext('device_command'), hashtext(${smartDevice.id})) AS locked
     `;
     if (!lockRows[0]?.locked) {
-      return { proceeding: false } as const;
+      return { proceeding: false, busy: false } as const;
     }
 
     const current = await tx.smartDevice.findUniqueOrThrow({
@@ -629,19 +594,34 @@ export async function sendAugustLockCommand(
     if (current.commandInProgressAt) {
       const ageMs = Date.now() - current.commandInProgressAt.getTime();
       if (ageMs < STALE_COMMAND_THRESHOLD_MS) {
-        return { proceeding: false } as const;
+        return { proceeding: false, busy: false } as const;
       }
+    }
+
+    const otherCommandsInFlight = await tx.smartDevice.count({
+      where: {
+        provider: "AUGUST",
+        id: { not: smartDevice.id },
+        commandInProgressAt: {
+          gt: new Date(Date.now() - STALE_COMMAND_THRESHOLD_MS),
+        },
+      },
+    });
+    if (otherCommandsInFlight >= MAX_CONCURRENT_AUGUST_COMMANDS) {
+      return { proceeding: false, busy: true } as const;
     }
 
     await tx.smartDevice.update({
       where: { id: smartDevice.id },
       data: { commandInProgressAt: new Date() },
     });
-    return { proceeding: true } as const;
+    return { proceeding: true, busy: false } as const;
   });
 
   if (!lockResult.proceeding) {
-    return { status: "already_running" };
+    return lockResult.busy
+      ? { status: "rejected", reason: COMMANDS_BUSY_REASON }
+      : { status: "already_running" };
   }
 
   const previousMetadata = smartDevice.metadata;
@@ -685,6 +665,22 @@ export async function sendAugustLockCommand(
       data: { rawMetadata: freshDetail as unknown as Prisma.InputJsonValue },
     });
 
+    // Dynamic eligibility: August must report this lock ONLINE right now
+    // (fresh read, never the stored status). Offline/unknown locks have no
+    // cloud connection for a remote command to travel over.
+    if (freshDetail.connectivity !== "ONLINE") {
+      await recordAuditSafely({
+        actor,
+        smartDeviceId: smartDevice.id,
+        propertyId,
+        operation: input.operation,
+        previousMetadata,
+        result: "REJECTED",
+        errorDetail: `Not online: August reported connectivity "${freshDetail.connectivity}"; no command sent.`,
+      });
+      return { status: "rejected", reason: NOT_ONLINE_REASON };
+    }
+
     // ALREADY-IN-REQUESTED-STATE CHECK (2026-09-25 correction): if the
     // lock already reports the exact state this operation would produce,
     // a later matching poll reading would prove nothing about whether the
@@ -695,7 +691,6 @@ export async function sendAugustLockCommand(
     const preCommandState = freshDetail.lockState?.toLowerCase() ?? null;
     const targetState = expectedLockStateFor(input.operation);
     if (preCommandState === targetState) {
-      const lastOutcome = await getMostRecentRecordedOutcome(smartDevice.id);
       // Anything short of a real, on-record SUCCEEDED means this exact
       // device has never had its remote-command operability positively
       // proven yet (matches computeFirstTestEligibility's own definition)
@@ -797,13 +792,9 @@ export async function sendAugustLockCommand(
       return { status: "rejected", reason };
     }
 
-    // PRODUCTION SAFETY GATE — checked after every real check has passed,
-    // before any command is sent. Ships fail-closed (empty allowlist).
-    const allowlist = parseTestDeviceAllowlist(
-      process.env.AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS,
-    );
-    if (!allowlist.has(externalDeviceId)) {
-      const reason = "Live control isn't enabled for this lock yet.";
+    // Kill switch re-read immediately before sending, so an admin turning
+    // it OFF mid-request still stops this command.
+    if (!(await readLockControlSetting()).enabled) {
       await recordAuditSafely({
         actor,
         smartDeviceId: smartDevice.id,
@@ -812,9 +803,9 @@ export async function sendAugustLockCommand(
         previousMetadata,
         result: "REJECTED",
         errorDetail:
-          "Blocked by AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS allowlist (device not present).",
+          "Blocked by the global lock-control kill switch (turned OFF before send).",
       });
-      return { status: "rejected", reason };
+      return { status: "rejected", reason: KILL_SWITCH_OFF_REASON };
     }
 
     // The real command. Every existing safety check above this point has
@@ -983,7 +974,10 @@ async function recordAuditSafely(args: {
   propertyId: string;
   operation: AugustLockOperation;
   previousMetadata: Prisma.JsonValue;
-  result: AugustLockCommandRecordedOutcome | "NO_ACTION_ALREADY_IN_STATE";
+  result:
+    | Exclude<AugustLockCommandRecordedOutcome, "ADMIN_RESET">
+    | "REJECTED"
+    | "NO_ACTION_ALREADY_IN_STATE";
   confirmedLockState?: string | null;
   errorDetail?: string;
   /** Operator-readable explanation for a non-error outcome (NO_ACTION_ALREADY_IN_STATE). */
@@ -1020,33 +1014,22 @@ async function recordAuditSafely(args: {
   });
 }
 
-/** The real recorded outcome kinds — see getLatestAugustLockCommandOutcomes()'s own doc comment for what each means and why they matter for UI eligibility. `AMBIGUOUS` (2026-09-25) is distinct from `FAILED`: it means no definitive response was ever received at all (a network-level abort/timeout), not that August gave a real, identifiable refusal. */
+/**
+ * The recorded outcomes that decide a lock's control state (see
+ * parseRecordedOutcome()): SUCCEEDED (verified), FAILED / AMBIGUOUS
+ * (blocked until an admin reset), ADMIN_RESET (back to not-yet-verified
+ * after an in-person check). REJECTED and NO_ACTION_ALREADY_IN_STATE rows
+ * are still written to the audit log but never change this state.
+ */
 export type AugustLockCommandRecordedOutcome =
-  "SUCCEEDED" | "FAILED" | "REJECTED" | "AMBIGUOUS";
+  "SUCCEEDED" | "FAILED" | "AMBIGUOUS" | "ADMIN_RESET";
 
 /**
- * Read-only: the most recent recorded `smart_device.august_lock_command`
- * outcome per device, from the exact same AuditLog rows
- * recordAuditSafely() already writes above — never a second/derived
- * tracking mechanism. Used exclusively to decide whether the dashboard
- * should present Lock/Unlock as available (see
- * apps/website/app/(dashboard)/locks/page.tsx) — this function makes no
- * provider call and changes nothing; it only reads history that already
- * exists.
- *
- * Specifically answers "did the last REAL command attempt against this
- * device fail" (`result: "FAILED"` — set only in the catch block wrapping
- * the actual `client.lock()/unlock()/unlatch()` call, i.e. a genuine
- * provider-level refusal or transport failure, like MJ - Front Door's real
- * `403`) — distinct from `"REJECTED"` (StayWhile's own pre-flight checks:
- * mapping/capability/allowlist — already independently re-verified live on
- * every real attempt regardless of history, so stale REJECTED history adds
- * no safety value here and is not treated as blocking) and `"SUCCEEDED"`
- * (e.g. Aqua Palm's real controlled test). A device with no recorded
- * attempt at all returns no entry — absence of failure evidence, not
- * proof of success; callers must combine this with the real
- * AUGUST_LOCK_COMMAND_TEST_DEVICE_IDS check (isAugustLockCommandTestDevice
- * above), never rely on this alone.
+ * Read-only: each device's most recent recorded outcome (see
+ * AugustLockCommandRecordedOutcome), from the same AuditLog rows
+ * recordAuditSafely() and resetAugustLockAfterPhysicalCheck() write. A
+ * device with no such row returns no entry — absence of failure evidence,
+ * never proof of success. Makes no provider call and changes nothing.
  */
 export async function getLatestAugustLockCommandOutcomes(
   actor: AuthContext,
@@ -1077,4 +1060,74 @@ export async function getLatestAugustLockCommandOutcomes(
     if (outcome) outcomes.set(row.entityId, outcome);
   }
   return outcomes;
+}
+
+export type ResetAugustLockResult =
+  { status: "success" } | { status: "rejected"; reason: string };
+
+export interface ResetAugustLockInput {
+  smartDeviceId: string;
+  /** What the admin saw at the door in person. */
+  observedLockState: "locked" | "unlocked";
+  /** Free-text note, e.g. who checked and when. */
+  note?: string;
+}
+
+/**
+ * Admin "reset after physical check" (2026-09-25) for a lock blocked by a
+ * FAILED or AMBIGUOUS outcome (e.g. Orion, MJ - Front Door). The admin
+ * confirms they checked the door's real state in person.
+ *
+ * Never sends a command, never touches the lock's stored telemetry, and
+ * never counts as verified: it writes one ADMIN_RESET audit row, which
+ * returns the lock to "not yet verified", so the next step is the ordinary
+ * first-verification test. Global (not property-scoped) `locks:manage` —
+ * admin only in Production.
+ */
+export async function resetAugustLockAfterPhysicalCheck(
+  actor: AuthContext,
+  input: ResetAugustLockInput,
+): Promise<ResetAugustLockResult> {
+  await assertPermission(actor, "locks:manage");
+
+  const smartDevice = await prisma.smartDevice.findUnique({
+    where: { id: input.smartDeviceId },
+    select: { id: true, provider: true, propertyId: true, metadata: true },
+  });
+  if (!smartDevice || smartDevice.provider !== "AUGUST") {
+    return { status: "rejected", reason: "Device not found." };
+  }
+
+  const lastOutcome = await getMostRecentRecordedOutcome(smartDevice.id);
+  if (!isAdminResetAvailable(lastOutcome)) {
+    return {
+      status: "rejected",
+      reason: "This lock isn't blocked, so there is nothing to reset.",
+    };
+  }
+
+  await recordAudit({
+    actorUserId: actor.userId,
+    actorType: "USER",
+    action: "smart_device.august_lock_command",
+    entityType: "SmartDevice",
+    entityId: smartDevice.id,
+    beforeState: {
+      provider: "AUGUST",
+      propertyId: smartDevice.propertyId,
+      blockedBy: lastOutcome,
+    } as Prisma.InputJsonValue,
+    afterState: {
+      result: "ADMIN_RESET",
+      commandSent: false,
+      observedLockState: input.observedLockState,
+      resetFrom: lastOutcome,
+    } as Prisma.InputJsonValue,
+    metadata: {
+      note:
+        input.note?.trim() ||
+        "Admin confirmed the door's physical state in person. No command was sent.",
+    } as Prisma.InputJsonValue,
+  });
+  return { status: "success" };
 }

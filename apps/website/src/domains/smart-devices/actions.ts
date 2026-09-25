@@ -4,7 +4,11 @@ import type { AuthContext } from "@stayw/auth";
 import { revalidatePath } from "next/cache";
 
 import { fahrenheitToCelsius } from "./lib/temperature";
-import { sendAugustLockCommandSchema } from "./schemas/august-lock-command.schema";
+import {
+  resetAugustLockSchema,
+  sendAugustLockCommandSchema,
+  setLockControlEnabledSchema,
+} from "./schemas/august-lock-command.schema";
 import {
   refreshAugustBatchSchema,
   refreshAugustSpotSchema,
@@ -23,9 +27,15 @@ import {
 } from "./schemas/provider-devices.schema";
 import { retireSmartDeviceSchema } from "./schemas/retire-smart-device.schema";
 import {
+  resetAugustLockAfterPhysicalCheck,
   sendAugustLockCommand,
   type AugustLockCommandResult,
+  type ResetAugustLockResult,
 } from "./services/august-commands.service";
+import {
+  setLockControlEnabled,
+  type SetLockControlResult,
+} from "./services/lock-control-settings.service";
 import {
   logLockRefresh,
   refreshAugustTelemetry,
@@ -358,6 +368,56 @@ export async function sendAugustLockCommandAction(
  * denial), same "catch and report inline" convention as
  * discoverNestDevicesAction/discoverAugustDevicesAction above.
  */
+export type SetLockControlActionState =
+  { status: "idle" } | SetLockControlResult;
+
+/** Admin kill switch for all remote lock commands. RBAC (global locks:manage) and the audit entry live in setLockControlEnabled(). */
+export async function setLockControlEnabledAction(
+  _prevState: SetLockControlActionState,
+  formData: FormData,
+): Promise<SetLockControlActionState> {
+  const actor = await getCurrentUser();
+  const { enabled } = setLockControlEnabledSchema.parse({
+    enabled: formData.get("enabled"),
+  });
+  const result = await setLockControlEnabled(actor, enabled);
+  revalidatePath(LOCKS_PAGE_PATH);
+  return result;
+}
+
+export type ResetAugustLockActionState =
+  | { status: "idle" }
+  | ResetAugustLockResult
+  | { status: "invalid"; reason: string };
+
+/**
+ * Admin "reset after physical check" for a FAILED/AMBIGUOUS-blocked lock.
+ * Never sends a command. A missing in-person confirmation or observed
+ * state is returned inline as `invalid`, not thrown.
+ */
+export async function resetAugustLockAction(
+  _prevState: ResetAugustLockActionState,
+  formData: FormData,
+): Promise<ResetAugustLockActionState> {
+  const actor = await getCurrentUser();
+  const parsed = resetAugustLockSchema.safeParse({
+    smartDeviceId: formData.get("smartDeviceId"),
+    observedLockState: formData.get("observedLockState") ?? undefined,
+    confirmedInPerson: formData.get("confirmedInPerson") ?? undefined,
+    note: formData.get("note") || undefined,
+  });
+  if (!parsed.success) {
+    return {
+      status: "invalid",
+      reason:
+        "Choose the state you saw at the door and confirm you checked it in person.",
+    };
+  }
+  const result = await resetAugustLockAfterPhysicalCheck(actor, parsed.data);
+  if (result.status === "success") revalidatePath(LOCKS_PAGE_PATH);
+  return result;
+}
+
 export type RefreshThermostatsActionState =
   | { status: "idle" }
   | {
