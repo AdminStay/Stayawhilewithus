@@ -188,15 +188,13 @@ describe("HttpClient", () => {
     });
 
     it("a per-call { maxRetries: 0 } makes exactly ONE fetch attempt on a 5xx response too, never retrying even a transient-looking server error", async () => {
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValue(
-          fakeResponse({
-            ok: false,
-            status: 503,
-            body: { message: "bridge overloaded" },
-          }),
-        );
+      const fetchMock = vi.fn().mockResolvedValue(
+        fakeResponse({
+          ok: false,
+          status: 503,
+          body: { message: "bridge overloaded" },
+        }),
+      );
       global.fetch = fetchMock;
       const client = new HttpClient({
         baseUrl: "https://example.test",
@@ -247,5 +245,85 @@ describe("HttpClient", () => {
       ).rejects.toBeInstanceOf(HttpRequestError);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+// 2026-09-25, the Coco Vista incident: August's async remote-operate PUT
+// answers 2xx with an EMPTY body. These use real `Response` objects (not the
+// fakeResponse() helper above, whose json() never fails) so an empty body
+// behaves exactly as it does in production.
+describe("HttpClient — ignoreSuccessBody per-call opt-in", () => {
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    originalFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("WITHOUT the opt-in, behavior is unchanged: an empty 2xx body still fails JSON parsing (the original bug)", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 202 }));
+    const client = new HttpClient({ baseUrl: "https://example.test" });
+
+    await expect(client.request("/x", {}, { maxRetries: 0 })).rejects.toThrow(
+      /Unexpected end of JSON input/,
+    );
+  });
+
+  it("WITHOUT the opt-in, a JSON 2xx body is still parsed and returned", async () => {
+    global.fetch = vi.fn().mockResolvedValue(Response.json({ a: 1 }));
+    const client = new HttpClient({ baseUrl: "https://example.test" });
+
+    await expect(client.request("/x")).resolves.toEqual({ a: 1 });
+  });
+
+  it("WITH the opt-in, an empty 202 resolves undefined — no parse error, one fetch", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 202 }));
+    global.fetch = fetchMock;
+    const client = new HttpClient({ baseUrl: "https://example.test" });
+
+    await expect(
+      client.request(
+        "/x",
+        { method: "PUT" },
+        { maxRetries: 0, ignoreSuccessBody: true },
+      ),
+    ).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("WITH the opt-in, a non-empty 2xx body is also discarded, never trusted", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(Response.json({ status: "kAugLockState_Locked" }));
+    const client = new HttpClient({ baseUrl: "https://example.test" });
+
+    await expect(
+      client.request("/x", {}, { ignoreSuccessBody: true }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("WITH the opt-in, an error response is unchanged: a 4xx still throws HttpRequestError with provider detail", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json(
+          { code: "FORBIDDEN", message: "not allowed" },
+          { status: 403 },
+        ),
+      );
+    const client = new HttpClient({ baseUrl: "https://example.test" });
+
+    const err = await client
+      .request("/x", {}, { maxRetries: 0, ignoreSuccessBody: true })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpRequestError);
+    expect(err).toMatchObject({ status: 403 });
   });
 });

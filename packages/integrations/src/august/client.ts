@@ -340,6 +340,14 @@ export class AugustClient
    * validateCredentials) is unaffected — none of them pass this option, so
    * they keep this client's normal configured retry behavior via
    * HttpClient's own default.
+   *
+   * `ignoreSuccessBody: true` (2026-09-25, the Coco Vista incident): the
+   * async PUT answers 2xx with an EMPTY body. Parsing it as JSON threw
+   * "Unexpected end of JSON input" after August had already accepted and
+   * executed the command, so sendAugustLockCommand() recorded AMBIGUOUS and
+   * never ran its confirmation polling. The body carries nothing this client
+   * trusts anyway: a 2xx here means only "accepted", and success is decided
+   * solely by the follow-up reads. Shared by lock(), unlock() and unlatch().
    */
   private async operate(
     lockId: string,
@@ -348,7 +356,7 @@ export class AugustClient
     await this.http.request<unknown>(
       `/remoteoperate/${encodeURIComponent(lockId)}/${segment}?type=async`,
       { method: "PUT" },
-      { maxRetries: 0 },
+      { maxRetries: 0, ignoreSuccessBody: true },
     );
   }
 

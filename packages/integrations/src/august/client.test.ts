@@ -292,7 +292,7 @@ describe("AugustClient", () => {
       expect(mockRequest).toHaveBeenCalledWith(
         "/remoteoperate/lock-1/lock?type=async",
         { method: "PUT" },
-        { maxRetries: 0 },
+        { maxRetries: 0, ignoreSuccessBody: true },
       );
     });
 
@@ -305,7 +305,7 @@ describe("AugustClient", () => {
       expect(mockRequest).toHaveBeenCalledWith(
         "/remoteoperate/lock-1/unlock?type=async",
         { method: "PUT" },
-        { maxRetries: 0 },
+        { maxRetries: 0, ignoreSuccessBody: true },
       );
     });
 
@@ -318,7 +318,7 @@ describe("AugustClient", () => {
       expect(mockRequest).toHaveBeenCalledWith(
         "/remoteoperate/lock-1/unlatch?type=async",
         { method: "PUT" },
-        { maxRetries: 0 },
+        { maxRetries: 0, ignoreSuccessBody: true },
       );
     });
 

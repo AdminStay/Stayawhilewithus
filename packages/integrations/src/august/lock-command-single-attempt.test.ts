@@ -126,3 +126,85 @@ describe("AugustClient.getLockDetail() call options (2026-09-25)", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+// 2026-09-25, the Coco Vista incident: the real async remote-operate answer
+// is 2xx with an EMPTY body. Exercises the real HttpClient parsing layer
+// (only fetch is faked), which is exactly what the earlier mocked tests missed.
+describe("AugustClient physical commands — real async empty-body acknowledgement", () => {
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    originalFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it.each([
+    ["lock", (c: AugustClient) => c.lock("lock-1")],
+    ["unlock", (c: AugustClient) => c.unlock("lock-1")],
+    ["unlatch", (c: AugustClient) => c.unlatch("lock-1")],
+  ] as const)(
+    "%s(): an empty 202 resolves without a JSON parse error — exactly ONE PUT to the async remote-operate URL",
+    async (segment, call) => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(new Response(null, { status: 202 }));
+      global.fetch = fetchMock;
+
+      await expect(
+        call(new AugustClient(credentials)),
+      ).resolves.toBeUndefined();
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0]!;
+      expect(String(url)).toContain(
+        `/remoteoperate/lock-1/${segment}?type=async`,
+      );
+      expect((init as RequestInit).method).toBe("PUT");
+    },
+  );
+
+  it("an empty 200 is handled the same way", async () => {
+    global.fetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    await expect(
+      new AugustClient(credentials).lock("lock-1"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("a definite provider rejection (403 with a body) still throws HttpRequestError after ONE fetch", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({ message: "User is not authorized" }, { status: 403 }),
+      );
+    global.fetch = fetchMock;
+
+    await expect(
+      new AugustClient(credentials).lock("lock-1"),
+    ).rejects.toMatchObject({
+      status: 403,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads are unaffected: getLockDetail() still parses its JSON body", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json({
+          LockID: "lock-1",
+          LockName: "Front Door",
+          HouseID: "h1",
+          battery: 0.9,
+        }),
+      );
+    const detail = await new AugustClient(credentials).getLockDetail("lock-1");
+    expect(detail).toMatchObject({
+      id: "lock-1",
+      name: "Front Door",
+      batteryLevel: 90,
+    });
+  });
+});

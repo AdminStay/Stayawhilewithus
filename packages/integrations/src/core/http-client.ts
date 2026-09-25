@@ -130,6 +130,16 @@ export interface HttpRequestCallOptions {
    * one real caller that uses it.
    */
   maxRetries?: number;
+  /**
+   * Per-call opt-in (2026-09-25, the Coco Vista incident): on a successful
+   * (2xx) response, discard the body instead of parsing it as JSON, and
+   * resolve `undefined`. August's async remote-operate PUT answers 2xx with
+   * an EMPTY body, which `response.json()` rejects with "Unexpected end of
+   * JSON input". Error responses are handled exactly as without this
+   * option. Callers that omit it keep today's behavior byte-for-byte — see
+   * AugustClient.operate() for the one caller that sets it.
+   */
+  ignoreSuccessBody?: boolean;
 }
 
 /**
@@ -171,6 +181,13 @@ export class HttpClient {
           }
           lastError = error;
           continue;
+        }
+
+        if (callOptions.ignoreSuccessBody) {
+          // Release the unread body without parsing it; a failure to do so
+          // can't change the fact that the provider answered 2xx.
+          void response.body?.cancel().catch(() => undefined);
+          return undefined as T;
         }
 
         return (await response.json()) as T;
