@@ -170,6 +170,36 @@ export interface AugustLockDetail {
    * `null`, never guessed, when the provider doesn't report one.
    */
   serialNumber: string | null;
+  /**
+   * Raw lock-health telemetry from the same `GET /locks/{lockId}` response
+   * (2026-09-25, daily lock-health monitoring). Reported as August sends it,
+   * never interpreted here: `lockStatus` can be "unknown" even when
+   * `lockStatusValid` is true, `doorState` can be "init" (no calibrated door
+   * sensor), and `bridgePresent` is false for locks with no Bridge object.
+   * Optional only so older fixtures stay valid; getLockDetail() always sets
+   * it. The fields above keep their existing meaning unchanged.
+   */
+  health?: AugustLockHealthTelemetry;
+}
+
+/** See AugustLockDetail.health. Every field is `null` when August didn't report it — never guessed. */
+export interface AugustLockHealthTelemetry {
+  /** Raw `LockStatus.status`, e.g. "locked" / "unlocked" / "unknown". */
+  lockStatus: string | null;
+  lockStatusValid: boolean;
+  /** Raw `LockStatus.dateTime`, reported whether or not the status is valid. */
+  lockStatusAt: string | null;
+  /** Raw `LockStatus.unknownReason`, e.g. "unknown_error_during_connect". */
+  unknownReason: string | null;
+  /** Raw `LockStatus.doorState`: "open" / "closed" / "init" / "unknown". */
+  doorState: string | null;
+  bridgePresent: boolean;
+  bridgeLastOnline: string | null;
+  bridgeLastOffline: string | null;
+  /** `Bridge.enhancedStatus.WifiModuleConnectionIssueCount`. */
+  wifiConnectionIssueCount: number | null;
+  /** `batteryInfo.warningState`, e.g. "lock_state_battery_warning_none". */
+  batteryWarningState: string | null;
 }
 
 /**

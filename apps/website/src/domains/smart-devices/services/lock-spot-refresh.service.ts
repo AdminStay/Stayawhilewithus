@@ -9,7 +9,7 @@ import {
   type RefreshAugustSpotInput,
 } from "../schemas/lock-spot-refresh.schema";
 
-import { mergeAugustLockMetadata } from "./lock-refresh.service";
+import { buildLockHealthUpdate } from "../lib/lock-health";
 import { AUGUST_DETAIL_CONCURRENCY, chunk } from "./provider-devices.service";
 import { isDemoSmartDevice } from "./smart-devices.service";
 
@@ -36,8 +36,9 @@ import { recordAudit } from "@/platform/audit/record-audit";
  * `metadata` is MERGED with the row's existing value, not replaced — a
  * momentary missing field in one device's API response must not erase a
  * previously-known reading for a hand-picked troubleshooting tool like this
- * one. Uses mergeAugustLockMetadata() (lock-refresh.service.ts), the same
- * shared function every other real August SmartDevice metadata write in
+ * one. Uses buildLockHealthUpdate() (lib/lock-health.ts, 2026-09-25), which
+ * applies the same merge semantics as mergeAugustLockMetadata()
+ * (lock-refresh.service.ts), the shared function every other real August SmartDevice metadata write in
  * this app now uses as of the 2026-09-23 release-review fixes
  * (refreshAugustTelemetry()'s whole-fleet pass, setProviderDeviceEnabled(),
  * syncAugustDevices(), and sendAugustLockCommand()'s confirmation write —
@@ -194,20 +195,33 @@ export async function refreshAugustTelemetryForSelectedLocks(
 
       const existingMetadata =
         (row.metadata as Record<string, unknown> | null) ?? {};
-      const mergedMetadata = mergeAugustLockMetadata(existingMetadata, {
-        batteryLevel: detail.batteryLevel,
-        lockState: detail.lockState,
-        telemetryUpdatedAt: detail.telemetryUpdatedAt,
-      });
+      // Same lock-health snapshot + transition rules as the fleet refresh
+      // (buildLockHealthUpdate(), 2026-09-25), so a spot refresh can never
+      // hide a change from the next automatic run.
+      const health = buildLockHealthUpdate(
+        existingMetadata,
+        detail,
+        new Date(),
+      );
 
       const updated = await prisma.smartDevice.update({
         where: { id: row.id },
         data: {
           status: detail.connectivity,
-          metadata: mergedMetadata as Prisma.InputJsonValue,
+          metadata: health.metadata as Prisma.InputJsonValue,
           lastSeenAt: detail.seenAt ? new Date(detail.seenAt) : null,
         },
       });
+      if (health.events.length > 0) {
+        await prisma.smartDeviceEvent.createMany({
+          data: health.events.map((event) => ({
+            smartDeviceId: row.id,
+            eventType: event.eventType,
+            payload: event.payload as Prisma.InputJsonValue,
+            occurredAt: event.occurredAt,
+          })),
+        });
+      }
 
       await recordAudit({
         actorUserId: actor.userId,

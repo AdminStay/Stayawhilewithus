@@ -27,6 +27,7 @@ export type {
   AugustLock,
   AugustLockCapabilities,
   AugustLockDetail,
+  AugustLockHealthTelemetry,
   AugustLockOperation,
 } from "./types";
 export { isAugustBrand } from "./types";
@@ -62,21 +63,27 @@ interface RawAugustLockListEntry {
 
 interface RawAugustBridgeStatus {
   current?: string;
+  lastOnline?: string;
+  lastOffline?: string;
 }
 
 interface RawAugustBridge {
   operative: boolean;
   status?: RawAugustBridgeStatus;
+  enhancedStatus?: { WifiModuleConnectionIssueCount?: number };
 }
 
 interface RawAugustLockStatus {
   status?: string;
   valid?: boolean;
   dateTime?: string;
+  doorState?: string;
+  unknownReason?: string;
 }
 
 interface RawAugustBatteryInfo {
   infoUpdatedDate?: string;
+  warningState?: string;
 }
 
 interface RawAugustLockDetail {
@@ -276,6 +283,22 @@ export class AugustClient
       telemetryUpdatedAt: raw.batteryInfo?.infoUpdatedDate ?? null,
       seenAt: validLockStatus ? (lockStatus?.dateTime ?? null) : null,
       serialNumber: raw.SerialNumber ?? null,
+      health: {
+        lockStatus: lockStatus?.status ?? null,
+        lockStatusValid: validLockStatus,
+        lockStatusAt: lockStatus?.dateTime ?? null,
+        unknownReason: lockStatus?.unknownReason ?? null,
+        doorState: lockStatus?.doorState ?? null,
+        bridgePresent: raw.Bridge !== undefined,
+        bridgeLastOnline: raw.Bridge?.status?.lastOnline ?? null,
+        bridgeLastOffline: raw.Bridge?.status?.lastOffline ?? null,
+        wifiConnectionIssueCount:
+          typeof raw.Bridge?.enhancedStatus?.WifiModuleConnectionIssueCount ===
+          "number"
+            ? raw.Bridge.enhancedStatus.WifiModuleConnectionIssueCount
+            : null,
+        batteryWarningState: raw.batteryInfo?.warningState ?? null,
+      },
     };
   }
 

@@ -12,8 +12,10 @@ import {
 } from "@/domains/smart-devices/actions";
 import { BulkRefreshDialog } from "@/domains/smart-devices/components/BulkRefreshDialog";
 import { LockControlKillSwitch } from "@/domains/smart-devices/components/LockControlKillSwitch";
+import { LockHealthPanel } from "@/domains/smart-devices/components/LockHealthPanel";
 import { LocksList } from "@/domains/smart-devices/components/LocksList";
 import { RefreshLocksButton } from "@/domains/smart-devices/components/RefreshLocksButton";
+import { classifyLockHealth } from "@/domains/smart-devices/lib/lock-health";
 import {
   computeFirstTestEligibility,
   computeLockControlEligibility,
@@ -21,6 +23,7 @@ import {
   isAdminResetAvailable,
 } from "@/domains/smart-devices/services/august-commands.service";
 import { getLockControlSetting } from "@/domains/smart-devices/services/lock-control-settings.service";
+import { getRecentUnknownTransitionCounts } from "@/domains/smart-devices/services/lock-health.service";
 import {
   isDemoSmartDevice,
   isLockVisible,
@@ -112,6 +115,29 @@ export default async function LocksPage() {
     };
   });
 
+  // Lock-health "needs attention" (2026-09-25): deterministic flags from the
+  // stored read-only refresh snapshot. Real August locks only (no demo rows).
+  const healthLocks = locks.filter(
+    (lock) => lock.provider === "AUGUST" && !isDemoSmartDevice(lock),
+  );
+  const unknownCounts = await getRecentUnknownTransitionCounts(
+    actor,
+    healthLocks.map((lock) => lock.id),
+  );
+  const healthNow = new Date();
+  const lockHealthRows = healthLocks.map((lock) => ({
+    smartDeviceId: lock.id,
+    propertyName: lock.property.name,
+    lockName: lock.name,
+    flags: classifyLockHealth({
+      metadata: lock.metadata,
+      connectivity: lock.status,
+      now: healthNow,
+      recentUnknownTransitions: unknownCounts.get(lock.id) ?? 0,
+      lastCommandOutcome: lastCommandOutcomes.get(lock.id) ?? null,
+    }),
+  }));
+
   return (
     <div>
       {/* 2026-09-18 UI cleanup: Refresh all / Bulk refresh now live in the
@@ -140,6 +166,9 @@ export default async function LocksPage() {
           canToggle={canControlLocks}
           action={setLockControlEnabledAction}
         />
+      </div>
+      <div className="mb-4">
+        <LockHealthPanel rows={lockHealthRows} />
       </div>
       <LocksList
         locks={locksWithEligibility}

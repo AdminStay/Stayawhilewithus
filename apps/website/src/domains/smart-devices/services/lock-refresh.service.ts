@@ -8,6 +8,8 @@ import {
   type AugustLockDetail,
 } from "@stayw/integrations/august";
 
+import { buildLockHealthUpdate } from "../lib/lock-health";
+
 import { AUGUST_DETAIL_CONCURRENCY, chunk } from "./provider-devices.service";
 
 import {
@@ -265,6 +267,7 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshResult> {
     );
 
     const writes: Prisma.PrismaPromise<unknown>[] = [];
+    let batchRefreshed = 0;
 
     for (const outcome of settled) {
       if (outcome.status !== "fulfilled") {
@@ -303,23 +306,38 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshResult> {
       // key) for a device whose retirement happened after this run's
       // eligibility query but before this specific write — see
       // mergeAugustLockMetadata()'s own doc comment for the full history.
+      //
+      // Lock-health monitoring (2026-09-25): buildLockHealthUpdate() applies
+      // the same merge, stores the lockHealth snapshot, sets lockState to the
+      // CURRENT state ("unknown" for an invalid reading, never a stale
+      // locked/unlocked), and returns the real transitions to record.
+      const health = buildLockHealthUpdate(
+        (device.smartDevice?.metadata as Record<string, unknown>) ?? {},
+        detail,
+        now,
+      );
       writes.push(
         prisma.smartDevice.update({
           where: { id: device.smartDeviceId },
           data: {
             status: detail.connectivity,
-            metadata: mergeAugustLockMetadata(
-              (device.smartDevice?.metadata as Record<string, unknown>) ?? {},
-              {
-                batteryLevel: detail.batteryLevel,
-                lockState: detail.lockState,
-                telemetryUpdatedAt: detail.telemetryUpdatedAt,
-              },
-            ) as Prisma.InputJsonValue,
+            metadata: health.metadata as Prisma.InputJsonValue,
             lastSeenAt: detail.seenAt ? new Date(detail.seenAt) : null,
           },
         }),
       );
+      if (health.events.length > 0) {
+        writes.push(
+          prisma.smartDeviceEvent.createMany({
+            data: health.events.map((event) => ({
+              smartDeviceId: device.smartDeviceId as string,
+              eventType: event.eventType,
+              payload: event.payload as Prisma.InputJsonValue,
+              occurredAt: event.occurredAt,
+            })),
+          }),
+        );
+      }
       writes.push(
         prisma.providerDevice.update({
           where: { id: device.id },
@@ -330,11 +348,12 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshResult> {
           },
         }),
       );
+      batchRefreshed++;
     }
 
     if (writes.length > 0) {
       await prisma.$transaction(writes);
-      refreshed += writes.length / 2;
+      refreshed += batchRefreshed;
     } else {
       logLockRefresh("august_batch_zero_matched", {
         batchSize: batch.length,

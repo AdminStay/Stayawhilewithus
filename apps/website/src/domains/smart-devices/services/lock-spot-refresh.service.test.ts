@@ -20,6 +20,9 @@ vi.mock("@stayw/database", () => ({
       findMany: vi.fn(),
       update: vi.fn(),
     },
+    smartDeviceEvent: {
+      createMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
   },
 }));
 
@@ -177,11 +180,11 @@ describe("source-level guarantees", () => {
     expect(importedSymbols.some((s) => s.includes("isDemoSmartDevice"))).toBe(
       true,
     );
-    // 2026-09-23 release-review fix: this file no longer defines its own
-    // merge helper — it reuses lock-refresh.service.ts's, now that that
-    // file's own whole-fleet refresh merges too.
+    // 2026-09-25: metadata is built by the shared pure lock-health builder
+    // (same merge semantics as mergeAugustLockMetadata, plus the lockHealth
+    // snapshot), never by a local copy.
     expect(
-      importedSymbols.some((s) => s.includes("mergeAugustLockMetadata")),
+      importedSymbols.some((s) => s.includes("buildLockHealthUpdate")),
     ).toBe(true);
   });
 
@@ -192,7 +195,8 @@ describe("source-level guarantees", () => {
       "@stayw/database",
       "@stayw/integrations/august",
       "../schemas/lock-spot-refresh.schema",
-      "./lock-refresh.service",
+      // Pure functions only (no DB, no provider calls) — 2026-09-25.
+      "../lib/lock-health",
       "./provider-devices.service",
       "./smart-devices.service",
       "@/platform/audit/record-audit",
@@ -542,5 +546,81 @@ describe("refreshAugustTelemetryForSelectedLocks", () => {
     // serialized to 1-at-a-time, which would also satisfy "<=5" but not
     // prove real bounded-concurrency batching).
     expect(maxInFlight).toBe(5);
+  });
+});
+
+describe("refreshAugustTelemetryForSelectedLocks — lock-health snapshot + transitions (2026-09-25)", () => {
+  const baseHealth = {
+    lockStatusValid: true,
+    lockStatusAt: "2026-09-25T19:44:24.982Z",
+    unknownReason: null,
+    doorState: "closed",
+    bridgePresent: true,
+    bridgeLastOnline: "2026-09-25T19:43:47.979Z",
+    bridgeLastOffline: null,
+    wifiConnectionIssueCount: 0,
+    batteryWarningState: "lock_state_battery_warning_none",
+  };
+
+  it("records an unlocked→locked transition against the previous snapshot and never keeps a stale state", async () => {
+    vi.mocked(prisma.smartDeviceEvent.createMany).mockClear();
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValueOnce([
+      augustLockRow({
+        metadata: {
+          lockState: "unlocked",
+          lockHealth: {
+            observedAt: "2026-09-25T16:00:00.000Z",
+            lockState: "unlocked",
+            lockStatusValid: true,
+            lockStatusAt: "2026-09-25T15:00:00.000Z",
+            unknownReason: null,
+            doorState: "closed",
+            connectivity: "ONLINE",
+            bridgePresent: true,
+            bridgeLastOnline: null,
+            bridgeLastOffline: null,
+            wifiConnectionIssueCount: 0,
+            batteryLevel: 90,
+            batteryWarningState: "lock_state_battery_warning_none",
+            batteryReadingAt: null,
+            lastValidLockState: "unlocked",
+            lastValidLockStateAt: "2026-09-25T15:00:00.000Z",
+            lockStateSince: null,
+            consecutiveUnknownRefreshes: 0,
+          },
+        },
+      }),
+    ] as never);
+    mockGetLockDetail.mockResolvedValueOnce(
+      augustDetail({ health: { ...baseHealth, lockStatus: "locked" } }),
+    );
+    vi.mocked(prisma.smartDevice.update).mockResolvedValueOnce({
+      status: "ONLINE",
+      lastSeenAt: null,
+    } as never);
+
+    const result = await refreshAugustTelemetryForSelectedLocks(actor, {
+      smartDeviceIds: [LOCK_ID],
+    });
+
+    expect(result).toEqual([{ smartDeviceId: LOCK_ID, result: "success" }]);
+    const data = vi.mocked(prisma.smartDevice.update).mock.calls.at(-1)![0]
+      .data as {
+      metadata: Record<string, any>;
+    };
+    expect(data.metadata.lockState).toBe("locked");
+    expect(data.metadata.lockHealth).toMatchObject({
+      lockState: "locked",
+      lockStateSince: "2026-09-25T19:44:24.982Z",
+    });
+    expect(prisma.smartDeviceEvent.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          smartDeviceId: LOCK_ID,
+          eventType: "LOCK_STATE_CHANGED",
+          payload: expect.objectContaining({ from: "unlocked", to: "locked" }),
+        }),
+      ],
+    });
   });
 });

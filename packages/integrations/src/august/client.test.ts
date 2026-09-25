@@ -97,7 +97,90 @@ describe("AugustClient", () => {
       telemetryUpdatedAt: null,
       seenAt: null,
       serialNumber: null,
+      health: {
+        lockStatus: null,
+        lockStatusValid: false,
+        lockStatusAt: null,
+        unknownReason: null,
+        doorState: null,
+        bridgePresent: true,
+        bridgeLastOnline: null,
+        bridgeLastOffline: null,
+        wifiConnectionIssueCount: null,
+        batteryWarningState: null,
+      },
     });
+  });
+
+  it("getLockDetail() reports raw lock-health telemetry as August sends it (2026-09-25)", async () => {
+    mockRequest.mockResolvedValueOnce({
+      LockID: "lock-1",
+      LockName: "Front Door",
+      HouseID: "house-1",
+      battery: 0.97,
+      batteryInfo: {
+        infoUpdatedDate: "2026-09-25T19:11:38.851Z",
+        warningState: "lock_state_battery_warning_none",
+      },
+      Bridge: {
+        operative: true,
+        status: {
+          current: "online",
+          lastOnline: "2026-09-25T19:43:47.979Z",
+          lastOffline: "2026-09-25T02:29:43.949Z",
+        },
+        enhancedStatus: { WifiModuleConnectionIssueCount: 1 },
+      },
+      LockStatus: {
+        status: "unknown",
+        valid: true,
+        dateTime: "2026-09-25T19:44:24.982Z",
+        doorState: "closed",
+        unknownReason: "unknown_error_during_connect",
+      },
+    });
+    const client = new AugustClient(credentials);
+
+    const detail = await client.getLockDetail("lock-1");
+
+    expect(detail.health).toEqual({
+      lockStatus: "unknown",
+      lockStatusValid: true,
+      lockStatusAt: "2026-09-25T19:44:24.982Z",
+      unknownReason: "unknown_error_during_connect",
+      doorState: "closed",
+      bridgePresent: true,
+      bridgeLastOnline: "2026-09-25T19:43:47.979Z",
+      bridgeLastOffline: "2026-09-25T02:29:43.949Z",
+      wifiConnectionIssueCount: 1,
+      batteryWarningState: "lock_state_battery_warning_none",
+    });
+    // Existing fields keep their meaning (lockState is the raw status when valid).
+    expect(detail.lockState).toBe("unknown");
+    expect(detail.connectivity).toBe("ONLINE");
+  });
+
+  it("getLockDetail() health: no Bridge object → bridgePresent false; invalid LockStatus keeps its raw values", async () => {
+    mockRequest.mockResolvedValueOnce({
+      LockID: "lock-2",
+      LockName: "Garage",
+      HouseID: "house-1",
+      battery: 0.94,
+      LockStatus: { status: "unknown" },
+    });
+    const client = new AugustClient(credentials);
+
+    const detail = await client.getLockDetail("lock-2");
+
+    expect(detail.health).toMatchObject({
+      lockStatus: "unknown",
+      lockStatusValid: false,
+      bridgePresent: false,
+      bridgeLastOnline: null,
+      wifiConnectionIssueCount: null,
+    });
+    expect(detail.lockState).toBeNull();
+    expect(detail.connectivity).toBe("UNKNOWN");
   });
 
   it("getLockDetail() captures SerialNumber when the provider reports one", async () => {

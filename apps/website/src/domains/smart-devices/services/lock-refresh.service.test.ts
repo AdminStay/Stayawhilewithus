@@ -60,6 +60,9 @@ vi.mock("@stayw/database", () => ({
     smartDevice: {
       update: vi.fn().mockResolvedValue({}),
     },
+    smartDeviceEvent: {
+      createMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
     integrationConnection: {
       findUniqueOrThrow: mockConnectionFindUniqueOrThrow,
       update: mockConnectionUpdate,
@@ -1128,5 +1131,129 @@ describe("mergeAugustLockMetadata — CROSS-PATH RETIREMENT-STICKINESS (2026-09-
     expect(Object.prototype.hasOwnProperty.call(result, "retiredAt")).toBe(
       true,
     );
+  });
+});
+
+describe("refreshAugustTelemetry — lock-health snapshot + transition history (2026-09-25)", () => {
+  function withHealth(lockStatus: string, extra: Record<string, unknown> = {}) {
+    return augustLockDetail("lock-1", {
+      lockState: lockStatus === "unknown" ? "unknown" : lockStatus,
+      health: {
+        lockStatus,
+        lockStatusValid: true,
+        lockStatusAt: "2026-09-25T19:44:24.982Z",
+        unknownReason:
+          lockStatus === "unknown" ? "unknown_error_during_connect" : null,
+        doorState: "closed",
+        bridgePresent: true,
+        bridgeLastOnline: "2026-09-25T19:43:47.979Z",
+        bridgeLastOffline: "2026-09-25T02:29:43.949Z",
+        wifiConnectionIssueCount: 0,
+        batteryWarningState: "lock_state_battery_warning_none",
+        ...extra,
+      },
+    });
+  }
+
+  beforeEach(() => {
+    setAugustEnv();
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.providerDevice.findMany).mockReset();
+    vi.mocked(prisma.smartDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    vi.mocked(prisma.providerDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    vi.mocked(prisma.smartDeviceEvent.createMany)
+      .mockReset()
+      .mockResolvedValue({ count: 0 } as never);
+    mockGetLockDetail.mockReset();
+    setupGuardedRefreshMocks();
+  });
+  afterEach(restoreEnv);
+
+  it("first capture stores the snapshot and records no events", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      {
+        ...eligibleProviderDevice("pd-1", "lock-1", "sd-1"),
+        smartDevice: { metadata: { lockState: "locked" } },
+      },
+    ] as never);
+    mockGetLockDetail.mockResolvedValueOnce(withHealth("locked"));
+
+    const result = await refreshAugustTelemetry(actor);
+
+    expect(result).toMatchObject({ status: "completed", refreshed: 1 });
+    const data = vi.mocked(prisma.smartDevice.update).mock.calls[0]![0]
+      .data as { metadata: Record<string, unknown> };
+    expect(data.metadata.lockHealth).toMatchObject({
+      lockState: "locked",
+      lastValidLockState: "locked",
+    });
+    expect(prisma.smartDeviceEvent.createMany).not.toHaveBeenCalled();
+  });
+
+  it("a later unknown reading sets lockState to 'unknown' (never the stale 'locked'), keeps the last valid state, and records one transition in the same transaction", async () => {
+    const previous = {
+      lockState: "locked",
+      retiredAt: null,
+      lockHealth: {
+        observedAt: "2026-09-25T16:00:00.000Z",
+        lockState: "locked",
+        lockStatusValid: true,
+        lockStatusAt: "2026-09-25T15:59:00.000Z",
+        unknownReason: null,
+        doorState: "closed",
+        connectivity: "ONLINE",
+        bridgePresent: true,
+        bridgeLastOnline: "2026-09-25T15:59:00.000Z",
+        bridgeLastOffline: null,
+        wifiConnectionIssueCount: 0,
+        batteryLevel: 97,
+        batteryWarningState: "lock_state_battery_warning_none",
+        batteryReadingAt: "2026-09-25T02:31:27.440Z",
+        lastValidLockState: "locked",
+        lastValidLockStateAt: "2026-09-25T15:59:00.000Z",
+        lockStateSince: null,
+        consecutiveUnknownRefreshes: 0,
+      },
+    };
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
+      {
+        ...eligibleProviderDevice("pd-1", "lock-1", "sd-1"),
+        smartDevice: { metadata: previous },
+      },
+    ] as never);
+    mockGetLockDetail.mockResolvedValueOnce(withHealth("unknown"));
+
+    const result = await refreshAugustTelemetry(actor);
+
+    expect(result).toMatchObject({ status: "completed", refreshed: 1 });
+    const data = vi.mocked(prisma.smartDevice.update).mock.calls[0]![0]
+      .data as { metadata: Record<string, any> };
+    expect(data.metadata.lockState).toBe("unknown");
+    expect(data.metadata.retiredAt).toBeNull();
+    expect(data.metadata.lockHealth).toMatchObject({
+      lockState: "unknown",
+      unknownReason: "unknown_error_during_connect",
+      lastValidLockState: "locked",
+      lastValidLockStateAt: "2026-09-25T15:59:00.000Z",
+      consecutiveUnknownRefreshes: 1,
+    });
+    expect(prisma.smartDeviceEvent.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          smartDeviceId: "sd-1",
+          eventType: "LOCK_STATE_CHANGED",
+          payload: expect.objectContaining({ from: "locked", to: "unknown" }),
+        }),
+      ],
+    });
+    // The event write is part of the batch's one $transaction.
+    const batch = mockTransaction.mock.calls.find((call) =>
+      Array.isArray(call[0]),
+    )![0] as unknown[];
+    expect(batch).toHaveLength(3);
   });
 });
