@@ -17,11 +17,13 @@ const {
   mockRecordAudit,
   mockQueryRaw,
   mockConnectionFindUniqueOrThrow,
+  mockConnectionFindUnique,
   mockConnectionUpdate,
   mockSyncLogFindFirst,
   mockSyncLogCreate,
   mockSyncLogUpdate,
 } = vi.hoisted(() => ({
+  mockConnectionFindUnique: vi.fn(),
   mockTransaction: vi.fn(),
   mockGetLockDetail: vi.fn(),
   mockEnsureConnectionRows: vi.fn().mockResolvedValue(undefined),
@@ -65,6 +67,7 @@ vi.mock("@stayw/database", () => ({
     },
     integrationConnection: {
       findUniqueOrThrow: mockConnectionFindUniqueOrThrow,
+      findUnique: mockConnectionFindUnique,
       update: mockConnectionUpdate,
     },
     integrationSyncLog: {
@@ -122,10 +125,17 @@ vi.mock("@/platform/audit/record-audit", () => ({
 import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
 
+import { HttpRequestError } from "@stayw/integrations/core";
+
 import {
+  AUGUST_RATE_LIMIT_COOLDOWN_MS,
+  AUGUST_RATE_LIMITED_MARKER,
+  getAugustRefreshFreshness,
+  LOCK_REFRESH_ON_VIEW_MIN_INTERVAL_MS,
   mergeAugustLockMetadata,
   refreshAugustTelemetry,
   refreshAugustTelemetryAutomatic,
+  refreshAugustTelemetryIfStale,
 } from "./lock-refresh.service";
 
 const actor = { userId: "user-1" };
@@ -1255,5 +1265,386 @@ describe("refreshAugustTelemetry — lock-health snapshot + transition history (
       Array.isArray(call[0]),
     )![0] as unknown[];
     expect(batch).toHaveLength(3);
+  });
+});
+
+describe("refresh-on-view gate + 429 breaker/cooldown (2026-09-27)", () => {
+  type Where = {
+    integrationConnectionId?: string;
+    status?: string;
+    errorMessage?: { startsWith: string };
+    finishedAt?: { gte: Date };
+    startedAt?: { gte: Date };
+  };
+  interface Log {
+    id: string;
+    status: string;
+    startedAt: Date;
+    finishedAt: Date | null;
+    errorMessage: string | null;
+  }
+  let logs: Log[];
+  let claimHeld: boolean;
+
+  function matches(log: Log, where: Where): boolean {
+    if (where.status !== undefined && log.status !== where.status) return false;
+    if (
+      where.errorMessage &&
+      !(log.errorMessage ?? "").startsWith(where.errorMessage.startsWith)
+    )
+      return false;
+    if (
+      where.finishedAt &&
+      !(log.finishedAt && log.finishedAt >= where.finishedAt.gte)
+    )
+      return false;
+    if (where.startedAt && !(log.startedAt >= where.startedAt.gte))
+      return false;
+    return true;
+  }
+
+  /**
+   * A small stateful fake of the sync-log table plus the advisory lock:
+   * pg_try_advisory_xact_lock succeeds only when no other claim
+   * transaction is in progress, exactly the real transaction-scoped lock.
+   */
+  function useStatefulLogs(devices: number) {
+    logs = [];
+    claimHeld = false;
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValue(
+      Array.from({ length: devices }, (_, i) =>
+        eligibleProviderDevice(`pd-${i}`, `ext-${i}`, `sd-${i}`),
+      ) as never,
+    );
+    mockGetLockDetail.mockImplementation(async (id: string) =>
+      augustLockDetail(id),
+    );
+    mockQueryRaw.mockImplementation(async () => {
+      if (claimHeld) return [{ locked: false }];
+      claimHeld = true;
+      return [{ locked: true }];
+    });
+    mockTransaction.mockImplementation(async (arg: unknown) => {
+      if (typeof arg === "function") {
+        try {
+          return await (arg as (tx: typeof txClient) => unknown)(txClient);
+        } finally {
+          claimHeld = false;
+        }
+      }
+      return Promise.all(arg as Promise<unknown>[]);
+    });
+    mockSyncLogFindFirst.mockImplementation(
+      async ({ where }: { where: Where }) =>
+        [...logs].reverse().find((log) => matches(log, where)) ?? null,
+    );
+    mockSyncLogCreate.mockImplementation(async () => {
+      const log: Log = {
+        id: `log-${logs.length + 1}`,
+        status: "RUNNING",
+        startedAt: new Date(),
+        finishedAt: null,
+        errorMessage: null,
+      };
+      logs.push(log);
+      return log;
+    });
+    mockSyncLogUpdate.mockImplementation(
+      async ({
+        where,
+        data,
+      }: {
+        where: { id: string };
+        data: Partial<Log>;
+      }) => {
+        const log = logs.find((l) => l.id === where.id)!;
+        Object.assign(log, data);
+        return log;
+      },
+    );
+  }
+
+  beforeEach(() => {
+    setAugustEnv();
+    vi.mocked(prisma.providerDevice.findMany).mockReset().mockResolvedValue([]);
+    vi.mocked(prisma.smartDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    vi.mocked(prisma.providerDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    mockGetLockDetail.mockReset();
+    setupGuardedRefreshMocks();
+    mockConnectionFindUnique.mockReset();
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+  });
+  afterEach(restoreEnv);
+
+  it("stale data: an on-view request starts exactly one read-only fleet refresh", async () => {
+    useStatefulLogs(3);
+
+    const outcome = await refreshAugustTelemetryIfStale(actor as never);
+
+    expect(outcome).toMatchObject({ status: "completed", refreshed: 3 });
+    expect(mockGetLockDetail).toHaveBeenCalledTimes(3);
+    expect(logs.map((l) => l.status)).toEqual(["SUCCEEDED"]);
+    expect(assertPermission).toHaveBeenCalledWith(actor, "smart_devices:read");
+  });
+
+  it("fresh data: a refresh started within 10 minutes blocks another — no log row, no August call", async () => {
+    useStatefulLogs(3);
+    logs.push({
+      id: "recent",
+      status: "SUCCEEDED",
+      startedAt: new Date(
+        Date.now() - LOCK_REFRESH_ON_VIEW_MIN_INTERVAL_MS + 60_000,
+      ),
+      finishedAt: new Date(),
+      errorMessage: null,
+    });
+
+    const outcome = await refreshAugustTelemetryIfStale(actor as never);
+
+    expect(outcome).toMatchObject({ status: "fresh" });
+    expect(mockGetLockDetail).not.toHaveBeenCalled();
+    expect(mockSyncLogCreate).not.toHaveBeenCalled();
+  });
+
+  it("a recent FAILED (non-429) run also counts, so a failing refresh isn't retried every minute", async () => {
+    useStatefulLogs(3);
+    logs.push({
+      id: "recent-failed",
+      status: "FAILED",
+      startedAt: new Date(Date.now() - 2 * 60_000),
+      finishedAt: new Date(),
+      errorMessage: "Unexpected",
+    });
+
+    expect(await refreshAugustTelemetryIfStale(actor as never)).toMatchObject({
+      status: "fresh",
+    });
+    expect(mockGetLockDetail).not.toHaveBeenCalled();
+  });
+
+  it("an older refresh (over 10 minutes) no longer blocks", async () => {
+    useStatefulLogs(2);
+    logs.push({
+      id: "old",
+      status: "SUCCEEDED",
+      startedAt: new Date(
+        Date.now() - LOCK_REFRESH_ON_VIEW_MIN_INTERVAL_MS - 1000,
+      ),
+      finishedAt: new Date(Date.now() - LOCK_REFRESH_ON_VIEW_MIN_INTERVAL_MS),
+      errorMessage: null,
+    });
+
+    expect(await refreshAugustTelemetryIfStale(actor as never)).toMatchObject({
+      status: "completed",
+    });
+    expect(mockGetLockDetail).toHaveBeenCalledTimes(2);
+  });
+
+  it("simultaneous viewers cannot multiply refreshes: 5 concurrent requests → one run, one August read per lock", async () => {
+    useStatefulLogs(4);
+
+    const outcomes = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        refreshAugustTelemetryIfStale(actor as never),
+      ),
+    );
+
+    expect(outcomes.filter((o) => o.status === "completed")).toHaveLength(1);
+    expect(
+      outcomes.every((o) =>
+        ["completed", "already_running", "fresh"].includes(o.status),
+      ),
+    ).toBe(true);
+    expect(mockGetLockDetail).toHaveBeenCalledTimes(4);
+    expect(mockSyncLogCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("viewers arriving one after another within 10 minutes get 'fresh' — still exactly one run", async () => {
+    useStatefulLogs(2);
+
+    const first = await refreshAugustTelemetryIfStale(actor as never);
+    const second = await refreshAugustTelemetryIfStale(actor as never);
+    const third = await refreshAugustTelemetryIfStale(actor as never);
+
+    expect([first.status, second.status, third.status]).toEqual([
+      "completed",
+      "fresh",
+      "fresh",
+    ]);
+    expect(mockGetLockDetail).toHaveBeenCalledTimes(2);
+  });
+
+  it("a RUNNING refresh blocks an on-view request (already_running, no August call)", async () => {
+    useStatefulLogs(3);
+    logs.push({
+      id: "running",
+      status: "RUNNING",
+      startedAt: new Date(Date.now() - 60_000),
+      finishedAt: null,
+      errorMessage: null,
+    });
+
+    expect(await refreshAugustTelemetryIfStale(actor as never)).toEqual({
+      status: "already_running",
+    });
+    expect(mockGetLockDetail).not.toHaveBeenCalled();
+  });
+
+  it("429 breaker: stops the current refresh after the batch that saw it, keeps that batch's successful readings, closes the run FAILED with the marker and starts the cooldown", async () => {
+    useStatefulLogs(12); // batches of 5, 5, 2
+    mockGetLockDetail.mockImplementation(async (id: string) => {
+      if (id === "ext-2") {
+        throw new HttpRequestError(`/locks/${id}`, 429);
+      }
+      return augustLockDetail(id);
+    });
+
+    const outcome = await refreshAugustTelemetryAutomatic();
+
+    expect(outcome).toMatchObject({
+      status: "rate_limited",
+      refreshed: 4,
+      notReturnedByProvider: 1,
+      skippedAfterRateLimit: 7,
+    });
+    expect(mockGetLockDetail).toHaveBeenCalledTimes(5);
+    expect(prisma.smartDevice.update).toHaveBeenCalledTimes(4);
+    expect(logs[0]).toMatchObject({ status: "FAILED" });
+    expect(logs[0]!.errorMessage).toMatch(
+      new RegExp(`^${AUGUST_RATE_LIMITED_MARKER}`),
+    );
+    // The fleet wasn't refreshed: lastSyncedAt is not bumped.
+    expect(mockConnectionUpdate).not.toHaveBeenCalled();
+    const cooldownUntil = Date.parse(
+      (outcome as { cooldownUntil: string }).cooldownUntil,
+    );
+    expect(cooldownUntil - Date.now()).toBeGreaterThan(
+      AUGUST_RATE_LIMIT_COOLDOWN_MS - 5_000,
+    );
+  });
+
+  it("a non-429 provider error (e.g. 503) does NOT trip the breaker — isolated per lock as before", async () => {
+    useStatefulLogs(7);
+    mockGetLockDetail.mockImplementation(async (id: string) => {
+      if (id === "ext-1") throw new HttpRequestError(`/locks/${id}`, 503);
+      return augustLockDetail(id);
+    });
+
+    const outcome = await refreshAugustTelemetryAutomatic();
+
+    expect(outcome).toMatchObject({
+      status: "completed",
+      refreshed: 6,
+      notReturnedByProvider: 1,
+    });
+    expect(mockGetLockDetail).toHaveBeenCalledTimes(7);
+  });
+
+  it("cooldown prevents additional provider requests from EVERY fleet entry point: on-view, automatic cron and manual Refresh all", async () => {
+    useStatefulLogs(3);
+    logs.push({
+      id: "limited",
+      status: "FAILED",
+      startedAt: new Date(Date.now() - 16 * 60_000),
+      finishedAt: new Date(Date.now() - 15 * 60_000),
+      errorMessage: `${AUGUST_RATE_LIMITED_MARKER}: August returned HTTP 429`,
+    });
+
+    const results = [
+      await refreshAugustTelemetryIfStale(actor as never),
+      await refreshAugustTelemetryAutomatic(),
+      await refreshAugustTelemetry(actor as never),
+    ];
+
+    for (const result of results) {
+      expect(result.status).toBe("cooldown");
+    }
+    expect(mockGetLockDetail).not.toHaveBeenCalled();
+    expect(mockSyncLogCreate).not.toHaveBeenCalled();
+  });
+
+  it("once the 30-minute cooldown has passed, refreshing resumes", async () => {
+    useStatefulLogs(2);
+    logs.push({
+      id: "limited-old",
+      status: "FAILED",
+      startedAt: new Date(Date.now() - AUGUST_RATE_LIMIT_COOLDOWN_MS - 120_000),
+      finishedAt: new Date(Date.now() - AUGUST_RATE_LIMIT_COOLDOWN_MS - 60_000),
+      errorMessage: `${AUGUST_RATE_LIMITED_MARKER}: August returned HTTP 429`,
+    });
+
+    expect(await refreshAugustTelemetryAutomatic()).toMatchObject({
+      status: "completed",
+    });
+    expect(mockGetLockDetail).toHaveBeenCalledTimes(2);
+  });
+
+  it("the 6-hour cron path is unchanged by the on-view gate: a refresh 2 minutes ago doesn't stop it", async () => {
+    useStatefulLogs(2);
+    logs.push({
+      id: "recent",
+      status: "SUCCEEDED",
+      startedAt: new Date(Date.now() - 2 * 60_000),
+      finishedAt: new Date(Date.now() - 60_000),
+      errorMessage: null,
+    });
+
+    expect(await refreshAugustTelemetryAutomatic()).toMatchObject({
+      status: "completed",
+    });
+  });
+
+  it("on-view requires smart_devices:read and a denial touches nothing", async () => {
+    useStatefulLogs(2);
+    vi.mocked(assertPermission).mockRejectedValueOnce(new Error("Forbidden"));
+
+    await expect(refreshAugustTelemetryIfStale(actor as never)).rejects.toThrow(
+      "Forbidden",
+    );
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockGetLockDetail).not.toHaveBeenCalled();
+  });
+
+  it("getAugustRefreshFreshness is read-only: last success + active cooldown, never creates rows or calls August", async () => {
+    useStatefulLogs(1);
+    mockConnectionFindUnique.mockResolvedValue({ id: "conn-august-1" });
+    const succeededAt = new Date(Date.now() - 3 * 60_000);
+    const limitedAt = new Date(Date.now() - 5 * 60_000);
+    mockSyncLogFindFirst.mockImplementation(
+      async ({ where }: { where: Where }) =>
+        where.status === "SUCCEEDED"
+          ? { finishedAt: succeededAt }
+          : where.errorMessage
+            ? { finishedAt: limitedAt }
+            : null,
+    );
+
+    const freshness = await getAugustRefreshFreshness(actor as never);
+
+    expect(freshness).toEqual({
+      lastSucceededAt: succeededAt.toISOString(),
+      cooldownUntil: new Date(
+        limitedAt.getTime() + AUGUST_RATE_LIMIT_COOLDOWN_MS,
+      ).toISOString(),
+    });
+    expect(mockEnsureConnectionRows).not.toHaveBeenCalled();
+    expect(mockSyncLogCreate).not.toHaveBeenCalled();
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(mockGetLockDetail).not.toHaveBeenCalled();
+  });
+
+  it("getAugustRefreshFreshness with no AUGUST connection yet returns nulls without creating one", async () => {
+    mockConnectionFindUnique.mockResolvedValue(null);
+    mockEnsureConnectionRows.mockClear();
+
+    expect(await getAugustRefreshFreshness(actor as never)).toEqual({
+      lastSucceededAt: null,
+      cooldownUntil: null,
+    });
+    expect(mockEnsureConnectionRows).not.toHaveBeenCalled();
   });
 });

@@ -708,6 +708,22 @@ export async function refreshAugustAction(
       logLockRefresh("action_already_running", { actorUserId: actor.userId });
       return { status: "already_running" };
     }
+    if (result.status === "cooldown" || result.status === "rate_limited") {
+      // 2026-09-27: August answered 429 (now or within the cooldown), so
+      // the fleet refresh is paused rather than retried.
+      const until = new Date(result.cooldownUntil).toISOString();
+      logLockRefresh(`action_${result.status}`, { actorUserId: actor.userId });
+      if (result.status === "rate_limited") revalidatePath(LOCKS_PAGE_PATH);
+      return {
+        status: "failure",
+        error: `August is rate-limiting requests; fleet refresh is paused until ${until}. Nothing was retried.`,
+      };
+    }
+    if (result.status === "fresh") {
+      // Not reachable for manual Refresh all (no minimum interval is
+      // passed), kept explicit so the outcome union stays exhaustive.
+      return { status: "already_running" };
+    }
     if (result.status === "failed") {
       // A real, sanitized failure returned by refreshAugustTelemetry()
       // itself (e.g. August not configured) — not a thrown exception, but

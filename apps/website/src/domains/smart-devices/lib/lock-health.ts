@@ -20,9 +20,18 @@ export const LOCK_HEALTH_THRESHOLDS = {
   batteryCriticalPercent: 20,
   batteryWarningPercent: 30,
   batteryReadingStaleMs: 7 * 24 * 60 * 60 * 1000,
-  /** Two consecutive refreshes reporting unknown. */
+  /**
+   * 2026-09-27: time-based, not "N refreshes", because refresh-on-view makes
+   * the refresh interval vary from ~10 min to 6 h. Unknown for 30 min.
+   */
+  persistentUnknownMs: 30 * 60 * 1000,
+  /** Fallback only for snapshots written before `unknownSince` existed. */
   persistentUnknownRefreshes: 2,
-  /** Known → unknown transitions within 24h. */
+  /**
+   * Known → unknown transitions within 24h. Already time-windowed; to be
+   * re-tuned against real data once refreshes run every ~10 min (more
+   * frequent sampling observes more of the fleet's brief unknown blips).
+   */
   frequentUnknownCount: 3,
   bridgeOfflineEscalationMs: 12 * 60 * 60 * 1000,
   /** Two 6-hour refresh cycles. */
@@ -59,6 +68,11 @@ export interface LockHealthSnapshot {
   /** When the current lockState began; null when it began before monitoring started. */
   lockStateSince: string | null;
   consecutiveUnknownRefreshes: number;
+  /**
+   * When the current unknown episode was first observed (2026-09-27); null
+   * while the state is known. Optional: absent on older snapshots.
+   */
+  unknownSince?: string | null;
 }
 
 export type LockHealthEventType =
@@ -180,6 +194,16 @@ export function buildLockHealthUpdate(
       current === "unknown"
         ? (previous?.consecutiveUnknownRefreshes ?? 0) + 1
         : 0,
+    unknownSince:
+      current !== "unknown"
+        ? null
+        : previous?.lockState === "unknown"
+          ? (previous.unknownSince ??
+            previous.lockStateSince ??
+            previous.observedAt)
+          : stateChanged
+            ? (health.lockStatusAt ?? observedIso)
+            : observedIso,
   };
 
   const events: LockHealthEvent[] = [];
@@ -349,6 +373,10 @@ function ageMs(iso: string | null, now: Date): number | null {
   return Number.isNaN(t) ? null : now.getTime() - t;
 }
 
+function formatDuration(ms: number): string {
+  return ms < 3_600_000 ? `${Math.floor(ms / 60_000)} min` : formatHours(ms);
+}
+
 function formatHours(ms: number): string {
   const hours = Math.floor(ms / 3_600_000);
   return hours >= 48 ? `${Math.floor(hours / 24)} days` : `${hours} h`;
@@ -460,16 +488,21 @@ export function classifyLockHealth(input: LockHealthInput): LockHealthFlag[] {
     });
   }
 
+  const unknownFor = ageMs(s.unknownSince ?? s.lockStateSince, input.now);
   const persistentUnknown =
     s.lockState === "unknown" &&
-    s.consecutiveUnknownRefreshes >= t.persistentUnknownRefreshes;
+    (unknownFor !== null
+      ? unknownFor >= t.persistentUnknownMs
+      : s.consecutiveUnknownRefreshes >= t.persistentUnknownRefreshes);
   const frequentUnknown =
     input.recentUnknownTransitions >= t.frequentUnknownCount;
   if (s.lockState === "unknown") {
     const parts = [
       s.unknownReason ? `Reason: ${s.unknownReason}.` : "No reason given.",
       persistentUnknown
-        ? `Unknown for ${s.consecutiveUnknownRefreshes} refreshes in a row.`
+        ? unknownFor !== null
+          ? `Unknown for ${formatDuration(unknownFor)}.`
+          : `Unknown for ${s.consecutiveUnknownRefreshes} refreshes in a row.`
         : null,
       s.lastValidLockState
         ? `Last valid state: ${s.lastValidLockState} at ${s.lastValidLockStateAt}.`

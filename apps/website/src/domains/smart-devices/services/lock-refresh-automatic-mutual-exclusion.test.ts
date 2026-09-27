@@ -78,15 +78,37 @@ const {
       async ({
         where,
       }: {
-        where: { integrationConnectionId: string; status: string };
+        // 2026-09-27: also honors the rate-limit cooldown and on-view
+        // freshness filters the claim now applies (errorMessage.startsWith,
+        // finishedAt.gte, startedAt.gte), so the fake matches real Prisma.
+        where: {
+          integrationConnectionId: string;
+          status?: string;
+          errorMessage?: { startsWith: string };
+          finishedAt?: { gte: Date };
+          startedAt?: { gte: Date };
+        };
       }) => {
-        for (const log of state.syncLogs.values()) {
+        for (const record of state.syncLogs.values()) {
+          if (record.integrationConnectionId !== where.integrationConnectionId)
+            continue;
+          if (where.status !== undefined && record.status !== where.status)
+            continue;
           if (
-            log.integrationConnectionId === where.integrationConnectionId &&
-            log.status === where.status
-          ) {
-            return log;
-          }
+            where.errorMessage &&
+            !(record.errorMessage ?? "").startsWith(
+              where.errorMessage.startsWith,
+            )
+          )
+            continue;
+          if (
+            where.finishedAt &&
+            !(record.finishedAt && record.finishedAt >= where.finishedAt.gte)
+          )
+            continue;
+          if (where.startedAt && !(record.startedAt >= where.startedAt.gte))
+            continue;
+          return record;
         }
         return null;
       },

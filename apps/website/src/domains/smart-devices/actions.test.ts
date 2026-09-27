@@ -485,6 +485,37 @@ describe("refreshAugustAction", () => {
     expect(mockRevalidatePath).not.toHaveBeenCalled();
   });
 
+  it("2026-09-27: a 429 cooldown is reported as a failure naming the pause — never retried, never shown as success, no revalidate", async () => {
+    mockRefreshAugustTelemetry.mockResolvedValueOnce({
+      status: "cooldown",
+      cooldownUntil: "2026-09-27T21:00:00.000Z",
+    });
+
+    const result = await refreshAugustAction(IDLE_REFRESH);
+
+    expect(result).toEqual({
+      status: "failure",
+      error:
+        "August is rate-limiting requests; fleet refresh is paused until 2026-09-27T21:00:00.000Z. Nothing was retried.",
+    });
+    expect(mockRevalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("2026-09-27: a run stopped by a 429 is reported as a failure, and /locks is revalidated for the readings it did save", async () => {
+    mockRefreshAugustTelemetry.mockResolvedValueOnce({
+      status: "rate_limited",
+      refreshed: 4,
+      notReturnedByProvider: 1,
+      skippedAfterRateLimit: 7,
+      cooldownUntil: "2026-09-27T21:00:00.000Z",
+    });
+
+    const result = await refreshAugustAction(IDLE_REFRESH);
+
+    expect(result.status).toBe("failure");
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+  });
+
   it("returns a failure state (not a thrown-error crash) when refreshAugustTelemetry() itself resolves with a sanitized failed outcome (e.g. August not configured), and does not revalidate", async () => {
     mockRefreshAugustTelemetry.mockResolvedValueOnce({
       status: "failed",

@@ -565,3 +565,98 @@ describe("door-sensor calibration (2026-09-28, Kenny)", () => {
     expect(codes(metadata, T1)).not.toContain("DOOR_SENSOR_CALIBRATION_NEEDED");
   });
 });
+
+describe("time-based persistent unknown (2026-09-27, refresh-on-view)", () => {
+  const minutesBefore = (m: number) =>
+    new Date(T0.getTime() - m * 60_000).toISOString();
+  const unknownFor = (minutes: number, refreshes: number) =>
+    classifyLockHealth({
+      metadata: snapshot({
+        lockState: "unknown",
+        consecutiveUnknownRefreshes: refreshes,
+        unknownSince: minutesBefore(minutes),
+      }),
+      connectivity: "ONLINE",
+      now: T0,
+      recentUnknownTransitions: 0,
+    });
+
+  it("many quick refreshes don't make a short unknown 'persistent': 3 readings over 20 min is still just 'State unknown'", () => {
+    const flags = unknownFor(20, 3);
+    expect(flags.map((f) => f.code)).toEqual(["UNKNOWN_STATE"]);
+    expect(flags[0]!.label).toBe("State unknown");
+  });
+
+  it("unknown for 30+ min is persistent, however many refreshes that took, and says for how long", () => {
+    const flags = unknownFor(45, 1);
+    expect(flags.map((f) => f.code)).toEqual([
+      "UNKNOWN_STATE",
+      "POSSIBLE_LOCK_PROBLEM",
+    ]);
+    expect(flags[0]!.label).toBe("State unknown (persistent)");
+    expect(flags[0]!.detail).toContain("Unknown for 45 min.");
+  });
+
+  it("older snapshots without unknownSince/lockStateSince fall back to the refresh count", () => {
+    expect(
+      flagsFor({
+        lockState: "unknown",
+        consecutiveUnknownRefreshes: 2,
+        lockStateSince: null,
+      }),
+    ).toContain("POSSIBLE_LOCK_PROBLEM");
+  });
+
+  it("buildLockHealthUpdate records when an unknown episode began, keeps it across unknown refreshes, and clears it on recovery", () => {
+    const known = buildLockHealthUpdate({}, detail(), T0).metadata;
+    expect(getLockHealthSnapshot(known)!.unknownSince).toBeNull();
+
+    const unknownDetail = detail(
+      { lockState: "unknown" },
+      {
+        lockStatus: "unknown",
+        lockStatusValid: false,
+        lockStatusAt: "2026-09-25T20:05:00.000Z",
+      },
+    );
+    const first = buildLockHealthUpdate(
+      known,
+      unknownDetail,
+      new Date("2026-09-25T20:10:00.000Z"),
+    ).metadata;
+    expect(getLockHealthSnapshot(first)!.unknownSince).toBe(
+      "2026-09-25T20:05:00.000Z",
+    );
+
+    const second = buildLockHealthUpdate(
+      first,
+      unknownDetail,
+      new Date("2026-09-25T20:20:00.000Z"),
+    ).metadata;
+    expect(getLockHealthSnapshot(second)!.unknownSince).toBe(
+      "2026-09-25T20:05:00.000Z",
+    );
+
+    const recovered = buildLockHealthUpdate(
+      second,
+      detail(),
+      new Date("2026-09-25T20:30:00.000Z"),
+    ).metadata;
+    expect(getLockHealthSnapshot(recovered)!.unknownSince).toBeNull();
+  });
+
+  it("a first-ever capture that is already unknown starts the episode at that read", () => {
+    const observed = new Date("2026-09-25T20:00:00.000Z");
+    const first = buildLockHealthUpdate(
+      {},
+      detail(
+        { lockState: "unknown" },
+        { lockStatus: "unknown", lockStatusValid: false },
+      ),
+      observed,
+    ).metadata;
+    expect(getLockHealthSnapshot(first)!.unknownSince).toBe(
+      observed.toISOString(),
+    );
+  });
+});

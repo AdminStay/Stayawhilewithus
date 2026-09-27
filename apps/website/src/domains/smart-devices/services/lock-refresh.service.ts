@@ -7,6 +7,7 @@ import {
   isAugustBrand,
   type AugustLockDetail,
 } from "@stayw/integrations/august";
+import { HttpRequestError } from "@stayw/integrations/core";
 
 import { buildLockHealthUpdate } from "../lib/lock-health";
 
@@ -181,6 +182,35 @@ export interface AugustRefreshResult {
 }
 
 /**
+ * Refresh-on-view + rate-limit protection (2026-09-27). n8n Cloud Starter
+ * (2,500 executions/month) rules out frequent n8n polling, so /locks asks
+ * the server to refresh while someone is viewing it — at most once per
+ * LOCK_REFRESH_ON_VIEW_MIN_INTERVAL_MS globally, however many viewers/tabs.
+ *
+ * August publishes no rate limit, and the same August account also sends
+ * dashboard lock commands, so a 429 stops the run immediately (remaining
+ * locks are not requested) and every fleet-refresh entry point — on-view,
+ * automatic cron, manual "Refresh all" — then refuses to call August until
+ * the cooldown ends. The cooldown is derived from the durable
+ * IntegrationSyncLog row (errorMessage starts with the marker below), so it
+ * survives serverless instances and needs no schema change.
+ */
+export const LOCK_REFRESH_ON_VIEW_MIN_INTERVAL_MS = 10 * 60 * 1000;
+export const AUGUST_RATE_LIMIT_COOLDOWN_MS = 30 * 60 * 1000;
+export const AUGUST_RATE_LIMITED_MARKER = "AUGUST_RATE_LIMITED";
+
+interface AugustRefreshRunResult extends AugustRefreshResult {
+  /** True when August answered 429 and the remaining batches were not requested. */
+  rateLimited: boolean;
+  /** Eligible locks never requested because the run stopped after a 429. */
+  skippedAfterRateLimit: number;
+}
+
+function isRateLimitError(reason: unknown): boolean {
+  return reason instanceof HttpRequestError && reason.status === 429;
+}
+
+/**
  * Refreshes telemetry for August locks that are ALREADY enabled/mapped via
  * ProviderDevice — never discovers, maps, unmaps, enables, disables, or
  * creates anything, and never calls a lock/unlock or PIN/access-code
@@ -210,7 +240,7 @@ export interface AugustRefreshResult {
  * getLockDetail() call for one lock never blocks or fails any other lock's
  * refresh, in the same batch or a different one.
  */
-async function runAugustTelemetryRefresh(): Promise<AugustRefreshResult> {
+async function runAugustTelemetryRefresh(): Promise<AugustRefreshRunResult> {
   // Configuration is validated unconditionally, before checking whether
   // there's anything to refresh — same discipline as every other provider
   // refresh/sync function in this codebase.
@@ -239,7 +269,12 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshResult> {
 
   if (eligibleDevices.length === 0) {
     logLockRefresh("august_no_eligible_rows", {});
-    return { refreshed: 0, notReturnedByProvider: 0 };
+    return {
+      refreshed: 0,
+      notReturnedByProvider: 0,
+      rateLimited: false,
+      skippedAfterRateLimit: 0,
+    };
   }
 
   // `now` is only ever used for ProviderDevice.lastSeenAt below — StayWhile's
@@ -251,8 +286,15 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshResult> {
   const now = new Date();
   let refreshed = 0;
   let notReturnedByProvider = 0;
+  let rateLimited = false;
+  let requested = 0;
 
   for (const batch of chunk(eligibleDevices, AUGUST_DETAIL_CONCURRENCY)) {
+    // 429 breaker: once August has asked us to slow down, no further batch
+    // is requested. The batch that saw the 429 still has its successful
+    // readings written below.
+    if (rateLimited) break;
+    requested += batch.length;
     // Each settled outcome carries its own `device` reference (captured
     // before the awaited call, inside the same async arrow) rather than
     // being paired up afterward by array index — avoids ever indexing
@@ -272,6 +314,7 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshResult> {
     for (const outcome of settled) {
       if (outcome.status !== "fulfilled") {
         notReturnedByProvider++;
+        if (isRateLimitError(outcome.reason)) rateLimited = true;
         continue;
       }
       const {
@@ -361,12 +404,20 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshResult> {
     }
   }
 
+  const skippedAfterRateLimit = eligibleDevices.length - requested;
   logLockRefresh("august_refresh_completed", {
     refreshed,
     notReturnedByProvider,
+    rateLimited,
+    skippedAfterRateLimit,
   });
 
-  return { refreshed, notReturnedByProvider };
+  return {
+    refreshed,
+    notReturnedByProvider,
+    rateLimited,
+    skippedAfterRateLimit,
+  };
 }
 
 /**
@@ -379,7 +430,17 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshResult> {
 export type AugustRefreshOutcome =
   | ({ status: "completed" } & AugustRefreshResult)
   | { status: "already_running" }
-  | { status: "failed"; reason: string };
+  | { status: "failed"; reason: string }
+  /** August answered 429: the run stopped early and the cooldown started. */
+  | ({
+      status: "rate_limited";
+      skippedAfterRateLimit: number;
+      cooldownUntil: string;
+    } & AugustRefreshResult)
+  /** A recent 429 cooldown is active: August was not called. */
+  | { status: "cooldown"; cooldownUntil: string }
+  /** On-view only: a fleet refresh already started within the minimum interval. */
+  | { status: "fresh"; lastStartedAt: string };
 
 /**
  * The one lock name every August-connection sync/refresh path shares —
@@ -434,13 +495,18 @@ const INTEGRATION_SYNC_LOCK_NAME = "integration_sync";
  * the structural impossibility of reaching a lock/unlock/PIN endpoint from
  * this file (see this file's own dedicated source-level test).
  */
-async function runGuardedAugustTelemetryRefresh(): Promise<AugustRefreshOutcome> {
+async function runGuardedAugustTelemetryRefresh(
+  options: { minIntervalMs?: number } = {},
+): Promise<AugustRefreshOutcome> {
   await ensureConnectionRows();
   const connection = await prisma.integrationConnection.findUniqueOrThrow({
     where: { provider: "AUGUST" },
   });
 
-  const claim = await prisma.$transaction(async (tx) => {
+  type Claim =
+    | { proceeding: true; logId: string }
+    | { proceeding: false; outcome?: AugustRefreshOutcome };
+  const claim = await prisma.$transaction(async (tx): Promise<Claim> => {
     const lockRows = await tx.$queryRaw<{ locked: boolean }[]>`
       SELECT pg_try_advisory_xact_lock(hashtext(${INTEGRATION_SYNC_LOCK_NAME}), hashtext(${connection.id})) AS locked
     `;
@@ -467,6 +533,49 @@ async function runGuardedAugustTelemetryRefresh(): Promise<AugustRefreshOutcome>
       });
     }
 
+    // Rate-limit cooldown (every entry point) and the on-view freshness gate
+    // are checked inside the same advisory-locked claim, so two viewers
+    // arriving together can never both start a run.
+    const now = Date.now();
+    const rateLimited = await tx.integrationSyncLog.findFirst({
+      where: {
+        integrationConnectionId: connection.id,
+        status: "FAILED",
+        errorMessage: { startsWith: AUGUST_RATE_LIMITED_MARKER },
+        finishedAt: { gte: new Date(now - AUGUST_RATE_LIMIT_COOLDOWN_MS) },
+      },
+      orderBy: { finishedAt: "desc" },
+    });
+    if (rateLimited?.finishedAt) {
+      return {
+        proceeding: false,
+        outcome: {
+          status: "cooldown",
+          cooldownUntil: new Date(
+            rateLimited.finishedAt.getTime() + AUGUST_RATE_LIMIT_COOLDOWN_MS,
+          ).toISOString(),
+        },
+      } as const;
+    }
+    if (options.minIntervalMs !== undefined) {
+      const recent = await tx.integrationSyncLog.findFirst({
+        where: {
+          integrationConnectionId: connection.id,
+          startedAt: { gte: new Date(now - options.minIntervalMs) },
+        },
+        orderBy: { startedAt: "desc" },
+      });
+      if (recent) {
+        return {
+          proceeding: false,
+          outcome: {
+            status: "fresh",
+            lastStartedAt: recent.startedAt.toISOString(),
+          },
+        } as const;
+      }
+    }
+
     const log = await tx.integrationSyncLog.create({
       data: {
         integrationConnectionId: connection.id,
@@ -479,12 +588,45 @@ async function runGuardedAugustTelemetryRefresh(): Promise<AugustRefreshOutcome>
   });
 
   if (!claim.proceeding) {
+    if (claim.outcome) {
+      logLockRefresh(`august_refresh_skipped_${claim.outcome.status}`, {});
+      return claim.outcome;
+    }
     logLockRefresh("august_refresh_skipped_already_running", {});
     return { status: "already_running" };
   }
 
   try {
-    const result = await runAugustTelemetryRefresh();
+    const { rateLimited, skippedAfterRateLimit, ...result } =
+      await runAugustTelemetryRefresh();
+
+    if (rateLimited) {
+      // Closed FAILED with the marker so every entry point sees the
+      // cooldown; lastSyncedAt is not bumped (the fleet wasn't refreshed).
+      const finishedAt = new Date();
+      await prisma.integrationSyncLog.update({
+        where: { id: claim.logId },
+        data: {
+          status: "FAILED",
+          recordsProcessed: result.refreshed,
+          errorMessage: `${AUGUST_RATE_LIMITED_MARKER}: August returned HTTP 429; ${skippedAfterRateLimit} lock(s) not requested. Fleet refresh paused for ${AUGUST_RATE_LIMIT_COOLDOWN_MS / 60_000} min.`,
+          finishedAt,
+        },
+      });
+      logLockRefresh("august_guarded_refresh_rate_limited", {
+        refreshed: result.refreshed,
+        notReturnedByProvider: result.notReturnedByProvider,
+        skippedAfterRateLimit,
+      });
+      return {
+        status: "rate_limited",
+        ...result,
+        skippedAfterRateLimit,
+        cooldownUntil: new Date(
+          finishedAt.getTime() + AUGUST_RATE_LIMIT_COOLDOWN_MS,
+        ).toISOString(),
+      };
+    }
 
     await prisma.integrationSyncLog.update({
       where: { id: claim.logId },
@@ -548,4 +690,73 @@ export async function refreshAugustTelemetry(
  */
 export async function refreshAugustTelemetryAutomatic(): Promise<AugustRefreshOutcome> {
   return runGuardedAugustTelemetryRefresh();
+}
+
+/**
+ * Refresh-on-view entry point (2026-09-27), called by /locks while it is
+ * open (POST /api/locks/refresh-if-stale) — never from the page render.
+ * Any viewer (smart_devices:read) may ask, but the server decides: the
+ * shared guarded core only starts a run when no fleet refresh has started
+ * in the last LOCK_REFRESH_ON_VIEW_MIN_INTERVAL_MS, nothing is RUNNING and
+ * no 429 cooldown is active. It can therefore never be used to force or
+ * multiply August requests, and it runs exactly the same read-only refresh
+ * as the automatic cron and manual "Refresh all".
+ */
+export async function refreshAugustTelemetryIfStale(
+  actor: AuthContext,
+): Promise<AugustRefreshOutcome> {
+  await assertPermission(actor, "smart_devices:read");
+  return runGuardedAugustTelemetryRefresh({
+    minIntervalMs: LOCK_REFRESH_ON_VIEW_MIN_INTERVAL_MS,
+  });
+}
+
+export interface AugustRefreshFreshness {
+  /** When the last fleet refresh finished successfully (the "Updated X min ago" time). */
+  lastSucceededAt: string | null;
+  /** End of an active 429 cooldown, or null. */
+  cooldownUntil: string | null;
+}
+
+/**
+ * Read-only fleet-refresh freshness for /locks. Never creates the
+ * connection row or any log (safe to call during the page render).
+ */
+export async function getAugustRefreshFreshness(
+  actor: AuthContext,
+): Promise<AugustRefreshFreshness> {
+  await assertPermission(actor, "smart_devices:read");
+  const connection = await prisma.integrationConnection.findUnique({
+    where: { provider: "AUGUST" },
+    select: { id: true },
+  });
+  if (!connection) return { lastSucceededAt: null, cooldownUntil: null };
+
+  const [succeeded, rateLimited] = await Promise.all([
+    prisma.integrationSyncLog.findFirst({
+      where: { integrationConnectionId: connection.id, status: "SUCCEEDED" },
+      orderBy: { finishedAt: "desc" },
+      select: { finishedAt: true },
+    }),
+    prisma.integrationSyncLog.findFirst({
+      where: {
+        integrationConnectionId: connection.id,
+        status: "FAILED",
+        errorMessage: { startsWith: AUGUST_RATE_LIMITED_MARKER },
+        finishedAt: {
+          gte: new Date(Date.now() - AUGUST_RATE_LIMIT_COOLDOWN_MS),
+        },
+      },
+      orderBy: { finishedAt: "desc" },
+      select: { finishedAt: true },
+    }),
+  ]);
+  return {
+    lastSucceededAt: succeeded?.finishedAt?.toISOString() ?? null,
+    cooldownUntil: rateLimited?.finishedAt
+      ? new Date(
+          rateLimited.finishedAt.getTime() + AUGUST_RATE_LIMIT_COOLDOWN_MS,
+        ).toISOString()
+      : null,
+  };
 }

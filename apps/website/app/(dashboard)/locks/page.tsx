@@ -13,6 +13,7 @@ import {
   setLockOperationalHoldAction,
 } from "@/domains/smart-devices/actions";
 import { BulkRefreshDialog } from "@/domains/smart-devices/components/BulkRefreshDialog";
+import { LockAutoRefresh } from "@/domains/smart-devices/components/LockAutoRefresh";
 import { LockControlKillSwitch } from "@/domains/smart-devices/components/LockControlKillSwitch";
 import { LockHealthPanel } from "@/domains/smart-devices/components/LockHealthPanel";
 import { LocksList } from "@/domains/smart-devices/components/LocksList";
@@ -30,6 +31,7 @@ import {
 import { getLockControlSetting } from "@/domains/smart-devices/services/lock-control-settings.service";
 import { getRecentUnknownTransitionCounts } from "@/domains/smart-devices/services/lock-health.service";
 import { getActiveOperationalHolds } from "@/domains/smart-devices/services/lock-operational-hold.service";
+import { getAugustRefreshFreshness } from "@/domains/smart-devices/services/lock-refresh.service";
 import {
   isDemoSmartDevice,
   isLockVisible,
@@ -89,6 +91,11 @@ export default async function LocksPage() {
   // Global kill switch — shown to everyone who can see /locks; only an admin
   // (global locks:manage) can toggle it.
   const lockControl = await getLockControlSetting(actor);
+
+  // Refresh-on-view (2026-09-27): read-only freshness for "Updated X min
+  // ago". The render never starts a refresh; LockAutoRefresh asks the
+  // gated /api/locks/refresh-if-stale endpoint after the page loads.
+  const refreshFreshness = await getAugustRefreshFreshness(actor);
 
   // Fully dynamic per-lock eligibility (2026-09-25, "enable all locks"):
   // mapped + enabled + ONLINE + verified history + kill switch ON. No env
@@ -179,6 +186,12 @@ export default async function LocksPage() {
           </>
         }
       />
+      <div className="mb-3">
+        <LockAutoRefresh
+          initialLastSucceededAt={refreshFreshness.lastSucceededAt}
+          initialCooldownUntil={refreshFreshness.cooldownUntil}
+        />
+      </div>
       <div className="mb-4">
         <LockControlKillSwitch
           enabled={lockControl.enabled}
