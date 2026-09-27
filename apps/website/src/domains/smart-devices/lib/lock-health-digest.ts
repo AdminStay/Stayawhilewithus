@@ -112,6 +112,12 @@ const SECTION_ORDER: Array<{
     codes: ["LOW_BATTERY"],
   },
   {
+    heading: "Door sensor calibration needed (August app, onsite)",
+    emoji: "🟡",
+    severity: "yellow",
+    codes: ["DOOR_SENSOR_CALIBRATION_NEEDED"],
+  },
+  {
     heading: "Stale telemetry",
     emoji: "🟡",
     severity: "yellow",

@@ -98,4 +98,59 @@ describe("buildLockHealthDigest", () => {
     expect(d.sections).toEqual([]);
     expect(d.text).toContain("No lock health exceptions");
   });
+
+  describe("door-sensor calibration (2026-09-28)", () => {
+    const calibration: LockHealthFlag = {
+      code: "DOOR_SENSOR_CALIBRATION_NEEDED",
+      severity: "yellow",
+      label: "⚠ Calibration needed",
+      detail: "Door sensor needs calibration in the August app.",
+      since: null,
+    };
+    const bahamas: DigestInputRow = {
+      smartDeviceId: "bahamas",
+      propertyName: "Bahamas",
+      lockName: "Front Door",
+      flags: [calibration],
+    };
+
+    it("gets its own digest section with a stable condition key", () => {
+      const d = buildLockHealthDigest([...rows, bahamas], { now: NOW });
+      const section = d.sections.find((s) =>
+        s.heading.includes("Door sensor calibration needed"),
+      )!;
+      expect(section.severity).toBe("yellow");
+      expect(section.items).toEqual([
+        expect.objectContaining({
+          conditionKey: "bahamas:DOOR_SENSOR_CALIBRATION_NEEDED",
+          label: "⚠ Calibration needed",
+          detail: "Door sensor needs calibration in the August app.",
+          status: "NEW",
+        }),
+      ]);
+      expect(d.text).toContain(
+        "[NEW] Bahamas — Front Door: ⚠ Calibration needed. Door sensor needs calibration in the August app.",
+      );
+    });
+
+    it("NEW → ONGOING (no duplicate alert, same fingerprint) → RESOLVED once calibrated", () => {
+      const day1 = buildLockHealthDigest([bahamas], { now: NOW });
+      const day2 = buildLockHealthDigest([bahamas], {
+        now: new Date("2026-09-28T04:15:00.000Z"),
+        previousConditionKeys: day1.conditionKeys,
+      });
+      expect(day2.sections[0]!.items[0]!.status).toBe("ONGOING");
+      expect(day2.text).not.toContain("[NEW]");
+      expect(day2.fingerprint).toBe(day1.fingerprint);
+
+      const day3 = buildLockHealthDigest([{ ...bahamas, flags: [] }], {
+        now: new Date("2026-09-29T04:15:00.000Z"),
+        previousConditionKeys: day2.conditionKeys,
+      });
+      expect(day3.resolvedConditionKeys).toEqual([
+        "bahamas:DOOR_SENSOR_CALIBRATION_NEEDED",
+      ]);
+      expect(day3.hasExceptions).toBe(false);
+    });
+  });
 });

@@ -5,6 +5,7 @@ import {
   buildLockHealthUpdate,
   classifyLockHealth,
   getLockHealthSnapshot,
+  isDoorSensorCalibrationNeeded,
   type LockHealthSnapshot,
 } from "./lock-health";
 
@@ -369,8 +370,10 @@ describe("classifyLockHealth", () => {
   });
 
   it("door OPEN is only claimed from a real 'open' reading: init/unknown door sensors never produce a door-open flag", () => {
+    // init is reported as calibration needed (below), never as door open.
     expect(flagsFor({ lockState: "unlocked", doorState: "init" })).toEqual([
       "UNLOCKED",
+      "DOOR_SENSOR_CALIBRATION_NEEDED",
     ]);
     expect(flagsFor({ lockState: "unlocked", doorState: "unknown" })).toEqual([
       "UNLOCKED",
@@ -453,5 +456,112 @@ describe("classifyLockHealth", () => {
       ["DOOR_OPEN_UNLOCKED", "red"],
       ["STALE_BATTERY_TELEMETRY", "yellow"],
     ]);
+  });
+});
+
+describe("door-sensor calibration (2026-09-28, Kenny)", () => {
+  it("only August's explicit 'init' reading means calibration needed", () => {
+    expect(isDoorSensorCalibrationNeeded("init")).toBe(true);
+    expect(isDoorSensorCalibrationNeeded(" INIT ")).toBe(true);
+    for (const state of [
+      "open",
+      "closed",
+      "unknown",
+      "disabled",
+      "kAugDoorState_Bogus",
+      "",
+      null,
+      undefined,
+    ]) {
+      expect(isDoorSensorCalibrationNeeded(state)).toBe(false);
+    }
+  });
+
+  it("init → '⚠ Calibration needed' with the August-app instruction", () => {
+    expect(
+      classifyLockHealth({
+        metadata: snapshot({ doorState: "init" }),
+        connectivity: "ONLINE",
+        now: T0,
+        recentUnknownTransitions: 0,
+      }),
+    ).toEqual([
+      {
+        code: "DOOR_SENSOR_CALIBRATION_NEEDED",
+        severity: "yellow",
+        label: "⚠ Calibration needed",
+        detail: "Door sensor needs calibration in the August app.",
+        since: null,
+      },
+    ]);
+  });
+
+  it("open / closed are calibrated readings: never calibration needed", () => {
+    expect(flagsFor({ doorState: "closed" })).toEqual([]);
+    expect(flagsFor({ lockState: "locked", doorState: "open" })).toEqual([]);
+    expect(flagsFor({ lockState: "unlocked", doorState: "open" })).toEqual([
+      "DOOR_OPEN_UNLOCKED",
+    ]);
+  });
+
+  it("missing / unknown / unrecognized door data is NOT labeled calibration needed", () => {
+    for (const doorState of [null, "unknown", "disabled", "something_new"]) {
+      expect(flagsFor({ doorState })).not.toContain(
+        "DOOR_SENSOR_CALIBRATION_NEEDED",
+      );
+    }
+    // No snapshot at all: only the "waiting for first reading" flag.
+    expect(
+      classifyLockHealth({
+        metadata: {},
+        connectivity: "ONLINE",
+        now: T0,
+        recentUnknownTransitions: 0,
+      }).map((f) => f.code),
+    ).toEqual(["STALE_LOCK_TELEMETRY"]);
+  });
+
+  it("ONLINE + LOCKED + calibration needed coexist: not reported as door open/closed, offline, unknown or a lock problem", () => {
+    expect(
+      flagsFor({
+        lockState: "locked",
+        connectivity: "ONLINE",
+        doorState: "init",
+      }),
+    ).toEqual(["DOOR_SENSOR_CALIBRATION_NEEDED"]);
+  });
+
+  it("is independent of other conditions (e.g. offline + low battery keep their own flags)", () => {
+    expect(
+      flagsFor({
+        connectivity: "OFFLINE",
+        batteryLevel: 28,
+        doorState: "init",
+      }),
+    ).toEqual(["OFFLINE", "LOW_BATTERY", "DOOR_SENSOR_CALIBRATION_NEEDED"]);
+  });
+
+  it("an init → closed refresh records a door transition and the flag clears", () => {
+    const first = buildLockHealthUpdate(
+      {},
+      detail({}, { doorState: "init" }),
+      T0,
+    ).metadata;
+    const { metadata, events } = buildLockHealthUpdate(
+      first,
+      detail({}, { doorState: "closed" }),
+      T1,
+    );
+    expect(events.map((e) => e.eventType)).toEqual(["DOOR_STATE_CHANGED"]);
+    expect(events[0]!.payload).toMatchObject({ from: "init", to: "closed" });
+    const codes = (m: Record<string, unknown>, now: Date) =>
+      classifyLockHealth({
+        metadata: m,
+        connectivity: "ONLINE",
+        now,
+        recentUnknownTransitions: 0,
+      }).map((f) => f.code);
+    expect(codes(first, T0)).toContain("DOOR_SENSOR_CALIBRATION_NEEDED");
+    expect(codes(metadata, T1)).not.toContain("DOOR_SENSOR_CALIBRATION_NEEDED");
   });
 });

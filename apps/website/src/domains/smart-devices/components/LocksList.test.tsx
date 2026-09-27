@@ -1048,3 +1048,60 @@ describe("LocksList — row re-lock prompt (2026-09-25)", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });
+
+describe("LocksList — door-sensor calibration (2026-09-28, Kenny)", () => {
+  const health = (doorState: string | null) => ({
+    lockState: "locked",
+    telemetryUpdatedAt: FRESH_TELEMETRY,
+    lockHealth: { lockState: "locked", doorState },
+  });
+
+  it("an init door sensor shows '⚠ Calibration needed' + the August-app text on its row, next to ONLINE and LOCKED", () => {
+    renderLocks([makeLock({ name: "Bahamas Door", metadata: health("init") })]);
+    const status = statusCellFor("Bahamas Door");
+    expect(within(status).getByText("⚠ Calibration needed")).toBeTruthy();
+    expect(
+      within(status).getByText(
+        "Door sensor needs calibration in the August app.",
+      ),
+    ).toBeTruthy();
+    expect(within(status).getByText("Online")).toBeTruthy();
+    expect(within(rowFor("Bahamas Door")).getByText("Locked")).toBeTruthy();
+    expect(within(rowFor("Bahamas Door")).queryByText(/door open/i)).toBeNull();
+  });
+
+  it("open / closed / unknown / missing door data never show the calibration indicator", () => {
+    renderLocks([
+      makeLock({ id: "a", name: "Open Door", metadata: health("open") }),
+      makeLock({ id: "b", name: "Closed Door", metadata: health("closed") }),
+      makeLock({ id: "c", name: "Unknown Door", metadata: health("unknown") }),
+      makeLock({ id: "d", name: "Null Door", metadata: health(null) }),
+      makeLock({ id: "e", name: "No Snapshot Door", metadata: {} }),
+    ]);
+    expect(screen.queryByText("⚠ Calibration needed")).toBeNull();
+    expect(
+      screen.queryByText("Door sensor needs calibration in the August app."),
+    ).toBeNull();
+  });
+
+  it("SAFETY: the flag changes no command control — the same lock renders identical Lock/Unlock buttons with init vs closed, and no calibrate/reset control appears", () => {
+    const action = vi.fn();
+    const controls = (doorState: string) => {
+      const { unmount } = render(
+        <LocksList
+          locks={[makeLock({ metadata: health(doorState) })] as never}
+          canControlLocks={true}
+          lockCommandAction={action}
+        />,
+      );
+      const buttons = screen
+        .getAllByRole("button")
+        .map((b) => [b.textContent, (b as HTMLButtonElement).disabled]);
+      expect(screen.queryByRole("button", { name: /calibrat/i })).toBeNull();
+      unmount();
+      return buttons;
+    };
+    expect(controls("init")).toEqual(controls("closed"));
+    expect(action).not.toHaveBeenCalled();
+  });
+});

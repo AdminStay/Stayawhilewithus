@@ -66,4 +66,33 @@ describe("LockHealthPanel (2026-09-25)", () => {
       screen.getByText("No lock health exceptions right now."),
     ).toBeTruthy();
   });
+
+  it("lists a calibration-needed lock in Needs attention with its instruction", () => {
+    render(
+      <LockHealthPanel
+        rows={[
+          {
+            smartDeviceId: "d",
+            propertyName: "Bahamas",
+            lockName: "Front Door",
+            flags: [
+              {
+                code: "DOOR_SENSOR_CALIBRATION_NEEDED",
+                severity: "yellow",
+                label: "⚠ Calibration needed",
+                detail: "Door sensor needs calibration in the August app.",
+                since: null,
+              },
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByText(/needs attention \(1\)/i)).toBeTruthy();
+    expect(screen.getByText("Bahamas")).toBeTruthy();
+    expect(screen.getByText("⚠ Calibration needed")).toBeTruthy();
+    expect(
+      screen.getByText("Door sensor needs calibration in the August app."),
+    ).toBeTruthy();
+  });
 });

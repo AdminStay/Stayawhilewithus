@@ -290,6 +290,7 @@ export type LockHealthFlagCode =
   | "UNKNOWN_STATE"
   | "POSSIBLE_LOCK_PROBLEM"
   | "LOW_BATTERY"
+  | "DOOR_SENSOR_CALIBRATION_NEEDED"
   | "STALE_LOCK_TELEMETRY"
   | "STALE_BATTERY_TELEMETRY";
 
@@ -313,6 +314,30 @@ export interface LockHealthInput {
   lastCommandOutcome?: string | null;
   /** Active admin hold (getActiveOperationalHolds), if any. */
   operationalHold?: OperationalHold | null;
+}
+
+/**
+ * Door-sensor calibration (2026-09-28, Kenny: "show the need for calibration
+ * on the dashboard for the locks that need them"). Only August's raw
+ * `LockStatus.doorState` "init" — its reading for a DoorSense that has not
+ * been calibrated — counts. "open"/"closed" are calibrated readings; null,
+ * "unknown" or anything unrecognized is NOT reported as needing calibration
+ * because August hasn't said so. Informational only: calibration is done
+ * onsite in the August app, never remotely, and this never affects commands.
+ */
+const DOOR_SENSOR_CALIBRATION_STATES: ReadonlySet<string> = new Set(["init"]);
+
+export const DOOR_SENSOR_CALIBRATION_LABEL = "⚠ Calibration needed";
+export const DOOR_SENSOR_CALIBRATION_DETAIL =
+  "Door sensor needs calibration in the August app.";
+
+export function isDoorSensorCalibrationNeeded(
+  doorState: string | null | undefined,
+): boolean {
+  return (
+    typeof doorState === "string" &&
+    DOOR_SENSOR_CALIBRATION_STATES.has(doorState.trim().toLowerCase())
+  );
 }
 
 const POSSIBLE_PROBLEM_LABEL =
@@ -502,6 +527,18 @@ export function classifyLockHealth(input: LockHealthInput): LockHealthFlag[] {
         .filter(Boolean)
         .join(" "),
       since: s.batteryReadingAt,
+    });
+  }
+
+  // Its own maintenance condition: never a door open/closed, offline or
+  // lock-problem reading, and independent of the lock state.
+  if (isDoorSensorCalibrationNeeded(s.doorState)) {
+    add({
+      code: "DOOR_SENSOR_CALIBRATION_NEEDED",
+      severity: "yellow",
+      label: DOOR_SENSOR_CALIBRATION_LABEL,
+      detail: DOOR_SENSOR_CALIBRATION_DETAIL,
+      since: null,
     });
   }
 

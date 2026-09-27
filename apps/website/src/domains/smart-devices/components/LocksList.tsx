@@ -30,6 +30,12 @@ import type {
   ResetAugustLockActionState,
 } from "../actions";
 import { formatTimestamp } from "../lib/format-timestamp";
+import {
+  DOOR_SENSOR_CALIBRATION_DETAIL,
+  DOOR_SENSOR_CALIBRATION_LABEL,
+  getLockHealthSnapshot,
+  isDoorSensorCalibrationNeeded,
+} from "../lib/lock-health";
 import type {
   FirstTestEligibility,
   LockControlEligibility,
@@ -287,6 +293,13 @@ export function LocksList({
             const normalizedLockState = lockState?.toLowerCase();
             const telemetryUpdatedAt = getTelemetryUpdatedAt(lock);
             const isAugust = lock.provider === "AUGUST";
+            // Informational only (2026-09-28): shown next to, never instead
+            // of, the connectivity and lock state; no effect on commands.
+            const calibrationNeeded =
+              isAugust &&
+              isDoorSensorCalibrationNeeded(
+                getLockHealthSnapshot(lock.metadata)?.doorState,
+              );
 
             return (
               <TableRow key={lock.id}>
@@ -335,7 +348,21 @@ export function LocksList({
                           Low battery
                         </Badge>
                       )}
+                      {calibrationNeeded && (
+                        <Badge
+                          tone="gold"
+                          className="text-[10px]"
+                          title={DOOR_SENSOR_CALIBRATION_DETAIL}
+                        >
+                          {DOOR_SENSOR_CALIBRATION_LABEL}
+                        </Badge>
+                      )}
                     </div>
+                    {calibrationNeeded && (
+                      <span className="text-[10px] text-ink-muted">
+                        {DOOR_SENSOR_CALIBRATION_DETAIL}
+                      </span>
+                    )}
                   </div>
                 </TableCell>
 
