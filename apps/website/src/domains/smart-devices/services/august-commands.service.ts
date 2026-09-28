@@ -1100,6 +1100,47 @@ export async function getLatestAugustLockCommandOutcomes(
   return outcomes;
 }
 
+/**
+ * Read-only verification history (2026-09-29, Ops verification visibility):
+ * when each device's first recorded remote command SUCCEEDED, parsed by the
+ * same parseRecordedOutcome() as above, so REJECTED and
+ * NO_ACTION_ALREADY_IN_STATE rows never count. Unlike the latest outcome,
+ * this is historical: a later FAILED/AMBIGUOUS/ADMIN_RESET row doesn't
+ * remove it. Display-only — command eligibility keeps using
+ * getLatestAugustLockCommandOutcomes(). Makes no provider call and
+ * changes nothing.
+ */
+export async function getAugustLockVerificationHistory(
+  actor: AuthContext,
+  smartDeviceIds: string[],
+): Promise<Map<string, { firstVerifiedAt: string }>> {
+  await assertPermission(actor, "smart_devices:read");
+  if (smartDeviceIds.length === 0) return new Map();
+
+  const rows = await prisma.auditLog.findMany({
+    where: {
+      entityType: "SmartDevice",
+      entityId: { in: smartDeviceIds },
+      action: "smart_device.august_lock_command",
+    },
+    orderBy: { occurredAt: "asc" },
+    select: { entityId: true, afterState: true, occurredAt: true },
+  });
+
+  const history = new Map<string, { firstVerifiedAt: string }>();
+  for (const row of rows) {
+    // Oldest first: the first SUCCEEDED row seen for a device is its first
+    // verification; later rows can't change it.
+    if (history.has(row.entityId)) continue;
+    if (parseRecordedOutcome(row.afterState) === "SUCCEEDED") {
+      history.set(row.entityId, {
+        firstVerifiedAt: row.occurredAt.toISOString(),
+      });
+    }
+  }
+  return history;
+}
+
 export type ResetAugustLockResult =
   { status: "success" } | { status: "rejected"; reason: string };
 

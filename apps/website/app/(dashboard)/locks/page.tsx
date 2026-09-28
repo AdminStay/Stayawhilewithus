@@ -16,15 +16,24 @@ import { BulkRefreshDialog } from "@/domains/smart-devices/components/BulkRefres
 import { LockAutoRefresh } from "@/domains/smart-devices/components/LockAutoRefresh";
 import { LockControlKillSwitch } from "@/domains/smart-devices/components/LockControlKillSwitch";
 import { LockHealthPanel } from "@/domains/smart-devices/components/LockHealthPanel";
+import { LockVerificationPanel } from "@/domains/smart-devices/components/LockVerificationPanel";
 import { LocksList } from "@/domains/smart-devices/components/LocksList";
 import { RefreshLocksButton } from "@/domains/smart-devices/components/RefreshLocksButton";
 import {
   classifyLockHealth,
+  getLockHealthSnapshot,
   OPERATIONAL_HOLD_LABELS,
 } from "@/domains/smart-devices/lib/lock-health";
 import {
+  deriveLockCondition,
+  deriveLockVerification,
+  describeDoorCondition,
+  type LockVerificationRow,
+} from "@/domains/smart-devices/lib/lock-verification";
+import {
   computeFirstTestEligibility,
   computeLockControlEligibility,
+  getAugustLockVerificationHistory,
   getLatestAugustLockCommandOutcomes,
   isAdminResetAvailable,
 } from "@/domains/smart-devices/services/august-commands.service";
@@ -33,6 +42,7 @@ import { getRecentUnknownTransitionCounts } from "@/domains/smart-devices/servic
 import { getActiveOperationalHolds } from "@/domains/smart-devices/services/lock-operational-hold.service";
 import { getAugustRefreshFreshness } from "@/domains/smart-devices/services/lock-refresh.service";
 import {
+  getBatteryLevel,
   isDemoSmartDevice,
   isLockVisible,
   listSmartDevices,
@@ -114,6 +124,12 @@ export default async function LocksPage() {
     actor,
     augustLockIds,
   );
+  // Historical verification (display-only, 2026-09-29): first SUCCEEDED
+  // command per lock. Never used for eligibility below.
+  const verificationHistory = await getAugustLockVerificationHistory(
+    actor,
+    augustLockIds,
+  );
   const locksWithEligibility = locks.map((lock) => {
     const mapping = lock.providerDevice;
     // Mirrors sendAugustLockCommand()'s own mapping check exactly.
@@ -137,6 +153,14 @@ export default async function LocksPage() {
       firstTestEligibility: isAugust ? computeFirstTestEligibility(ctx) : null,
       adminResetAvailable: isAugust && isAdminResetAvailable(lastOutcome),
       operationalHoldLabel: hold ? OPERATIONAL_HOLD_LABELS[hold.kind] : null,
+      verificationStatus:
+        lock.provider === "AUGUST"
+          ? deriveLockVerification({
+              firstVerifiedAt:
+                verificationHistory.get(lock.id)?.firstVerifiedAt ?? null,
+              operationalHold: hold,
+            }).status
+          : null,
     };
   });
 
@@ -163,6 +187,32 @@ export default async function LocksPage() {
       operationalHold: operationalHolds.get(lock.id) ?? null,
     }),
   }));
+
+  // Ops verification visibility (2026-09-29): verification history and
+  // current condition as two separate axes, from data already loaded above.
+  const verificationRows: LockVerificationRow[] = healthLocks.map((lock, i) => {
+    const hold = operationalHolds.get(lock.id) ?? null;
+    return {
+      smartDeviceId: lock.id,
+      propertyName: lock.property.name,
+      lockName: lock.name,
+      verification: deriveLockVerification({
+        firstVerifiedAt:
+          verificationHistory.get(lock.id)?.firstVerifiedAt ?? null,
+        operationalHold: hold,
+      }),
+      condition: deriveLockCondition({
+        flags: lockHealthRows[i]!.flags,
+        operationalHold: hold,
+        lastCommandOutcome: lastCommandOutcomes.get(lock.id) ?? null,
+      }),
+      connectivity: lock.status,
+      batteryLevel: getBatteryLevel(lock),
+      doorCondition: describeDoorCondition(
+        getLockHealthSnapshot(lock.metadata)?.doorState,
+      ),
+    };
+  });
 
   return (
     <div>
@@ -201,6 +251,12 @@ export default async function LocksPage() {
       </div>
       <div className="mb-4">
         <LockHealthPanel rows={lockHealthRows} />
+      </div>
+      <div className="mb-4">
+        <LockVerificationPanel
+          rows={verificationRows}
+          generatedAt={healthNow.toISOString()}
+        />
       </div>
       <LocksList
         locks={locksWithEligibility}

@@ -76,6 +76,7 @@ import { HttpRequestError } from "@stayw/integrations/core";
 import {
   computeFirstTestEligibility,
   computeLockControlEligibility,
+  getAugustLockVerificationHistory,
   getLatestAugustLockCommandOutcomes,
   isAdminResetAvailable,
   resetAugustLockAfterPhysicalCheck,
@@ -2018,5 +2019,155 @@ describe("resetAugustLockAfterPhysicalCheck (2026-09-25)", () => {
 
     expect(result).toEqual({ status: "rejected", reason: "Device not found." });
     expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+});
+
+describe("getAugustLockVerificationHistory — historical verification, display-only (2026-09-29)", () => {
+  beforeEach(() => {
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.auditLog.findMany).mockReset();
+  });
+
+  const at = (iso: string) => new Date(iso);
+  const row = (entityId: string, result: string, iso: string) => ({
+    entityId,
+    afterState: { result },
+    occurredAt: at(iso),
+  });
+
+  // Command history shaped like Production's recorded rollout (HANDOFF
+  // Increments 120-146), oldest first. Ids are fixture ids, not real ones.
+  const FLEET = {
+    aquaPalm: "dev-aqua-palm",
+    driftwood: "dev-driftwood",
+    royalPalms: "dev-royal-palms",
+    ouap: "dev-ouap",
+    moroccanMoon: "dev-moroccan-moon",
+    cocoVista: "dev-coco-vista",
+    orion: "dev-orion",
+    mjFront: "dev-mj-front",
+    florisun: "dev-florisun",
+    luckyCharm: "dev-lucky-charm",
+    mahalo: "dev-mahalo",
+    picasa: "dev-picasa",
+  };
+  const FLEET_ROWS = [
+    row(FLEET.mjFront, "FAILED", "2026-09-18T15:00:00Z"),
+    row(FLEET.aquaPalm, "SUCCEEDED", "2026-09-19T16:00:00Z"),
+    row(FLEET.aquaPalm, "SUCCEEDED", "2026-09-19T16:02:00Z"),
+    row(FLEET.orion, "FAILED", "2026-09-24T14:00:00Z"),
+    row(FLEET.orion, "AMBIGUOUS", "2026-09-24T14:30:00Z"),
+    row(FLEET.cocoVista, "AMBIGUOUS", "2026-09-25T17:14:00Z"),
+    row(FLEET.driftwood, "SUCCEEDED", "2026-09-25T18:09:00Z"),
+    row(FLEET.royalPalms, "AMBIGUOUS", "2026-09-25T18:48:00Z"),
+    row(FLEET.royalPalms, "ADMIN_RESET", "2026-09-25T19:27:24Z"),
+    row(FLEET.royalPalms, "SUCCEEDED", "2026-09-25T19:28:21Z"),
+    row(FLEET.ouap, "SUCCEEDED", "2026-09-25T20:49:11Z"),
+    row(FLEET.ouap, "SUCCEEDED", "2026-09-25T20:53:51Z"),
+    row(FLEET.moroccanMoon, "SUCCEEDED", "2026-09-25T21:22:32Z"),
+    // Never-moved rows on an untested lock must not count.
+    row(FLEET.mahalo, "REJECTED", "2026-09-26T10:00:00Z"),
+    row(FLEET.mahalo, "NO_ACTION_ALREADY_IN_STATE", "2026-09-26T10:01:00Z"),
+  ];
+
+  it("requires smart_devices:read and makes no query for an empty id list", async () => {
+    const result = await getAugustLockVerificationHistory(actor, []);
+    expect(result.size).toBe(0);
+    expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
+  });
+
+  it("reads only the lock-command audit rows for the requested devices, oldest first (a read — no write, no provider call)", async () => {
+    vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce([]);
+    await getAugustLockVerificationHistory(actor, [SMART_DEVICE_ID]);
+    expect(assertPermission).toHaveBeenCalledWith(actor, "smart_devices:read");
+    expect(prisma.auditLog.findMany).toHaveBeenCalledWith({
+      where: {
+        entityType: "SmartDevice",
+        entityId: { in: [SMART_DEVICE_ID] },
+        action: "smart_device.august_lock_command",
+      },
+      orderBy: { occurredAt: "asc" },
+      select: { entityId: true, afterState: true, occurredAt: true },
+    });
+  });
+
+  it("the five established verified locks (Aqua Palm, Driftwood, Royal Palms, OUAP, Moroccan Moon) are verified, and ONLY those", async () => {
+    vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce(
+      FLEET_ROWS as never,
+    );
+    const history = await getAugustLockVerificationHistory(
+      actor,
+      Object.values(FLEET),
+    );
+    expect([...history.keys()].sort()).toEqual(
+      [
+        FLEET.aquaPalm,
+        FLEET.driftwood,
+        FLEET.royalPalms,
+        FLEET.ouap,
+        FLEET.moroccanMoon,
+      ].sort(),
+    );
+    expect(history.get(FLEET.aquaPalm)?.firstVerifiedAt).toBe(
+      "2026-09-19T16:00:00.000Z",
+    );
+    expect(history.get(FLEET.royalPalms)?.firstVerifiedAt).toBe(
+      "2026-09-25T19:28:21.000Z",
+    );
+    for (const id of [
+      FLEET.cocoVista,
+      FLEET.orion,
+      FLEET.mjFront,
+      FLEET.florisun,
+      FLEET.luckyCharm,
+      FLEET.mahalo,
+      FLEET.picasa,
+    ]) {
+      expect(history.has(id)).toBe(false);
+    }
+  });
+
+  it("a later FAILED / AMBIGUOUS / ADMIN_RESET does not erase an earlier success", async () => {
+    vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce([
+      row(SMART_DEVICE_ID, "SUCCEEDED", "2026-09-25T10:00:00Z"),
+      row(SMART_DEVICE_ID, "AMBIGUOUS", "2026-09-26T10:00:00Z"),
+      row(SMART_DEVICE_ID, "ADMIN_RESET", "2026-09-26T11:00:00Z"),
+      row(SMART_DEVICE_ID, "FAILED", "2026-09-27T10:00:00Z"),
+    ] as never);
+    const history = await getAugustLockVerificationHistory(actor, [
+      SMART_DEVICE_ID,
+    ]);
+    expect(history.get(SMART_DEVICE_ID)).toEqual({
+      firstVerifiedAt: "2026-09-25T10:00:00.000Z",
+    });
+  });
+
+  it("command eligibility is unchanged: a verified lock whose latest outcome is AMBIGUOUS stays blocked (history never unblocks)", async () => {
+    const rows = [
+      row(SMART_DEVICE_ID, "SUCCEEDED", "2026-09-25T10:00:00Z"),
+      row(SMART_DEVICE_ID, "AMBIGUOUS", "2026-09-26T10:00:00Z"),
+    ];
+    vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce(rows as never);
+    const history = await getAugustLockVerificationHistory(actor, [
+      SMART_DEVICE_ID,
+    ]);
+    vi.mocked(prisma.auditLog.findMany).mockResolvedValueOnce(
+      [...rows].reverse() as never,
+    );
+    const latest = await getLatestAugustLockCommandOutcomes(actor, [
+      SMART_DEVICE_ID,
+    ]);
+
+    expect(history.has(SMART_DEVICE_ID)).toBe(true);
+    expect(latest.get(SMART_DEVICE_ID)).toBe("AMBIGUOUS");
+    const ctx = {
+      externalDeviceId: EXTERNAL_ID,
+      connectivity: "ONLINE",
+      lastOutcome: latest.get(SMART_DEVICE_ID),
+      lockControlEnabled: true,
+      operationalHold: null,
+    };
+    expect(computeLockControlEligibility(ctx).eligible).toBe(false);
+    expect(computeFirstTestEligibility(ctx).eligible).toBe(false);
   });
 });

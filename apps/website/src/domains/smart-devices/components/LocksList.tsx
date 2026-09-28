@@ -36,6 +36,10 @@ import {
   getLockHealthSnapshot,
   isDoorSensorCalibrationNeeded,
 } from "../lib/lock-health";
+import {
+  LOCK_VERIFICATION_LABELS,
+  type LockVerificationStatus,
+} from "../lib/lock-verification";
 import type {
   FirstTestEligibility,
   LockControlEligibility,
@@ -67,6 +71,14 @@ type LockWithProperty = SmartDevice & {
   adminResetAvailable: boolean;
   /** Label of the lock's active admin operational hold, or null. */
   operationalHoldLabel?: string | null;
+  /** Historical remote-control verification (display-only; see lib/lock-verification) — null/absent for non-August devices. */
+  verificationStatus?: LockVerificationStatus | null;
+};
+
+const VERIFICATION_BADGE_TONE: Record<LockVerificationStatus, Tone> = {
+  VERIFIED: "success",
+  AWAITING_OPS: "neutral",
+  NOT_VERIFIED_ON_HOLD: "error",
 };
 
 type HoldAction = (
@@ -311,6 +323,18 @@ export function LocksList({
                     <span className="truncate text-xs text-ink-muted">
                       {lock.name}
                     </span>
+                    {lock.verificationStatus && (
+                      <span className="mt-0.5">
+                        <Badge
+                          tone={
+                            VERIFICATION_BADGE_TONE[lock.verificationStatus]
+                          }
+                          className="text-[10px]"
+                        >
+                          {LOCK_VERIFICATION_LABELS[lock.verificationStatus]}
+                        </Badge>
+                      </span>
+                    )}
                   </div>
                 </TableCell>
 

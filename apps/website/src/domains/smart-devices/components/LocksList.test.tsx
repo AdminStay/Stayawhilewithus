@@ -90,6 +90,8 @@ type LockFixture = {
   controlEligibility: { eligible: boolean; reason: string | null } | null;
   firstTestEligibility: { eligible: boolean } | null;
   adminResetAvailable?: boolean;
+  verificationStatus?:
+    "VERIFIED" | "AWAITING_OPS" | "NOT_VERIFIED_ON_HOLD" | null;
 };
 
 // Defaults to eligible/not-eligible-for-first-test: real /locks usage
@@ -1102,6 +1104,91 @@ describe("LocksList — door-sensor calibration (2026-09-28, Kenny)", () => {
       return buttons;
     };
     expect(controls("init")).toEqual(controls("closed"));
+    expect(action).not.toHaveBeenCalled();
+  });
+});
+
+describe("LocksList — remote-control verification badge (2026-09-29, display-only)", () => {
+  it("shows each lock's historical verification status on its row", () => {
+    renderLocks([
+      makeLock({
+        id: "a",
+        name: "Driftwood Door",
+        verificationStatus: "VERIFIED",
+      }),
+      makeLock({
+        id: "b",
+        name: "Mahalo Door",
+        verificationStatus: "AWAITING_OPS",
+      }),
+      makeLock({
+        id: "c",
+        name: "Florisun Door",
+        verificationStatus: "NOT_VERIFIED_ON_HOLD",
+      }),
+    ]);
+    expect(within(rowFor("Driftwood Door")).getByText("Verified")).toBeTruthy();
+    expect(
+      within(rowFor("Mahalo Door")).getByText("Awaiting Ops verification"),
+    ).toBeTruthy();
+    expect(
+      within(rowFor("Florisun Door")).getByText("Not verified (on hold)"),
+    ).toBeTruthy();
+  });
+
+  it("no badge when there is no status (non-August / not supplied)", () => {
+    renderLocks([makeLock({ name: "Plain Door" })]);
+    expect(within(rowFor("Plain Door")).queryByText(/verif/i)).toBeNull();
+  });
+
+  it("SAFETY: the badge changes no control — identical buttons (text + disabled) with and without a verification status", () => {
+    const action = vi.fn();
+    const buttonsFor = (
+      verificationStatus: LockFixture["verificationStatus"],
+      eligibility: Pick<
+        LockFixture,
+        "controlEligibility" | "firstTestEligibility"
+      >,
+    ) => {
+      const { unmount } = render(
+        <LocksList
+          locks={[makeLock({ verificationStatus, ...eligibility })] as never}
+          canControlLocks={true}
+          lockCommandAction={action}
+        />,
+      );
+      const buttons = screen
+        .getAllByRole("button")
+        .map((b) => [b.textContent, (b as HTMLButtonElement).disabled]);
+      unmount();
+      return buttons;
+    };
+    for (const eligibility of [
+      {
+        controlEligibility: { eligible: true, reason: null },
+        firstTestEligibility: { eligible: false },
+      },
+      {
+        controlEligibility: {
+          eligible: false,
+          reason: "Command blocked after an AMBIGUOUS result.",
+        },
+        firstTestEligibility: { eligible: false },
+      },
+      {
+        controlEligibility: { eligible: false, reason: "Not verified." },
+        firstTestEligibility: { eligible: true },
+      },
+    ]) {
+      const baseline = buttonsFor(null, eligibility);
+      for (const status of [
+        "VERIFIED",
+        "AWAITING_OPS",
+        "NOT_VERIFIED_ON_HOLD",
+      ] as const) {
+        expect(buttonsFor(status, eligibility)).toEqual(baseline);
+      }
+    }
     expect(action).not.toHaveBeenCalled();
   });
 });
