@@ -71,6 +71,12 @@ export function getTelemetryUpdatedAt(
 export function canRenderNestControls(input: {
   hasRawTraits: boolean;
   canManage: boolean;
+  /**
+   * The global Nest thermostat-control kill switch (2026-09-27, default
+   * OFF). Required, so no caller can forget it; controls never render while
+   * it is OFF. sendNestThermostatCommand() enforces it server-side anyway.
+   */
+  controlEnabled: boolean;
 }): boolean {
-  return input.hasRawTraits && input.canManage;
+  return input.hasRawTraits && input.canManage && input.controlEnabled;
 }

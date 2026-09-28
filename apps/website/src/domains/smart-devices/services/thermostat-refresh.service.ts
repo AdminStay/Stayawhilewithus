@@ -3,7 +3,14 @@ import "server-only";
 import { assertPermission, type AuthContext } from "@stayw/auth";
 import { prisma, type Prisma } from "@stayw/database";
 import { CieloClient } from "@stayw/integrations/cielo";
+import { HttpRequestError } from "@stayw/integrations/core";
 import { NestClient, NestOAuthRefreshError } from "@stayw/integrations/nest";
+
+import {
+  formatNestRefreshFailure,
+  NEST_REFRESH_LOG_ENTITY,
+  type NestRefreshAttempt,
+} from "../lib/nest-health";
 
 import {
   toCieloSmartDeviceMetadata,
@@ -351,6 +358,111 @@ function isNotConfiguredError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("isn't configured");
 }
 
+/**
+ * Sanitized, stable classification of a Nest refresh failure (2026-09-27,
+ * Nest Phase 1). Only Google's standard OAuth `error` code and an HTTP
+ * status number are ever looked at — never a message, token or response
+ * body — and the stored text is one of nest-health.ts's fixed sentences.
+ */
+export function classifyNestRefreshFailure(err: unknown): string {
+  if (isNotConfiguredError(err)) {
+    return formatNestRefreshFailure("NEST_NOT_CONFIGURED");
+  }
+  if (err instanceof NestOAuthRefreshError) {
+    return err.diagnostic.oauthError === "invalid_grant"
+      ? formatNestRefreshFailure("NEST_AUTH_EXPIRED")
+      : formatNestRefreshFailure(
+          "NEST_PROVIDER_ERROR",
+          err.diagnostic.httpStatus,
+        );
+  }
+  if (err instanceof HttpRequestError) {
+    return formatNestRefreshFailure("NEST_PROVIDER_ERROR", err.status);
+  }
+  return formatNestRefreshFailure("NEST_REFRESH_FAILED");
+}
+
+/**
+ * One durable IntegrationSyncLog row per Nest refresh attempt, written only
+ * after the attempt has finished (never a RUNNING row, so it can't interact
+ * with the Sync Now/Discover overlap guard on the same connection). Needs an
+ * existing Nest connection row — never creates one. A logging failure is
+ * reported in the server log and never changes the refresh's own outcome.
+ */
+async function recordNestRefreshAttempt(args: {
+  startedAt: Date;
+  status: "SUCCEEDED" | "FAILED";
+  recordsProcessed?: number;
+  errorMessage?: string;
+}): Promise<void> {
+  try {
+    const connection = await prisma.integrationConnection.findUnique({
+      where: { provider: "NEST" },
+      select: { id: true },
+    });
+    if (!connection) return;
+    await prisma.integrationSyncLog.create({
+      data: {
+        integrationConnectionId: connection.id,
+        direction: "INBOUND",
+        entityType: NEST_REFRESH_LOG_ENTITY,
+        status: args.status,
+        startedAt: args.startedAt,
+        finishedAt: new Date(),
+        recordsProcessed: args.recordsProcessed ?? 0,
+        errorMessage: args.errorMessage ?? null,
+      },
+    });
+  } catch (logErr) {
+    logThermostatRefresh("nest_refresh_log_write_failed", {
+      error: logErr instanceof Error ? logErr.name : "unknown",
+    });
+  }
+}
+
+export interface NestRefreshHealthRecord {
+  lastAttempt: NestRefreshAttempt | null;
+  lastSucceededAt: string | null;
+}
+
+/** Read-only: the latest recorded Nest refresh attempt and last success, for /thermostats. Never creates rows or calls Google. */
+export async function getNestRefreshHealthRecord(
+  actor: AuthContext,
+): Promise<NestRefreshHealthRecord> {
+  await assertPermission(actor, "smart_devices:read");
+  const connection = await prisma.integrationConnection.findUnique({
+    where: { provider: "NEST" },
+    select: { id: true },
+  });
+  if (!connection) return { lastAttempt: null, lastSucceededAt: null };
+  const where = {
+    integrationConnectionId: connection.id,
+    entityType: NEST_REFRESH_LOG_ENTITY,
+  };
+  const [lastAttempt, lastSucceeded] = await Promise.all([
+    prisma.integrationSyncLog.findFirst({
+      where,
+      orderBy: { startedAt: "desc" },
+      select: { status: true, finishedAt: true, errorMessage: true },
+    }),
+    prisma.integrationSyncLog.findFirst({
+      where: { ...where, status: "SUCCEEDED" },
+      orderBy: { startedAt: "desc" },
+      select: { finishedAt: true },
+    }),
+  ]);
+  return {
+    lastAttempt: lastAttempt
+      ? {
+          status: lastAttempt.status,
+          finishedAt: lastAttempt.finishedAt?.toISOString() ?? null,
+          errorMessage: lastAttempt.errorMessage,
+        }
+      : null,
+    lastSucceededAt: lastSucceeded?.finishedAt?.toISOString() ?? null,
+  };
+}
+
 async function refreshNestProvider(
   actor: AuthContext,
 ): Promise<ProviderRefreshOutcome> {
@@ -358,8 +470,14 @@ async function refreshNestProvider(
     actorUserId: actor.userId,
     provider: "NEST",
   });
+  const startedAt = new Date();
   try {
     const result = await refreshNestTelemetry(actor);
+    await recordNestRefreshAttempt({
+      startedAt,
+      status: "SUCCEEDED",
+      recordsProcessed: result.refreshed,
+    });
     const outcome: ProviderRefreshOutcome = {
       provider: "NEST",
       status: "success",
@@ -372,6 +490,11 @@ async function refreshNestProvider(
     });
     return outcome;
   } catch (err) {
+    await recordNestRefreshAttempt({
+      startedAt,
+      status: "FAILED",
+      errorMessage: classifyNestRefreshFailure(err),
+    });
     if (isNotConfiguredError(err)) {
       logThermostatRefresh("provider_outcome", {
         actorUserId: actor.userId,

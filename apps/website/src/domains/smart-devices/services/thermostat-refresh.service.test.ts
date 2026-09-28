@@ -4,13 +4,23 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockTransaction, mockListDevices, mockListCieloDevices } = vi.hoisted(
-  () => ({
-    mockTransaction: vi.fn(),
-    mockListDevices: vi.fn(),
-    mockListCieloDevices: vi.fn(),
-  }),
-);
+const {
+  mockTransaction,
+  mockListDevices,
+  mockListCieloDevices,
+  mockConnectionFindUnique,
+  mockSyncLogCreate,
+  mockSyncLogFindFirst,
+} = vi.hoisted(() => ({
+  mockTransaction: vi.fn(),
+  mockListDevices: vi.fn(),
+  mockListCieloDevices: vi.fn(),
+  // Nest refresh health (2026-09-27). Default: no Nest connection row, so
+  // the pre-existing tests below run exactly as before (nothing recorded).
+  mockConnectionFindUnique: vi.fn(),
+  mockSyncLogCreate: vi.fn(),
+  mockSyncLogFindFirst: vi.fn(),
+}));
 
 vi.mock("@stayw/database", () => ({
   prisma: {
@@ -21,6 +31,11 @@ vi.mock("@stayw/database", () => ({
     smartDevice: {
       findMany: vi.fn(),
       update: vi.fn().mockResolvedValue({}),
+    },
+    integrationConnection: { findUnique: mockConnectionFindUnique },
+    integrationSyncLog: {
+      create: mockSyncLogCreate,
+      findFirst: mockSyncLogFindFirst,
     },
     $transaction: mockTransaction,
   },
@@ -61,9 +76,11 @@ vi.mock("@stayw/integrations/cielo", () => ({
 
 import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
+import { HttpRequestError } from "@stayw/integrations/core";
 import { NestOAuthRefreshError } from "@stayw/integrations/nest";
 
 import {
+  getNestRefreshHealthRecord,
   refreshCieloTelemetry,
   refreshNestTelemetry,
   refreshThermostats,
@@ -989,5 +1006,193 @@ describe("thermostat-refresh.service — diagnostic logging", () => {
         "refreshTokenHasWhitespace",
       ].sort(),
     );
+  });
+});
+
+describe("Nest refresh health — durable, sanitized IntegrationSyncLog per attempt (2026-09-27, Nest Phase 1)", () => {
+  const oauthError = (oauthError: string) =>
+    new NestOAuthRefreshError({
+      httpStatus: 400,
+      oauthError,
+      oauthErrorDescription: "Token has been expired or revoked.",
+      clientIdPresent: true,
+      clientSecretPresent: true,
+      refreshTokenPresent: true,
+      clientIdHasWhitespace: false,
+      clientSecretHasWhitespace: false,
+      refreshTokenHasWhitespace: false,
+    });
+
+  function loggedRow() {
+    expect(mockSyncLogCreate).toHaveBeenCalledTimes(1);
+    return mockSyncLogCreate.mock.calls[0]![0].data;
+  }
+
+  beforeEach(() => {
+    setNestEnv();
+    setCieloEnv();
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.providerDevice.findMany)
+      .mockReset()
+      .mockResolvedValue([
+        enabledProviderDevice("pd-1", "ext-1", "sd-1"),
+      ] as never);
+    vi.mocked(prisma.smartDevice.findMany).mockReset().mockResolvedValue([]);
+    mockListDevices.mockReset().mockResolvedValue([nestDevice("ext-1")]);
+    mockListCieloDevices.mockReset().mockResolvedValue([]);
+    mockTransaction
+      .mockReset()
+      .mockImplementation(async (arg) =>
+        Array.isArray(arg) ? Promise.all(arg) : arg,
+      );
+    mockConnectionFindUnique.mockReset().mockResolvedValue({ id: "conn-nest" });
+    mockSyncLogCreate.mockReset().mockResolvedValue({});
+    mockSyncLogFindFirst.mockReset();
+  });
+  afterEach(() => {
+    restoreEnv();
+    mockConnectionFindUnique.mockReset();
+  });
+
+  it("success is recorded as SUCCEEDED with the real refreshed count, on the Nest connection, as a finished row (never RUNNING)", async () => {
+    const result = await refreshThermostats(actor);
+
+    expect(result.providers[0]).toMatchObject({
+      provider: "NEST",
+      status: "success",
+      refreshed: 1,
+    });
+    expect(loggedRow()).toMatchObject({
+      integrationConnectionId: "conn-nest",
+      direction: "INBOUND",
+      entityType: "NestTelemetryRefresh",
+      status: "SUCCEEDED",
+      recordsProcessed: 1,
+      errorMessage: null,
+      finishedAt: expect.any(Date),
+    });
+    expect(mockConnectionFindUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { provider: "NEST" } }),
+    );
+  });
+
+  it("Google invalid_grant is recorded as NEST_AUTH_EXPIRED — sanitized: no Google description, no credential values", async () => {
+    mockListDevices.mockRejectedValue(oauthError("invalid_grant"));
+
+    await refreshThermostats(actor);
+
+    const row = loggedRow();
+    expect(row.status).toBe("FAILED");
+    expect(row.errorMessage).toMatch(/^NEST_AUTH_EXPIRED: /);
+    const stored = JSON.stringify(row);
+    for (const secret of [
+      "client-id",
+      "client-secret",
+      "refresh-token",
+      "project-id",
+      "Token has been expired",
+    ]) {
+      expect(stored).not.toContain(secret);
+    }
+  });
+
+  it("another OAuth error is a provider/API failure with only the HTTP status", async () => {
+    mockListDevices.mockRejectedValue(oauthError("invalid_client"));
+    await refreshThermostats(actor);
+    expect(loggedRow().errorMessage).toMatch(
+      /^NEST_PROVIDER_ERROR: .*\(HTTP 400\)$/,
+    );
+  });
+
+  it("an SDM API failure is NEST_PROVIDER_ERROR with its status — never the request path/project id", async () => {
+    mockListDevices.mockRejectedValue(
+      new HttpRequestError("/enterprises/project-id/devices", 503),
+    );
+    await refreshThermostats(actor);
+    const row = loggedRow();
+    expect(row.errorMessage).toMatch(/^NEST_PROVIDER_ERROR: .*\(HTTP 503\)$/);
+    expect(row.errorMessage).not.toContain("project-id");
+  });
+
+  it("missing credentials are recorded as NEST_NOT_CONFIGURED and the outcome stays not_configured", async () => {
+    delete process.env.NEST_REFRESH_TOKEN;
+    const result = await refreshThermostats(actor);
+    expect(result.providers[0]).toEqual({
+      provider: "NEST",
+      status: "not_configured",
+    });
+    expect(loggedRow().errorMessage).toMatch(/^NEST_NOT_CONFIGURED: /);
+  });
+
+  it("any other error is a generic NEST_REFRESH_FAILED — its raw message is never stored", async () => {
+    mockListDevices.mockRejectedValue(new Error("boom sensitive-detail-xyz"));
+    await refreshThermostats(actor);
+    const row = loggedRow();
+    expect(row.errorMessage).toMatch(/^NEST_REFRESH_FAILED: /);
+    expect(row.errorMessage).not.toContain("sensitive-detail-xyz");
+  });
+
+  it("a failing log write never changes the refresh outcome, and Cielo still runs", async () => {
+    mockSyncLogCreate.mockRejectedValue(new Error("db down"));
+    const result = await refreshThermostats(actor);
+    expect(result.providers.map((p) => [p.provider, p.status])).toEqual([
+      ["NEST", "success"],
+      ["CIELO", "success"],
+    ]);
+  });
+
+  it("records nothing (and changes nothing) when no Nest connection row exists", async () => {
+    mockConnectionFindUnique.mockResolvedValue(null);
+    const result = await refreshThermostats(actor);
+    expect(result.providers[0]).toMatchObject({ status: "success" });
+    expect(mockSyncLogCreate).not.toHaveBeenCalled();
+  });
+
+  it("Cielo is unchanged: no log row is written for Cielo, and its outcome shape is the same", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValue([
+      existingCieloSmartDevice("sd-c1", "mac-1"),
+    ]);
+    mockListCieloDevices.mockResolvedValue([cieloDevice("mac-1")]);
+    const result = await refreshThermostats(actor);
+    expect(result.providers[1]).toEqual({
+      provider: "CIELO",
+      status: "success",
+      refreshed: 1,
+      notReturnedByProvider: 0,
+    });
+    expect(mockSyncLogCreate).toHaveBeenCalledTimes(1);
+    expect(loggedRow().entityType).toBe("NestTelemetryRefresh");
+  });
+
+  it("getNestRefreshHealthRecord is read-only, needs smart_devices:read, and only looks at Nest refresh rows", async () => {
+    mockSyncLogFindFirst
+      .mockResolvedValueOnce({
+        status: "FAILED",
+        finishedAt: new Date("2026-09-27T20:00:00.000Z"),
+        errorMessage: "NEST_AUTH_EXPIRED: x",
+      })
+      .mockResolvedValueOnce({
+        finishedAt: new Date("2026-09-10T19:58:00.000Z"),
+      });
+
+    const record = await getNestRefreshHealthRecord(actor);
+
+    expect(record).toEqual({
+      lastAttempt: {
+        status: "FAILED",
+        finishedAt: "2026-09-27T20:00:00.000Z",
+        errorMessage: "NEST_AUTH_EXPIRED: x",
+      },
+      lastSucceededAt: "2026-09-10T19:58:00.000Z",
+    });
+    expect(assertPermission).toHaveBeenCalledWith(actor, "smart_devices:read");
+    for (const call of mockSyncLogFindFirst.mock.calls) {
+      expect(call[0].where).toMatchObject({
+        integrationConnectionId: "conn-nest",
+        entityType: "NestTelemetryRefresh",
+      });
+    }
+    expect(mockSyncLogCreate).not.toHaveBeenCalled();
+    expect(mockListDevices).not.toHaveBeenCalled();
   });
 });

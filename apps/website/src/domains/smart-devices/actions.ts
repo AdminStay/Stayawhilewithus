@@ -21,6 +21,7 @@ import {
   setNestHeatCoolRangeSchema,
   setNestHeatSetpointSchema,
   setNestModeSchema,
+  setThermostatControlEnabledSchema,
 } from "./schemas/nest-commands.schema";
 import {
   mapProviderDeviceToPropertySchema,
@@ -66,6 +67,10 @@ import {
   type DiscoverySyncResult,
 } from "./services/provider-devices.service";
 import { retireSmartDevice } from "./services/smart-devices.service";
+import {
+  setThermostatControlEnabled,
+  type SetThermostatControlResult,
+} from "./services/thermostat-control-settings.service";
 import {
   logThermostatRefresh,
   refreshThermostats,
@@ -389,6 +394,23 @@ export async function setLockControlEnabledAction(
   });
   const result = await setLockControlEnabled(actor, enabled);
   revalidatePath(LOCKS_PAGE_PATH);
+  return result;
+}
+
+export type SetThermostatControlActionState =
+  { status: "idle" } | SetThermostatControlResult;
+
+/** Admin kill switch for all remote Nest thermostat commands (2026-09-27, default OFF). RBAC (global thermostats:manage) and the audit entry live in setThermostatControlEnabled(). */
+export async function setThermostatControlEnabledAction(
+  _prevState: SetThermostatControlActionState,
+  formData: FormData,
+): Promise<SetThermostatControlActionState> {
+  const actor = await getCurrentUser();
+  const { enabled } = setThermostatControlEnabledSchema.parse({
+    enabled: formData.get("enabled"),
+  });
+  const result = await setThermostatControlEnabled(actor, enabled);
+  revalidatePath(THERMOSTATS_PAGE_PATH);
   return result;
 }
 

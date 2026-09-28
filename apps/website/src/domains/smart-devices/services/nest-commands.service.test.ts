@@ -9,7 +9,9 @@ const {
   mockSetFanTimer,
   mockGetDevice,
   mockRecordAudit,
+  mockReadControl,
 } = vi.hoisted(() => ({
+  mockReadControl: vi.fn(),
   mockTransaction: vi.fn(),
   mockSetHeatSetpoint: vi.fn(),
   mockSetCoolSetpoint: vi.fn(),
@@ -53,12 +55,22 @@ vi.mock("@stayw/integrations/nest", async (importOriginal) => {
   };
 });
 
+// Nest control kill switch (2026-09-27). The existing tests below model the
+// switch being ON (so they keep exercising the rest of the command path);
+// the dedicated "kill switch OFF" block at the bottom covers the default.
+vi.mock("./thermostat-control-settings.service", () => ({
+  readThermostatControlSetting: mockReadControl,
+  THERMOSTAT_CONTROL_OFF_REASON:
+    "Remote Nest thermostat control is OFF. No thermostat command can be sent until an admin turns it on.",
+}));
+
 vi.mock("@/platform/audit/record-audit", () => ({
   recordAudit: mockRecordAudit,
 }));
 
 import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
+import { NestClient } from "@stayw/integrations/nest";
 
 import { sendNestThermostatCommand } from "./nest-commands.service";
 
@@ -151,6 +163,11 @@ describe("sendNestThermostatCommand", () => {
     mockSetThermostatMode.mockReset().mockResolvedValue(undefined);
     mockSetFanTimer.mockReset().mockResolvedValue(undefined);
     mockRecordAudit.mockClear();
+    mockReadControl.mockReset().mockResolvedValue({
+      enabled: true,
+      updatedAt: null,
+      updatedByUserId: null,
+    });
   });
 
   afterEach(() => {
@@ -619,5 +636,102 @@ describe("sendNestThermostatCommand", () => {
     const auditCall = mockRecordAudit.mock.calls[0]![0];
     const serialized = JSON.stringify(auditCall);
     expect(serialized).not.toMatch(/access_token|refresh_token|client_secret/i);
+  });
+});
+
+describe("sendNestThermostatCommand — global kill switch OFF (2026-09-27, Nest Phase 1)", () => {
+  const ALL_COMMANDS = [
+    { type: "SET_HEAT", heatCelsius: 20 },
+    { type: "SET_COOL", coolCelsius: 24 },
+    { type: "SET_RANGE", heatCelsius: 19, coolCelsius: 25 },
+    { type: "SET_MODE", mode: "OFF" },
+    { type: "SET_FAN", timerMode: "ON", durationSeconds: 900 },
+  ] as const;
+
+  beforeEach(() => {
+    process.env.NEST_CLIENT_ID = "test-client-id";
+    process.env.NEST_CLIENT_SECRET = "test-client-secret";
+    process.env.NEST_PROJECT_ID = "test-project-id";
+    process.env.NEST_REFRESH_TOKEN = "test-refresh-token";
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.smartDevice.findUnique)
+      .mockReset()
+      .mockResolvedValue(mappedEnabledDevice(FULLY_CAPABLE_TRAITS) as never);
+    vi.mocked(NestClient).mockClear();
+    mockTransaction.mockReset();
+    mockGetDevice.mockReset();
+    for (const m of [
+      mockSetHeatSetpoint,
+      mockSetCoolSetpoint,
+      mockSetHeatCoolRange,
+      mockSetThermostatMode,
+      mockSetFanTimer,
+    ]) {
+      m.mockReset();
+    }
+    mockRecordAudit.mockClear();
+    mockReadControl.mockReset().mockResolvedValue({
+      enabled: false,
+      updatedAt: null,
+      updatedByUserId: null,
+    });
+  });
+
+  it.each(ALL_COMMANDS)(
+    "refuses $type before the duplicate-command lock, before the Nest client exists and before any Google call",
+    async (command) => {
+      const result = await sendNestThermostatCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        command: command as never,
+      });
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason: expect.stringContaining(
+          "Remote Nest thermostat control is OFF",
+        ),
+      });
+      expect(NestClient).not.toHaveBeenCalled();
+      expect(mockGetDevice).not.toHaveBeenCalled();
+      expect(mockSetHeatSetpoint).not.toHaveBeenCalled();
+      expect(mockSetCoolSetpoint).not.toHaveBeenCalled();
+      expect(mockSetHeatCoolRange).not.toHaveBeenCalled();
+      expect(mockSetThermostatMode).not.toHaveBeenCalled();
+      expect(mockSetFanTimer).not.toHaveBeenCalled();
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(prisma.smartDevice.update).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            commandInProgressAt: expect.anything(),
+          }),
+        }),
+      );
+    },
+  );
+
+  it("audits the refusal as REJECTED (kill switch), with no secret in the entry", async () => {
+    await sendNestThermostatCommand(actor, {
+      smartDeviceId: SMART_DEVICE_ID,
+      command: { type: "SET_MODE", mode: "OFF" },
+    });
+
+    expect(mockRecordAudit).toHaveBeenCalledTimes(1);
+    const entry = JSON.stringify(mockRecordAudit.mock.calls[0]);
+    expect(entry).toContain("REJECTED");
+    expect(entry).toContain("kill switch");
+    expect(entry).not.toMatch(/test-refresh-token|test-client-secret/);
+  });
+
+  it("RBAC still runs first: a user without thermostats:manage is denied, and the switch is never even read", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(new Error("Forbidden"));
+
+    await expect(
+      sendNestThermostatCommand(actor, {
+        smartDeviceId: SMART_DEVICE_ID,
+        command: { type: "SET_MODE", mode: "OFF" },
+      }),
+    ).rejects.toThrow("Forbidden");
+    expect(mockReadControl).not.toHaveBeenCalled();
+    expect(NestClient).not.toHaveBeenCalled();
   });
 });

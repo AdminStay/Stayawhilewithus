@@ -21,6 +21,7 @@ const {
   mockLogLockSpotRefresh,
   mockRetireSmartDevice,
   mockSetLockControlEnabled,
+  mockSetThermostatControlEnabled,
   mockResetAugustLock,
   mockSetHold,
   mockClearHold,
@@ -28,6 +29,7 @@ const {
   mockSetHold: vi.fn(),
   mockClearHold: vi.fn(),
   mockSetLockControlEnabled: vi.fn(),
+  mockSetThermostatControlEnabled: vi.fn(),
   mockResetAugustLock: vi.fn(),
   mockRevalidatePath: vi.fn(),
   mockDiscoverNestDevices: vi.fn(),
@@ -69,6 +71,10 @@ vi.mock("./services/nest-commands.service", () => ({
 vi.mock("./services/august-commands.service", () => ({
   sendAugustLockCommand: mockSendAugustLockCommand,
   resetAugustLockAfterPhysicalCheck: mockResetAugustLock,
+}));
+
+vi.mock("./services/thermostat-control-settings.service", () => ({
+  setThermostatControlEnabled: mockSetThermostatControlEnabled,
 }));
 
 vi.mock("./services/lock-control-settings.service", () => ({
@@ -113,6 +119,7 @@ import {
   sendAugustLockCommandAction,
   setLockControlEnabledAction,
   setLockOperationalHoldAction,
+  setThermostatControlEnabledAction,
 } from "./actions";
 
 const IDLE = { status: "idle" as const };
@@ -1145,5 +1152,59 @@ describe("lock operational hold actions (2026-09-26)", () => {
       { userId: "user-1" },
       { smartDeviceId: DEVICE, note: "Replaced and checked on site." },
     );
+  });
+});
+
+describe("setThermostatControlEnabledAction (2026-09-27, Nest Phase 1)", () => {
+  beforeEach(() => {
+    mockSetThermostatControlEnabled.mockReset();
+    mockRevalidatePath.mockClear();
+  });
+
+  it.each([
+    ["false", false],
+    ["true", true],
+  ])(
+    "passes enabled=%s through as a boolean and revalidates /thermostats",
+    async (raw, expected) => {
+      mockSetThermostatControlEnabled.mockResolvedValueOnce({
+        status: "success",
+        enabled: expected,
+      });
+      const formData = new FormData();
+      formData.set("enabled", raw);
+
+      const result = await setThermostatControlEnabledAction(
+        { status: "idle" },
+        formData,
+      );
+
+      expect(mockSetThermostatControlEnabled).toHaveBeenCalledWith(
+        { userId: "user-1" },
+        expected,
+      );
+      expect(result).toEqual({ status: "success", enabled: expected });
+      expect(mockRevalidatePath).toHaveBeenCalledWith("/thermostats");
+    },
+  );
+
+  it("rejects a malformed value without calling the service", async () => {
+    const formData = new FormData();
+    formData.set("enabled", "yes");
+    await expect(
+      setThermostatControlEnabledAction({ status: "idle" }, formData),
+    ).rejects.toThrow();
+    expect(mockSetThermostatControlEnabled).not.toHaveBeenCalled();
+  });
+
+  it("does not touch the August lock kill switch", async () => {
+    mockSetThermostatControlEnabled.mockResolvedValueOnce({
+      status: "success",
+      enabled: false,
+    });
+    const formData = new FormData();
+    formData.set("enabled", "false");
+    await setThermostatControlEnabledAction({ status: "idle" }, formData);
+    expect(mockSetLockControlEnabled).not.toHaveBeenCalled();
   });
 });

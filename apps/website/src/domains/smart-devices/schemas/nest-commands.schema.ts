@@ -51,3 +51,8 @@ export const setNestFanSchema = z.object({
   durationMinutes: z.number().int().min(1).max(720).optional(),
 });
 export type SetNestFanInput = z.infer<typeof setNestFanSchema>;
+
+/** Admin kill switch for all remote Nest thermostat commands (2026-09-27). */
+export const setThermostatControlEnabledSchema = z.object({
+  enabled: z.enum(["true", "false"]).transform((v) => v === "true"),
+});

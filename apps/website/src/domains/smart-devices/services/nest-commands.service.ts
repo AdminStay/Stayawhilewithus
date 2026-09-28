@@ -11,6 +11,10 @@ import {
 } from "@stayw/integrations/nest";
 
 import { toSmartDeviceMetadata } from "./provider-devices.service";
+import {
+  readThermostatControlSetting,
+  THERMOSTAT_CONTROL_OFF_REASON,
+} from "./thermostat-control-settings.service";
 
 import { recordAudit } from "@/platform/audit/record-audit";
 
@@ -140,6 +144,23 @@ export async function sendNestThermostatCommand(
   await assertPermission(actor, "thermostats:manage", {
     propertyId: smartDevice.propertyId,
   });
+
+  // Global kill switch (2026-09-27, Nest Phase 1), default OFF: refused
+  // here, before the duplicate-command lock, before the Nest client is even
+  // built and before any Google request (capability read or command).
+  const control = await readThermostatControlSetting();
+  if (!control.enabled) {
+    await recordAuditSafely({
+      actor,
+      smartDeviceId: smartDevice.id,
+      propertyId: smartDevice.propertyId,
+      command: input.command,
+      previousMetadata: smartDevice.metadata,
+      result: "REJECTED",
+      errorDetail: "Blocked: remote thermostat control is OFF (kill switch).",
+    });
+    return { status: "rejected", reason: THERMOSTAT_CONTROL_OFF_REASON };
+  }
 
   // Atomic duplicate-command guard: acquire the advisory lock, THEN read
   // the current marker from inside the same transaction (never the

@@ -221,27 +221,53 @@ describe("isThermostatVisible", () => {
 });
 
 describe("canRenderNestControls", () => {
+  it("2026-09-27: never renders while the Nest control kill switch is OFF, even for a manager of a device with traits", () => {
+    expect(
+      canRenderNestControls({
+        hasRawTraits: true,
+        canManage: true,
+        controlEnabled: false,
+      }),
+    ).toBe(false);
+  });
+
   it("renders when the device has real trait data AND the actor has thermostats:manage for its property", () => {
-    expect(canRenderNestControls({ hasRawTraits: true, canManage: true })).toBe(
-      true,
-    );
+    expect(
+      canRenderNestControls({
+        hasRawTraits: true,
+        canManage: true,
+        controlEnabled: true,
+      }),
+    ).toBe(true);
   });
 
   it("does not render when the actor lacks thermostats:manage, even if the device has trait data", () => {
     expect(
-      canRenderNestControls({ hasRawTraits: true, canManage: false }),
+      canRenderNestControls({
+        hasRawTraits: true,
+        canManage: false,
+        controlEnabled: true,
+      }),
     ).toBe(false);
   });
 
   it("does not render when there's no trait data, even if the actor has thermostats:manage", () => {
     expect(
-      canRenderNestControls({ hasRawTraits: false, canManage: true }),
+      canRenderNestControls({
+        hasRawTraits: false,
+        canManage: true,
+        controlEnabled: true,
+      }),
     ).toBe(false);
   });
 
   it("does not render when neither condition holds", () => {
     expect(
-      canRenderNestControls({ hasRawTraits: false, canManage: false }),
+      canRenderNestControls({
+        hasRawTraits: false,
+        canManage: false,
+        controlEnabled: true,
+      }),
     ).toBe(false);
   });
 });

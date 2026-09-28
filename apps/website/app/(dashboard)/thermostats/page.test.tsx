@@ -2,9 +2,22 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockHasPermission, mockListSmartDevices } = vi.hoisted(() => ({
+const {
+  mockHasPermission,
+  mockListSmartDevices,
+  mockGetControl,
+  mockGetNestHealth,
+  listProps,
+  switchProps,
+  bannerProps,
+} = vi.hoisted(() => ({
   mockHasPermission: vi.fn(),
   mockListSmartDevices: vi.fn(),
+  mockGetControl: vi.fn(),
+  mockGetNestHealth: vi.fn(),
+  listProps: [] as Record<string, unknown>[],
+  switchProps: [] as Record<string, unknown>[],
+  bannerProps: [] as Record<string, unknown>[],
 }));
 
 vi.mock("@/platform/auth/get-current-user", () => ({
@@ -26,10 +39,39 @@ vi.mock("@/domains/smart-devices/services/smart-devices.service", () => ({
 // app/(dashboard)/properties/ownerrez/page.test.tsx.
 vi.mock("@/domains/smart-devices/actions", () => ({
   refreshThermostatsAction: vi.fn(),
+  setThermostatControlEnabledAction: vi.fn(),
 }));
 
 vi.mock("@/domains/smart-devices/components/ThermostatsList", () => ({
-  ThermostatsList: () => null,
+  ThermostatsList: (props: Record<string, unknown>) => {
+    listProps.push(props);
+    return null;
+  },
+}));
+
+// Nest Phase 1 (2026-09-27): the new banners are captured, not rendered,
+// so the Refresh-form regression test below still sees exactly one form.
+vi.mock(
+  "@/domains/smart-devices/components/ThermostatControlKillSwitch",
+  () => ({
+    ThermostatControlKillSwitch: (props: Record<string, unknown>) => {
+      switchProps.push(props);
+      return null;
+    },
+  }),
+);
+vi.mock("@/domains/smart-devices/components/NestHealthBanner", () => ({
+  NestHealthBanner: (props: Record<string, unknown>) => {
+    bannerProps.push(props);
+    return null;
+  },
+}));
+vi.mock(
+  "@/domains/smart-devices/services/thermostat-control-settings.service",
+  () => ({ getThermostatControlSetting: mockGetControl }),
+);
+vi.mock("@/domains/smart-devices/services/thermostat-refresh.service", () => ({
+  getNestRefreshHealthRecord: mockGetNestHealth,
 }));
 
 import ThermostatsPage from "./page";
@@ -39,6 +81,17 @@ afterEach(cleanup);
 beforeEach(() => {
   mockListSmartDevices.mockReset().mockResolvedValue([]);
   mockHasPermission.mockReset();
+  mockGetControl.mockReset().mockResolvedValue({
+    enabled: false,
+    updatedAt: null,
+    updatedByUserId: null,
+  });
+  mockGetNestHealth
+    .mockReset()
+    .mockResolvedValue({ lastAttempt: null, lastSucceededAt: null });
+  listProps.length = 0;
+  switchProps.length = 0;
+  bannerProps.length = 0;
 });
 
 describe("ThermostatsPage — Refresh button authorization", () => {
@@ -104,5 +157,83 @@ describe("ThermostatsPage — Refresh button authorization", () => {
     const forms = container.querySelectorAll("form");
     expect(forms.length).toBe(1);
     expect(forms[0]).toBe(button.form);
+  });
+});
+
+describe("ThermostatsPage — Nest Phase 1 safety + freshness wiring (2026-09-27)", () => {
+  const HOUR = 60 * 60 * 1000;
+  const nest = (id: string, readingAgoMs: number | null) => ({
+    id,
+    name: id,
+    provider: "NEST",
+    deviceType: "THERMOSTAT",
+    propertyId: "p1",
+    property: { name: "P" },
+    metadata:
+      readingAgoMs === null
+        ? {}
+        : {
+            telemetryUpdatedAt: new Date(
+              Date.now() - readingAgoMs,
+            ).toISOString(),
+          },
+  });
+
+  it("passes the kill switch state (default OFF) to both the switch banner and the list — admins don't get live controls", async () => {
+    mockHasPermission.mockResolvedValue(true);
+    render(await ThermostatsPage());
+
+    expect(switchProps[0]).toMatchObject({ enabled: false, canToggle: true });
+    expect(listProps[0]).toMatchObject({ controlEnabled: false });
+    expect(mockHasPermission).toHaveBeenCalledWith(
+      { userId: "user-1" },
+      "thermostats:manage",
+    );
+  });
+
+  it("marks each reading older than 24 h (or missing) stale per row; the banner goes by the newest Nest reading (fresh here, so ok)", async () => {
+    mockHasPermission.mockResolvedValue(false);
+    mockListSmartDevices.mockResolvedValue([
+      nest("fresh", 2 * HOUR),
+      nest("old", 17 * 24 * HOUR),
+      nest("none", null),
+    ]);
+    render(await ThermostatsPage());
+
+    expect(listProps[0]!.staleReadingIds).toEqual(["old", "none"]);
+    expect(bannerProps[0]).toMatchObject({
+      health: expect.objectContaining({ state: "ok" }),
+    });
+  });
+
+  it("when every Nest reading is older than 24 h the banner says stale — before any refresh has ever been recorded", async () => {
+    mockHasPermission.mockResolvedValue(false);
+    mockListSmartDevices.mockResolvedValue([
+      nest("a", 17 * 24 * HOUR),
+      nest("b", 17 * 24 * HOUR),
+    ]);
+    render(await ThermostatsPage());
+
+    expect(bannerProps[0]).toMatchObject({
+      health: expect.objectContaining({ state: "stale" }),
+    });
+  });
+
+  it("a recorded Google authorization failure puts the banner in needs_reauthorization", async () => {
+    mockHasPermission.mockResolvedValue(false);
+    mockListSmartDevices.mockResolvedValue([nest("a", 17 * 24 * HOUR)]);
+    mockGetNestHealth.mockResolvedValue({
+      lastAttempt: {
+        status: "FAILED",
+        finishedAt: new Date().toISOString(),
+        errorMessage: "NEST_AUTH_EXPIRED: Google authorization expired.",
+      },
+      lastSucceededAt: null,
+    });
+    render(await ThermostatsPage());
+
+    expect(bannerProps[0]).toMatchObject({
+      health: expect.objectContaining({ state: "needs_reauthorization" }),
+    });
   });
 });

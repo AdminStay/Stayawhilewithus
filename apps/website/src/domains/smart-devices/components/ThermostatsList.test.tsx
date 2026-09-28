@@ -158,6 +158,7 @@ describe("ThermostatsList", () => {
           }),
         ]}
         canManageByPropertyId={{ "prop-can-manage": true }}
+        controlEnabled
       />,
     );
 
@@ -180,6 +181,7 @@ describe("ThermostatsList", () => {
           }),
         ]}
         canManageByPropertyId={{ "prop-can-manage": true }}
+        controlEnabled
       />,
     );
 
@@ -222,6 +224,7 @@ describe("ThermostatsList", () => {
           }),
         ]}
         canManageByPropertyId={{ "prop-can-manage": true }}
+        controlEnabled
       />,
     );
 
@@ -314,5 +317,89 @@ describe("ThermostatsList", () => {
 
     expect(screen.queryByText("REAL CONTROLS")).toBeNull();
     expect(screen.queryByText(/View only/)).toBeNull();
+  });
+});
+
+describe("ThermostatsList — Nest Phase 1: kill switch + stale readings (2026-09-27)", () => {
+  const managedNest = makeThermostat({
+    id: "a",
+    name: "Living Room",
+    propertyId: "prop-can-manage",
+    providerDevice: { enabled: true, rawMetadata: { rawTraits: {} } },
+  });
+
+  it("with the kill switch OFF (the default), a manager gets NO actionable control — no Controls button, no command forms, a clear reason instead", () => {
+    render(
+      <ThermostatsList
+        thermostats={[managedNest]}
+        canManageByPropertyId={{ "prop-can-manage": true }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /controls/i })).toBeNull();
+    expect(screen.queryByText("REAL CONTROLS")).toBeNull();
+    expect(screen.getByText("Remote control is OFF")).toBeTruthy();
+    expect(screen.queryByText(/View only/)).toBeNull();
+  });
+
+  it("an explicit controlEnabled={false} behaves the same", () => {
+    render(
+      <ThermostatsList
+        thermostats={[managedNest]}
+        canManageByPropertyId={{ "prop-can-manage": true }}
+        controlEnabled={false}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /controls/i })).toBeNull();
+  });
+
+  it("a non-manager still sees 'View only' whatever the switch says", () => {
+    render(
+      <ThermostatsList
+        thermostats={[
+          makeThermostat({
+            propertyId: "prop-x",
+            providerDevice: { enabled: true, rawMetadata: { rawTraits: {} } },
+          }),
+        ]}
+        canManageByPropertyId={{ "prop-x": false }}
+        controlEnabled
+      />,
+    );
+    expect(screen.getByText(/View only/)).toBeTruthy();
+  });
+
+  it("marks rows listed as stale with 'Stale reading' and the reading time; fresh rows get no badge", () => {
+    render(
+      <ThermostatsList
+        thermostats={[
+          makeThermostat({
+            id: "old",
+            name: "Old One",
+            metadata: { telemetryUpdatedAt: "2026-09-10T19:58:00.000Z" },
+          }),
+          makeThermostat({ id: "new", name: "New One", metadata: {} }),
+        ]}
+        canManageByPropertyId={{}}
+        staleReadingIds={["old"]}
+      />,
+    );
+    const badges = screen.getAllByText(/Stale reading/);
+    expect(badges).toHaveLength(1);
+    expect(badges[0]!.textContent).toContain(
+      formatTimestamp(new Date("2026-09-10T19:58:00.000Z")),
+    );
+  });
+
+  it("a stale row with no reading at all says 'none recorded'", () => {
+    render(
+      <ThermostatsList
+        thermostats={[makeThermostat({ id: "x", metadata: {} })]}
+        canManageByPropertyId={{}}
+        staleReadingIds={["x"]}
+      />,
+    );
+    expect(screen.getByText(/Stale reading/).textContent).toContain(
+      "none recorded",
+    );
   });
 });

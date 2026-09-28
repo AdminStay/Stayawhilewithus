@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Badge,
   cx,
   EmptyState,
   Input,
@@ -93,11 +94,18 @@ function connectivityLabel(status: string): "Online" | "Offline" | "Unknown" {
 export function ThermostatsList({
   thermostats,
   canManageByPropertyId,
+  controlEnabled = false,
+  staleReadingIds = [],
 }: {
   thermostats: ThermostatWithProperty[];
   /** Resolved server-side per property — see /thermostats/page.tsx. */
   canManageByPropertyId: Record<string, boolean>;
+  /** Global Nest thermostat-control kill switch (2026-09-27). Defaults to OFF: no controls unless the page explicitly passes true. */
+  controlEnabled?: boolean;
+  /** Rows whose provider reading is older than 24 h (or missing), computed server-side so server and client render identically. */
+  staleReadingIds?: string[];
 }) {
+  const staleIds = useMemo(() => new Set(staleReadingIds), [staleReadingIds]);
   const [filters, setFilters] = useState<ThermostatFilterState>(
     DEFAULT_THERMOSTAT_FILTER_STATE,
   );
@@ -252,7 +260,12 @@ export function ThermostatsList({
               // collapse/expand affordance.
               const hasLiveControls =
                 Boolean(rawTraits) &&
-                canRenderNestControls({ hasRawTraits: true, canManage });
+                canRenderNestControls({
+                  hasRawTraits: true,
+                  canManage,
+                  controlEnabled,
+                });
+              const readingStale = staleIds.has(thermostat.id);
               const isExpanded = expandedIds.has(thermostat.id);
               const lastTelemetryTitle = `Last telemetry: ${formatTimestamp(telemetryUpdatedAt)}`;
 
@@ -310,6 +323,18 @@ export function ThermostatsList({
                       <span title={lastTelemetryTitle}>
                         {formatTimestamp(thermostat.updatedAt)}
                       </span>
+                      {readingStale && (
+                        <Badge
+                          tone="warning"
+                          className="mt-1 block w-fit text-[10px]"
+                          title={lastTelemetryTitle}
+                        >
+                          Stale reading ·{" "}
+                          {telemetryUpdatedAt
+                            ? formatTimestamp(telemetryUpdatedAt)
+                            : "none recorded"}
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell className={CELL_CLASS}>
                       {hasLiveControls ? (
@@ -327,6 +352,10 @@ export function ThermostatsList({
                           )}
                           Controls
                         </button>
+                      ) : rawTraits && canManage && !controlEnabled ? (
+                        <span className="text-ink-faint">
+                          Remote control is OFF
+                        </span>
                       ) : rawTraits ? (
                         <span className="text-ink-faint">
                           View only — no permission to control this device

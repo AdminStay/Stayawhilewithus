@@ -1,13 +1,25 @@
 import { hasPermission } from "@stayw/auth";
 import { PageHeader } from "@stayw/ui";
 
-import { refreshThermostatsAction } from "@/domains/smart-devices/actions";
+import {
+  refreshThermostatsAction,
+  setThermostatControlEnabledAction,
+} from "@/domains/smart-devices/actions";
+import { NestHealthBanner } from "@/domains/smart-devices/components/NestHealthBanner";
 import { RefreshThermostatsButton } from "@/domains/smart-devices/components/RefreshThermostatsButton";
+import { ThermostatControlKillSwitch } from "@/domains/smart-devices/components/ThermostatControlKillSwitch";
 import { ThermostatsList } from "@/domains/smart-devices/components/ThermostatsList";
+import {
+  isThermostatReadingStale,
+  summarizeNestHealth,
+} from "@/domains/smart-devices/lib/nest-health";
+import { getTelemetryUpdatedAt } from "@/domains/smart-devices/lib/thermostat-metadata";
 import {
   isThermostatVisible,
   listSmartDevices,
 } from "@/domains/smart-devices/services/smart-devices.service";
+import { getThermostatControlSetting } from "@/domains/smart-devices/services/thermostat-control-settings.service";
+import { getNestRefreshHealthRecord } from "@/domains/smart-devices/services/thermostat-refresh.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
 export default async function ThermostatsPage() {
@@ -41,6 +53,31 @@ export default async function ThermostatsPage() {
   // button that would just fail with "ForbiddenError" on click, it doesn't
   // relax or replace the real server-side enforcement.
   const canRefresh = await hasPermission(actor, "smart_devices:update");
+
+  // Nest Phase 1 (2026-09-27): all read-only — nothing here calls Google.
+  // Kill switch (default OFF), recorded refresh health, and per-row reading
+  // freshness computed once here so server and client render identically.
+  const thermostatControl = await getThermostatControlSetting(actor);
+  const canToggleThermostatControl = await hasPermission(
+    actor,
+    "thermostats:manage",
+  );
+  const nestRefresh = await getNestRefreshHealthRecord(actor);
+  const now = new Date();
+  const nestThermostats = thermostats.filter((t) => t.provider === "NEST");
+  const newestNestReading = nestThermostats
+    .map((t) => getTelemetryUpdatedAt(t))
+    .filter((d): d is Date => d !== null)
+    .sort((a, b) => b.getTime() - a.getTime())[0];
+  const nestHealth = summarizeNestHealth({
+    ...nestRefresh,
+    newestReadingAt: newestNestReading?.toISOString() ?? null,
+    nestThermostatCount: nestThermostats.length,
+    now,
+  });
+  const staleReadingIds = thermostats
+    .filter((t) => isThermostatReadingStale(getTelemetryUpdatedAt(t), now))
+    .map((t) => t.id);
 
   // TEMPORARY DIAGNOSTIC — added 2026-08-24, remove after the Nest
   // permission discrepancy is resolved. Server-side only, never rendered
@@ -83,9 +120,19 @@ export default async function ThermostatsPage() {
           <RefreshThermostatsButton action={refreshThermostatsAction} />
         </div>
       )}
+      <div className="mb-4 space-y-3">
+        <NestHealthBanner health={nestHealth} />
+        <ThermostatControlKillSwitch
+          enabled={thermostatControl.enabled}
+          canToggle={canToggleThermostatControl}
+          action={setThermostatControlEnabledAction}
+        />
+      </div>
       <ThermostatsList
         thermostats={thermostats}
         canManageByPropertyId={canManageByPropertyId}
+        controlEnabled={thermostatControl.enabled}
+        staleReadingIds={staleReadingIds}
       />
     </div>
   );
