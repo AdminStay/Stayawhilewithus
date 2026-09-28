@@ -573,12 +573,11 @@ export async function listNotionListings(
 
 /**
  * Sorts already-fetched real bookings to surface upcoming ones first (soonest
- * arrival first), falling back to the most recently arrived past bookings if
- * there are no upcoming ones — client-side re-ordering of real data, not a
- * server-side filter. OwnerRez's v2 `since_utc` booking-list parameter isn't
- * confirmed to filter by arrival date rather than last-modified date, so it
- * isn't used here for that purpose; guessing at unverified query-param
- * semantics would risk silently returning the wrong bookings.
+ * arrival first), falling back to the most recently arrived bookings if
+ * there are no upcoming ones — client-side re-ordering of real data.
+ * (OwnerRez documents `since_utc` as "created or changed since", so it can't
+ * select upcoming stays; the stay-window retrieval below uses the documented
+ * `from` = "depart on or after" filter instead.)
  */
 function pickRelevantBookings(
   bookings: OwnerrezBooking[],
@@ -618,7 +617,13 @@ export async function getOwnerRezHighlights(
 
   try {
     const client = new OwnerrezClient({ username, token });
-    const bookings = await client.listBookings();
+    // 2026-09-28: stay window (every booking departing yesterday or later,
+    // however long ago it was booked). The old bare listBookings() only saw
+    // bookings created/changed in the last 90 days, so a long-lead upcoming
+    // stay could be missing from "upcoming bookings". Recent-change history
+    // isn't shown here, so the 90-day query isn't needed (and would cost
+    // extra OwnerRez requests on every dashboard load).
+    const { bookings } = await client.listStayWindowBookings();
     return {
       configured: true,
       ok: true,

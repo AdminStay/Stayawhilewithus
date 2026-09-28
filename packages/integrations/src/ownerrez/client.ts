@@ -1,6 +1,6 @@
 import type { SyncDirection } from "@stayw/database/enums";
 
-import { HttpClient, NotImplementedError } from "../core";
+import { HttpClient, HttpRequestError, NotImplementedError } from "../core";
 import type {
   BaseIntegrationClient,
   IntegrationCapability,
@@ -153,6 +153,25 @@ function defaultSinceUtc(): string {
  * so there's nothing correct to implement yet — that's the actual boundary
  * this client can't cross without more information.
  */
+/**
+ * OwnerRez's documented API limit is 300 requests per 5 minutes (see
+ * HANDOFF.md's researched per-provider limits). A client created with a
+ * `requestBudget` (2026-09-28, the reservation sync) refuses to send more
+ * than that many requests in its lifetime, and after an HTTP 429 refuses
+ * every further request — no sleeps, no retries. Callers treat this error
+ * as "defer the rest to a later run", never as data.
+ */
+export class OwnerrezRequestBudgetError extends Error {
+  constructor(readonly reason: "BUDGET_EXHAUSTED" | "RATE_LIMITED") {
+    super(
+      reason === "RATE_LIMITED"
+        ? "OwnerRez rate limit reached (HTTP 429) — no further OwnerRez requests this run."
+        : "OwnerRez request budget for this run reached — no further OwnerRez requests this run.",
+    );
+    this.name = "OwnerrezRequestBudgetError";
+  }
+}
+
 export class OwnerrezClient
   implements BaseIntegrationClient, SyncCapable, WebhookReceivable
 {
@@ -163,8 +182,15 @@ export class OwnerrezClient
   ] as const satisfies readonly IntegrationCapability[];
 
   private readonly http: HttpClient;
+  private readonly requestBudget: number | undefined;
+  private requestsMade = 0;
+  private rateLimited = false;
 
-  constructor(private readonly credentials: OwnerrezCredentials) {
+  constructor(
+    private readonly credentials: OwnerrezCredentials,
+    options?: { requestBudget?: number },
+  ) {
+    this.requestBudget = options?.requestBudget;
     const basicAuth = Buffer.from(
       `${credentials.username}:${credentials.token}`,
     ).toString("base64");
@@ -178,10 +204,50 @@ export class OwnerrezClient
     });
   }
 
+  /** Requests sent by this client instance so far, and whether OwnerRez answered 429. */
+  get usage(): {
+    requestsMade: number;
+    requestBudget: number | null;
+    rateLimited: boolean;
+  } {
+    return {
+      requestsMade: this.requestsMade,
+      requestBudget: this.requestBudget ?? null,
+      rateLimited: this.rateLimited,
+    };
+  }
+
+  /**
+   * The only way this client talks to OwnerRez: a plain GET. Enforces the
+   * optional per-instance request budget before sending (the counter is
+   * incremented synchronously, so concurrent callers can't overshoot it)
+   * and stops all further requests after a 429. The shared HttpClient
+   * already never retries a 4xx.
+   */
+  private async get<T>(path: string): Promise<T> {
+    if (this.rateLimited) {
+      throw new OwnerrezRequestBudgetError("RATE_LIMITED");
+    }
+    if (
+      this.requestBudget !== undefined &&
+      this.requestsMade >= this.requestBudget
+    ) {
+      throw new OwnerrezRequestBudgetError("BUDGET_EXHAUSTED");
+    }
+    this.requestsMade++;
+    try {
+      return await this.http.request<T>(path);
+    } catch (err) {
+      if (err instanceof HttpRequestError && err.status === 429) {
+        this.rateLimited = true;
+        throw new OwnerrezRequestBudgetError("RATE_LIMITED");
+      }
+      throw err;
+    }
+  }
+
   async connect(): Promise<{ connected: boolean; connectedAt: Date }> {
-    await this.http.request<OwnerrezPage<OwnerrezProperty>>(
-      "/properties?page_size=1",
-    );
+    await this.get<OwnerrezPage<OwnerrezProperty>>("/properties?page_size=1");
     return { connected: true, connectedAt: new Date() };
   }
 
@@ -200,9 +266,7 @@ export class OwnerrezClient
     details?: string;
   }> {
     try {
-      await this.http.request<OwnerrezPage<OwnerrezProperty>>(
-        "/properties?page_size=1",
-      );
+      await this.get<OwnerrezPage<OwnerrezProperty>>("/properties?page_size=1");
       return { healthy: true, checkedAt: new Date() };
     } catch (err) {
       return {
@@ -215,9 +279,7 @@ export class OwnerrezClient
 
   async validateCredentials(): Promise<{ valid: boolean; reason?: string }> {
     try {
-      await this.http.request<OwnerrezPage<OwnerrezProperty>>(
-        "/properties?page_size=1",
-      );
+      await this.get<OwnerrezPage<OwnerrezProperty>>("/properties?page_size=1");
       return { valid: true };
     } catch (err) {
       return {
@@ -258,8 +320,7 @@ export class OwnerrezClient
       seenPaths.add(path);
       pageCount++;
 
-      const page: OwnerrezPage<T> =
-        await this.http.request<OwnerrezPage<T>>(path);
+      const page: OwnerrezPage<T> = await this.get<OwnerrezPage<T>>(path);
       items.push(...page.items);
 
       path = page.next_page_url
@@ -305,7 +366,7 @@ export class OwnerrezClient
    * why calling it in bulk needs care.
    */
   async getProperty(id: number): Promise<OwnerrezPropertyDetail> {
-    return this.http.request<OwnerrezPropertyDetail>(`/properties/${id}`);
+    return this.get<OwnerrezPropertyDetail>(`/properties/${id}`);
   }
 
   async listBookings(params?: {
@@ -334,30 +395,10 @@ export class OwnerrezClient
         now.getTime() - DEFAULT_BOOKINGS_LOOKBACK_DAYS * DAY_MS,
       ).toISOString(),
     });
-
-    const stayWindowFrom = new Date(
-      now.getTime() - OPERATIONAL_STAY_WINDOW_BUFFER_DAYS * DAY_MS,
-    )
-      .toISOString()
-      .slice(0, 10);
-    const propertyIds = (await this.listProperties()).map((p) => p.id);
-    const stay: OwnerrezBooking[] = [];
-    for (
-      let i = 0;
-      i < propertyIds.length;
-      i += PROPERTY_IDS_PER_BOOKINGS_QUERY
-    ) {
-      const ids = propertyIds.slice(i, i + PROPERTY_IDS_PER_BOOKINGS_QUERY);
-      stay.push(
-        ...(await this.fetchAllPages<OwnerrezBooking>(
-          `/bookings?property_ids=${ids.join(",")}&from=${stayWindowFrom}`,
-          BOOKINGS_PATH_PREFIX,
-        )),
-      );
-    }
+    const stay = await this.listStayWindowBookings({ now });
 
     const byId = new Map<number, OwnerrezBooking>();
-    for (const booking of [...recent, ...stay]) {
+    for (const booking of [...recent, ...stay.bookings]) {
       const existing = byId.get(booking.id);
       byId.set(
         booking.id,
@@ -369,16 +410,54 @@ export class OwnerrezClient
       bookings: [...byId.values()],
       stats: {
         recentChanges: recent.length,
-        stayWindow: stay.length,
+        stayWindow: stay.bookings.length,
         merged: byId.size,
-        propertiesQueried: propertyIds.length,
-        stayWindowFrom,
+        propertiesQueried: stay.propertiesQueried,
+        stayWindowFrom: stay.from,
       },
     };
   }
 
+  /**
+   * Stay window only (2026-09-28): every booking departing yesterday or
+   * later — in-house now, arrivals, all future stays — however long ago it
+   * was booked, via the documented `property_ids` + `from` filters (every
+   * OwnerRez property, active and inactive, 50 ids per request). Used on
+   * its own where only current/upcoming stays matter (dashboard "upcoming
+   * bookings"), where recent-change history isn't needed and would cost
+   * extra requests.
+   */
+  async listStayWindowBookings(options?: { now?: Date }): Promise<{
+    bookings: OwnerrezBooking[];
+    propertiesQueried: number;
+    from: string;
+  }> {
+    const now = options?.now ?? new Date();
+    const from = new Date(
+      now.getTime() - OPERATIONAL_STAY_WINDOW_BUFFER_DAYS * DAY_MS,
+    )
+      .toISOString()
+      .slice(0, 10);
+    const propertyIds = (await this.listProperties()).map((p) => p.id);
+    const bookings: OwnerrezBooking[] = [];
+    for (
+      let i = 0;
+      i < propertyIds.length;
+      i += PROPERTY_IDS_PER_BOOKINGS_QUERY
+    ) {
+      const ids = propertyIds.slice(i, i + PROPERTY_IDS_PER_BOOKINGS_QUERY);
+      bookings.push(
+        ...(await this.fetchAllPages<OwnerrezBooking>(
+          `/bookings?property_ids=${ids.join(",")}&from=${from}`,
+          BOOKINGS_PATH_PREFIX,
+        )),
+      );
+    }
+    return { bookings, propertiesQueried: propertyIds.length, from };
+  }
+
   async getGuest(guestId: number): Promise<OwnerrezGuest> {
-    return this.http.request<OwnerrezGuest>(`/guests/${guestId}`);
+    return this.get<OwnerrezGuest>(`/guests/${guestId}`);
   }
 
   /**

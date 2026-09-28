@@ -4,6 +4,7 @@ import { assertPermission, type AuthContext } from "@stayw/auth";
 import { prisma, type Prisma } from "@stayw/database";
 import {
   OwnerrezClient,
+  OwnerrezRequestBudgetError,
   type OwnerrezBooking,
 } from "@stayw/integrations/ownerrez";
 
@@ -147,7 +148,9 @@ export async function previewOwnerRezReservationSync(
   if (!credentials) return { configured: false };
 
   try {
-    const client = new OwnerrezClient(credentials);
+    const client = new OwnerrezClient(credentials, {
+      requestBudget: OWNERREZ_RUN_REQUEST_BUDGET,
+    });
     // 2026-09-27: operational retrieval (recent changes ∪ every stay
     // departing yesterday or later) — see OwnerrezClient
     // .listOperationalBookings(). A bare listBookings() only returned
@@ -220,12 +223,35 @@ export interface OwnerRezReservationSyncResult {
   unmatchedProperty: OwnerRezReservationSyncItem[];
   unrecognizedStatus: OwnerRezReservationSyncItem[];
   guestErrors: Array<{ ownerRezBookingId: number; reason: string }>;
+  /**
+   * Bookings not written this run because their guest couldn't be looked
+   * up before the per-run OwnerRez request budget ran out (or OwnerRez
+   * answered 429). Nothing is fabricated; a later run picks them up.
+   */
+  guestDeferred: Array<{ ownerRezBookingId: number; reason: string }>;
+  /** When a follow-up run may start (set only when something was deferred). */
+  deferredUntil: string | null;
 }
 
 export type OwnerRezReservationSyncOutcome =
   | ({ status: "completed" } & OwnerRezReservationSyncResult)
   | { status: "already_running" }
+  | { status: "cooldown"; cooldownUntil: string }
   | { status: "failed"; reason: string };
+
+/**
+ * OwnerRez rate-limit safety (2026-09-28). OwnerRez documents 300 requests
+ * per 5 minutes. Each preview/sync run gets its own client with a hard
+ * request budget below that (headroom for concurrent dashboard reads), no
+ * sleeps and no retries: when the budget is used up — or OwnerRez answers
+ * 429 — the remaining guest lookups are deferred, the run is logged
+ * PARTIAL with the marker below, and a new sync is refused until the
+ * 5-minute window has passed. Guests already created are reused on the
+ * next run, so repeated runs converge without duplicates.
+ */
+export const OWNERREZ_RUN_REQUEST_BUDGET = 200;
+export const OWNERREZ_RATE_WINDOW_MS = 5 * 60 * 1000;
+export const OWNERREZ_DEFERRED_MARKER = "OWNERREZ_DEFERRED";
 
 const INTEGRATION_SYNC_LOCK_NAME = "integration_sync";
 // Bounded concurrency for per-guest detail fetches — same discipline as
@@ -256,9 +282,11 @@ function chunk<T>(items: T[], size: number): T[][] {
 async function resolveGuestIds(
   client: OwnerrezClient,
   bookings: OwnerrezBooking[],
+  now: Date = new Date(),
 ): Promise<{
   guestIdByOwnerRezId: Map<number, string>;
   errors: Array<{ ownerRezGuestId: number; reason: string }>;
+  deferredGuestIds: Set<number>;
 }> {
   const distinctOwnerRezGuestIds = [
     ...new Set(bookings.map((b) => b.guest_id)),
@@ -275,20 +303,59 @@ async function resolveGuestIds(
     guestIdByOwnerRezId.set(Number(g.ownerRezGuestId), g.id);
   }
 
-  const missingOwnerRezIds = distinctOwnerRezGuestIds.filter(
-    (id) => !guestIdByOwnerRezId.has(id),
-  );
+  // Operationally urgent guests first (2026-09-28): anyone with a stay
+  // departing today or later, soonest arrival first; then everyone else,
+  // most recent stay first. If the request budget runs out, what's left
+  // over is the least urgent.
+  const priority = new Map<number, [number, number]>();
+  const nowMs = now.getTime();
+  for (const b of bookings) {
+    const departs = Date.parse(b.departure);
+    const arrives = Date.parse(b.arrival);
+    const key: [number, number] =
+      departs >= nowMs - 24 * 60 * 60 * 1000 ? [0, arrives] : [1, -departs];
+    const current = priority.get(b.guest_id);
+    if (
+      !current ||
+      key[0] < current[0] ||
+      (key[0] === current[0] && key[1] < current[1])
+    ) {
+      priority.set(b.guest_id, key);
+    }
+  }
+  const missingOwnerRezIds = distinctOwnerRezGuestIds
+    .filter((id) => !guestIdByOwnerRezId.has(id))
+    .sort((a, b) => {
+      const ka = priority.get(a) ?? [2, 0];
+      const kb = priority.get(b) ?? [2, 0];
+      return ka[0] - kb[0] || ka[1] - kb[1];
+    });
   const errors: Array<{ ownerRezGuestId: number; reason: string }> = [];
+  const deferredGuestIds = new Set<number>();
 
   for (const batch of chunk(missingOwnerRezIds, GUEST_DETAIL_CONCURRENCY)) {
+    if (deferredGuestIds.size > 0) {
+      // Budget or rate limit already hit: send nothing more this run.
+      for (const id of batch) deferredGuestIds.add(id);
+      continue;
+    }
     const settled = await Promise.allSettled(
       batch.map(async (ownerRezGuestId) => ({
         ownerRezGuestId,
         guest: await client.getGuest(ownerRezGuestId),
       })),
     );
+    settled.forEach((outcome, index) => {
+      if (
+        outcome.status === "rejected" &&
+        outcome.reason instanceof OwnerrezRequestBudgetError
+      ) {
+        deferredGuestIds.add(batch[index]!);
+      }
+    });
     for (const outcome of settled) {
       if (outcome.status !== "fulfilled") {
+        if (outcome.reason instanceof OwnerrezRequestBudgetError) continue;
         const reason =
           outcome.reason instanceof Error
             ? outcome.reason.message
@@ -319,7 +386,7 @@ async function resolveGuestIds(
     }
   }
 
-  return { guestIdByOwnerRezId, errors };
+  return { guestIdByOwnerRezId, errors, deferredGuestIds };
 }
 
 /**
@@ -380,6 +447,26 @@ export async function syncOwnerRezReservations(
       });
     }
 
+    // Rate-limit cooldown: a run that deferred work (or hit OwnerRez's
+    // limit) blocks the next one until OwnerRez's 5-minute window passes.
+    const deferred = await tx.integrationSyncLog.findFirst({
+      where: {
+        integrationConnectionId: connection.id,
+        entityType: "Reservation",
+        errorMessage: { startsWith: OWNERREZ_DEFERRED_MARKER },
+        finishedAt: { gte: new Date(Date.now() - OWNERREZ_RATE_WINDOW_MS) },
+      },
+      orderBy: { finishedAt: "desc" },
+    });
+    if (deferred?.finishedAt) {
+      return {
+        proceeding: false,
+        cooldownUntil: new Date(
+          deferred.finishedAt.getTime() + OWNERREZ_RATE_WINDOW_MS,
+        ).toISOString(),
+      } as const;
+    }
+
     const log = await tx.integrationSyncLog.create({
       data: {
         integrationConnectionId: connection.id,
@@ -392,12 +479,20 @@ export async function syncOwnerRezReservations(
   });
 
   if (!claim.proceeding) {
+    if ("cooldownUntil" in claim && claim.cooldownUntil) {
+      logOwnerRezReservationSync("sync_skipped_cooldown", {
+        cooldownUntil: claim.cooldownUntil,
+      });
+      return { status: "cooldown", cooldownUntil: claim.cooldownUntil };
+    }
     logOwnerRezReservationSync("sync_skipped_already_running", {});
     return { status: "already_running" };
   }
 
   try {
-    const client = new OwnerrezClient(credentials);
+    const client = new OwnerrezClient(credentials, {
+      requestBudget: OWNERREZ_RUN_REQUEST_BUDGET,
+    });
     const { bookings, stats } = await client.listOperationalBookings();
     logOwnerRezReservationSync("sync_bookings_retrieved", stats);
 
@@ -409,8 +504,19 @@ export async function syncOwnerRezReservations(
       properties.map((p) => [p.ownerRezPropertyId as string, p] as const),
     );
 
-    const { guestIdByOwnerRezId, errors: guestUpsertErrors } =
-      await resolveGuestIds(client, bookings);
+    // Only bookings this run will actually write need a guest lookup —
+    // unmatched-property / unrecognized-status bookings are skipped anyway,
+    // so fetching their guests would only spend OwnerRez's rate limit.
+    const writableBookings = bookings.filter(
+      (b) =>
+        propertyByOwnerRezId.has(String(b.property_id)) &&
+        mapOwnerRezBookingStatus(b).recognized,
+    );
+    const {
+      guestIdByOwnerRezId,
+      errors: guestUpsertErrors,
+      deferredGuestIds,
+    } = await resolveGuestIds(client, writableBookings);
 
     const result: OwnerRezReservationSyncResult = {
       created: 0,
@@ -421,6 +527,8 @@ export async function syncOwnerRezReservations(
         ownerRezBookingId: -1,
         reason: `Guest ${e.ownerRezGuestId}: ${e.reason}`,
       })),
+      guestDeferred: [],
+      deferredUntil: null,
     };
 
     for (const booking of bookings) {
@@ -437,6 +545,13 @@ export async function syncOwnerRezReservations(
       }
 
       const guestId = guestIdByOwnerRezId.get(booking.guest_id);
+      if (!guestId && deferredGuestIds.has(booking.guest_id)) {
+        result.guestDeferred.push({
+          ownerRezBookingId: booking.id,
+          reason: `Guest ${booking.guest_id} not looked up yet (OwnerRez request limit for this run) — deferred to the next sync.`,
+        });
+        continue;
+      }
       if (!guestId) {
         result.guestErrors.push({
           ownerRezBookingId: booking.id,
@@ -493,18 +608,31 @@ export async function syncOwnerRezReservations(
       else result.created++;
     }
 
+    const finishedAt = new Date();
+    const partial = result.guestDeferred.length > 0;
+    if (partial) {
+      result.deferredUntil = new Date(
+        finishedAt.getTime() + OWNERREZ_RATE_WINDOW_MS,
+      ).toISOString();
+    }
     await prisma.integrationSyncLog.update({
       where: { id: claim.logId },
       data: {
-        status: "SUCCEEDED",
+        status: partial ? "PARTIAL" : "SUCCEEDED",
         recordsProcessed: result.created + result.updated,
-        finishedAt: new Date(),
+        errorMessage: partial
+          ? `${OWNERREZ_DEFERRED_MARKER}: ${result.guestDeferred.length} booking(s) deferred (OwnerRez request limit); run the sync again after ${result.deferredUntil}.`
+          : null,
+        finishedAt,
       },
     });
-    await prisma.integrationConnection.update({
-      where: { id: connection.id },
-      data: { status: "CONNECTED", lastSyncedAt: new Date() },
-    });
+    if (!partial) {
+      // lastSyncedAt means "last complete sync" — a partial run doesn't bump it.
+      await prisma.integrationConnection.update({
+        where: { id: connection.id },
+        data: { status: "CONNECTED", lastSyncedAt: finishedAt },
+      });
+    }
 
     await recordAudit({
       actorUserId: actor.userId,
@@ -518,6 +646,8 @@ export async function syncOwnerRezReservations(
         unmatchedPropertyCount: result.unmatchedProperty.length,
         unrecognizedStatusCount: result.unrecognizedStatus.length,
         guestErrorCount: result.guestErrors.length,
+        guestDeferredCount: result.guestDeferred.length,
+        ownerRezRequestCount: client.usage.requestsMade,
       },
     });
 
@@ -527,11 +657,21 @@ export async function syncOwnerRezReservations(
       unmatchedProperty: result.unmatchedProperty.length,
       unrecognizedStatus: result.unrecognizedStatus.length,
       guestErrors: result.guestErrors.length,
+      guestDeferred: result.guestDeferred.length,
+      ownerRezRequests: client.usage.requestsMade,
+      rateLimited: client.usage.rateLimited,
     });
 
     return { status: "completed", ...result };
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+    // A budget/rate-limit stop while fetching bookings still starts the
+    // cooldown (marker), so nobody immediately re-runs into the limit.
+    const message =
+      err instanceof OwnerrezRequestBudgetError
+        ? `${OWNERREZ_DEFERRED_MARKER}: ${err.message} Nothing was written; run the sync again after 5 minutes.`
+        : err instanceof Error
+          ? err.message
+          : "Unknown error";
     await prisma.integrationSyncLog.update({
       where: { id: claim.logId },
       data: { status: "FAILED", errorMessage: message, finishedAt: new Date() },

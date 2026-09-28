@@ -12,7 +12,9 @@ vi.mock("../core", async (importOriginal) => {
   };
 });
 
-import { OwnerrezClient } from "./client";
+import { HttpRequestError } from "../core";
+
+import { OwnerrezClient, OwnerrezRequestBudgetError } from "./client";
 
 const credentials = { username: "stayW", token: "sk-ownerrez-test" };
 
@@ -671,6 +673,116 @@ describe("OwnerrezClient", () => {
       expect(mockRequest).toHaveBeenCalledWith(
         `/bookings?since_utc=${encodeURIComponent(daysFromNow(-90))}`,
       );
+    });
+  });
+
+  describe("request budget + 429 stop (2026-09-28)", () => {
+    it("without a budget nothing changes (existing callers are unlimited)", async () => {
+      mockRequest.mockReset().mockResolvedValue({ id: 1 });
+      const client = new OwnerrezClient(credentials);
+      for (let i = 0; i < 5; i++) await client.getGuest(i);
+      expect(mockRequest).toHaveBeenCalledTimes(5);
+      expect(client.usage).toEqual({
+        requestsMade: 5,
+        requestBudget: null,
+        rateLimited: false,
+      });
+    });
+
+    it("never sends more requests than the budget; the next call is refused before any HTTP request", async () => {
+      mockRequest.mockReset().mockResolvedValue({ id: 1 });
+      const client = new OwnerrezClient(credentials, { requestBudget: 2 });
+      await client.getGuest(1);
+      await client.getGuest(2);
+      await expect(client.getGuest(3)).rejects.toMatchObject({
+        name: "OwnerrezRequestBudgetError",
+        reason: "BUDGET_EXHAUSTED",
+      });
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+    });
+
+    it("concurrent callers can't overshoot the budget (counter is taken before awaiting)", async () => {
+      mockRequest.mockReset().mockResolvedValue({ id: 1 });
+      const client = new OwnerrezClient(credentials, { requestBudget: 3 });
+      const results = await Promise.allSettled(
+        [1, 2, 3, 4, 5].map((id) => client.getGuest(id)),
+      );
+      expect(mockRequest).toHaveBeenCalledTimes(3);
+      expect(results.filter((r) => r.status === "rejected")).toHaveLength(2);
+    });
+
+    it("a 429 is not retried and stops every further request from this client", async () => {
+      mockRequest
+        .mockReset()
+        .mockRejectedValueOnce(new HttpRequestError("/guests/1", 429));
+      const client = new OwnerrezClient(credentials, { requestBudget: 100 });
+
+      await expect(client.getGuest(1)).rejects.toBeInstanceOf(
+        OwnerrezRequestBudgetError,
+      );
+      await expect(client.getGuest(2)).rejects.toMatchObject({
+        reason: "RATE_LIMITED",
+      });
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(client.usage.rateLimited).toBe(true);
+    });
+
+    it("other errors (e.g. 404) pass through unchanged and don't stop the client", async () => {
+      mockRequest
+        .mockReset()
+        .mockRejectedValueOnce(new HttpRequestError("/guests/1", 404))
+        .mockResolvedValueOnce({ id: 2 });
+      const client = new OwnerrezClient(credentials, { requestBudget: 10 });
+      await expect(client.getGuest(1)).rejects.toBeInstanceOf(HttpRequestError);
+      await expect(client.getGuest(2)).resolves.toEqual({ id: 2 });
+    });
+
+    it("pagination counts against the budget too — a long crawl stops at the budget instead of running on", async () => {
+      let offset = 0;
+      mockRequest.mockReset().mockImplementation(async () => {
+        offset += 20;
+        return {
+          items: [{ id: offset }],
+          next_page_url: `https://api.ownerreservations.com/v2/bookings?since_utc=x&offset=${offset}`,
+        };
+      });
+      const client = new OwnerrezClient(credentials, { requestBudget: 7 });
+      await expect(
+        client.listBookings({ sinceUtc: "2026-01-01T00:00:00Z" }),
+      ).rejects.toBeInstanceOf(OwnerrezRequestBudgetError);
+      expect(mockRequest).toHaveBeenCalledTimes(7);
+    });
+  });
+
+  describe("listStayWindowBookings (2026-09-28, dashboard upcoming bookings)", () => {
+    it("fetches only properties + the stay window (no 90-day since_utc query) and returns a long-lead upcoming stay", async () => {
+      const longLead = {
+        id: 42,
+        arrival: "2026-10-02",
+        departure: "2026-10-05",
+        created_utc: "2026-03-01T00:00:00Z",
+        updated_utc: "2026-03-01T00:00:00Z",
+      };
+      mockRequest.mockReset().mockImplementation(async (path: string) => {
+        if (path === "/properties?active=true") return { items: [{ id: 5 }] };
+        if (path === "/properties?active=false") return { items: [] };
+        if (path === "/bookings?property_ids=5&from=2026-09-26")
+          return { items: [longLead] };
+        throw new Error(`unexpected path ${path}`);
+      });
+
+      const result = await new OwnerrezClient(
+        credentials,
+      ).listStayWindowBookings({ now: new Date("2026-09-27T18:00:00.000Z") });
+
+      expect(result).toEqual({
+        bookings: [longLead],
+        propertiesQueried: 1,
+        from: "2026-09-26",
+      });
+      expect(
+        mockRequest.mock.calls.some((c) => String(c[0]).includes("since_utc")),
+      ).toBe(false);
     });
   });
 });

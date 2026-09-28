@@ -52,6 +52,7 @@ export type SyncOwnerRezReservationsActionState =
   | { status: "idle" }
   | ({ status: "success"; syncedAt: string } & OwnerRezReservationSyncResult)
   | { status: "already_running" }
+  | { status: "cooldown"; cooldownUntil: string }
   | { status: "failure"; error: string };
 
 /**
@@ -76,6 +77,9 @@ export async function syncOwnerRezReservationsAction(
     if (result.status === "failed") {
       return { status: "failure", error: result.reason };
     }
+    if (result.status === "cooldown") {
+      return { status: "cooldown", cooldownUntil: result.cooldownUntil };
+    }
 
     revalidatePath("/reservations");
     revalidatePath("/");
@@ -87,6 +91,8 @@ export async function syncOwnerRezReservationsAction(
       unmatchedProperty: result.unmatchedProperty,
       unrecognizedStatus: result.unrecognizedStatus,
       guestErrors: result.guestErrors,
+      guestDeferred: result.guestDeferred,
+      deferredUntil: result.deferredUntil,
     };
   } catch (err) {
     console.error("syncOwnerRezReservationsAction failed:", err);

@@ -55,10 +55,19 @@ vi.mock("@stayw/integrations/notion", () => ({
 
 const mockListBookings = vi.fn();
 const mockListProperties = vi.fn();
+// 2026-09-28: getOwnerRezHighlights() now uses the stay-window retrieval.
+// By default it serves whatever a test configured on mockListBookings, so
+// the existing highlight tests keep their meaning.
+const mockListStayWindowBookings = vi.fn(async () => ({
+  bookings: await mockListBookings(),
+  propertiesQueried: 1,
+  from: "2026-09-27",
+}));
 vi.mock("@stayw/integrations/ownerrez", () => ({
   OwnerrezClient: vi.fn().mockImplementation(() => ({
     listBookings: mockListBookings,
     listProperties: mockListProperties,
+    listStayWindowBookings: mockListStayWindowBookings,
   })),
 }));
 
@@ -1260,6 +1269,30 @@ describe("searchNotionContent", () => {
 });
 
 describe("getOwnerRezHighlights", () => {
+  it("2026-09-28 REGRESSION: a long-lead upcoming stay (booked and last changed 200 days ago) appears — highlights use the stay-window retrieval, not the 90-day recent-changes query", async () => {
+    process.env.OWNERREZ_USERNAME = "demo-user";
+    process.env.OWNERREZ_API_TOKEN = "demo-token";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    const longLead = {
+      id: 77,
+      arrival: "2099-02-01",
+      departure: "2099-02-05",
+      created_utc: "2098-07-01T00:00:00Z",
+      updated_utc: "2098-07-01T00:00:00Z",
+    };
+    mockListStayWindowBookings.mockResolvedValueOnce({
+      bookings: [longLead],
+      propertiesQueried: 3,
+      from: "2099-01-01",
+    } as never);
+
+    const result = await getOwnerRezHighlights(actor, 20);
+
+    expect(result).toEqual({ configured: true, ok: true, items: [longLead] });
+    expect(mockListStayWindowBookings).toHaveBeenCalledTimes(1);
+    expect(mockListBookings).not.toHaveBeenCalled();
+  });
+
   const originalUsername = process.env.OWNERREZ_USERNAME;
   const originalToken = process.env.OWNERREZ_API_TOKEN;
   afterEach(() => {

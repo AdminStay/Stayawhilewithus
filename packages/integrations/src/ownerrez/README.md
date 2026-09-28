@@ -19,3 +19,26 @@ OwnerRez remains **read-only** unless the client explicitly authorizes a specifi
 **Mapping rule**: the same explicit, human-confirmed mapping standard used for `AUGUST_PROPERTY_MAP`/`CIELO_PROPERTY_MAP` applies here — do not infer an OwnerRez `property_id` ↔ StayWhile `Property` correspondence from name/address similarity alone, even when it looks obvious.
 
 **Before implementing any sync or write functionality here**: the exact proposed reads, the exact proposed property mappings, and the exact proposed writes must be shown to the client and explicitly approved first. Read-only discovery (what this README already documents) does not require that approval; anything that writes to OwnerRez, or writes StayWhile data derived from a guessed mapping, does.
+
+## Booking retrieval and rate limits (2026-09-28)
+
+**Documented OwnerRez semantics** (`GET /v2/bookings`):
+
+- `since_utc`: "bookings created or changed since" a date.
+- `from`: "bookings that depart on or after" a date.
+- "Either property_ids or since_utc is required."
+
+**Retrieval methods:**
+
+- `listBookings()`: unchanged. Recent-change semantics only (default `since_utc` = now − 90 days).
+- `listStayWindowBookings()`: every booking departing yesterday or later, however long ago it was booked. Uses `property_ids` for every OwnerRez property (active + inactive, 50 ids per request) plus `from`. Used for "upcoming bookings" (dashboard tile, `/ownerrez`).
+- `listOperationalBookings()`: the union of the two (merged by id; the later `updated_utc` wins). Used by the reservation sync preview and sync, so long-lead arrivals and in-house stays are never omitted.
+
+**Rate limits:**
+
+- OwnerRez documents a limit of **300 requests / 5 minutes**.
+- A client created with `{ requestBudget }` never sends more than that many requests, and after an HTTP 429 refuses every further request (`OwnerrezRequestBudgetError`). There are no sleeps and no retries; the shared `HttpClient` never retries a 4xx.
+- The reservation sync uses a budget of 200 per run. Guest lookups (`GET /guests/{id}`, the only per-item call) are de-duplicated, skipped for guests already in StayWhile and for bookings the sync won't write, and ordered upcoming/in-house first.
+- Anything that doesn't fit the budget is deferred to the next run, which is refused until OwnerRez's 5-minute window has passed.
+
+**Pagination:** `MAX_PAGINATION_PAGES` = 200 per query is a ceiling only. Every `next_page_url` is still host/path-validated and a repeated URL stops the crawl.

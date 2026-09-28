@@ -97,13 +97,20 @@ vi.mock("@stayw/auth", () => ({
   assertPermission: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@stayw/integrations/ownerrez", () => ({
-  OwnerrezClient: vi.fn().mockImplementation(() => ({
-    listBookings: mockListBookings,
-    listOperationalBookings: mockListOperationalBookings,
-    getGuest: mockGetGuest,
-  })),
-}));
+vi.mock("@stayw/integrations/ownerrez", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@stayw/integrations/ownerrez")>();
+  return {
+    // The real error class, so the service's instanceof checks are genuine.
+    OwnerrezRequestBudgetError: actual.OwnerrezRequestBudgetError,
+    OwnerrezClient: vi.fn().mockImplementation(() => ({
+      listBookings: mockListBookings,
+      listOperationalBookings: mockListOperationalBookings,
+      getGuest: mockGetGuest,
+      usage: { requestsMade: 0, requestBudget: 200, rateLimited: false },
+    })),
+  };
+});
 
 vi.mock("@/domains/integrations/services/integrations.service", () => ({
   ensureConnectionRows: mockEnsureConnectionRows,
@@ -118,7 +125,11 @@ const {
   syncOwnerRezReservations,
   previewOwnerRezReservationSync,
   mapOwnerRezBookingStatus,
+  OWNERREZ_DEFERRED_MARKER,
+  OWNERREZ_RUN_REQUEST_BUDGET,
 } = await import("./ownerrez-reservation-sync.service");
+const { OwnerrezClient, OwnerrezRequestBudgetError } =
+  await import("@stayw/integrations/ownerrez");
 
 const ACTOR = { userId: "user-1" };
 const CONNECTION = { id: "conn-1", provider: "OWNERREZ" };
@@ -546,5 +557,221 @@ describe("OwnerRez operational retrieval wiring (2026-09-27, OwnerRez step 1)", 
     }
     expect(mockReservationCreate).not.toHaveBeenCalled();
     expect(mockGuestUpsert).not.toHaveBeenCalled();
+  });
+});
+
+describe("OwnerRez first-sync rate-limit safety (2026-09-28)", () => {
+  const guestRecord = (id: number) => ({
+    id,
+    first_name: `G${id}`,
+    last_name: "Test",
+    email: null,
+    phone: null,
+  });
+
+  function setup(bookings: ReturnType<typeof booking>[]) {
+    mockListBookings.mockResolvedValue(bookings);
+    mockPropertyFindMany.mockResolvedValue([AQUA_PALM]);
+    mockGuestFindMany.mockResolvedValue([]);
+    mockGuestUpsert.mockImplementation(async ({ create }) => ({
+      id: `guest-${create.ownerRezGuestId}`,
+    }));
+    mockReservationFindUnique.mockResolvedValue(null);
+    mockReservationCreate.mockResolvedValue({ id: "res" });
+  }
+
+  it("every run's client gets the per-run request budget (below OwnerRez's documented 300 / 5 min)", async () => {
+    setup([booking()]);
+    mockGetGuest.mockImplementation(async (id: number) => guestRecord(id));
+    await syncOwnerRezReservations(ACTOR as never);
+    await previewOwnerRezReservationSync(ACTOR as never);
+    expect(OWNERREZ_RUN_REQUEST_BUDGET).toBeLessThan(300);
+    for (const call of vi.mocked(OwnerrezClient).mock.calls) {
+      expect(call[1]).toEqual({ requestBudget: OWNERREZ_RUN_REQUEST_BUDGET });
+    }
+  });
+
+  it("de-duplicates guest lookups: one GET per distinct guest, none for guests already in StayWhile", async () => {
+    setup([
+      booking({ id: 1, guest_id: 10 }),
+      booking({ id: 2, guest_id: 10 }),
+      booking({ id: 3, guest_id: 11 }),
+      booking({ id: 4, guest_id: 12 }),
+    ]);
+    mockGuestFindMany.mockResolvedValue([
+      { id: "existing-12", ownerRezGuestId: "12" },
+    ]);
+    mockGetGuest.mockImplementation(async (id: number) => guestRecord(id));
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(mockGetGuest.mock.calls.map((c) => c[0]).sort()).toEqual([10, 11]);
+    expect(outcome).toMatchObject({ status: "completed", created: 4 });
+  });
+
+  it("never spends a guest lookup on bookings that won't be written (unmatched property / unrecognized status)", async () => {
+    setup([
+      booking({ id: 1, guest_id: 20 }),
+      booking({ id: 2, guest_id: 21, property_id: 999999 }),
+      booking({ id: 3, guest_id: 22, status: "hold" }),
+    ]);
+    mockGetGuest.mockImplementation(async (id: number) => guestRecord(id));
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(mockGetGuest.mock.calls.map((c) => c[0])).toEqual([20]);
+    expect(outcome).toMatchObject({ created: 1 });
+    if (outcome.status === "completed") {
+      expect(outcome.unmatchedProperty).toHaveLength(1);
+      expect(outcome.unrecognizedStatus).toHaveLength(1);
+    }
+  });
+
+  it("budget reached: remaining bookings are DEFERRED (not errors, nothing fabricated), the run is PARTIAL with the marker, lastSyncedAt is not bumped", async () => {
+    setup([booking({ id: 1, guest_id: 30 }), booking({ id: 2, guest_id: 31 })]);
+    mockGetGuest.mockImplementation(async (id: number) => {
+      if (id === 31) throw new OwnerrezRequestBudgetError("BUDGET_EXHAUSTED");
+      return guestRecord(id);
+    });
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(outcome).toMatchObject({
+      status: "completed",
+      created: 1,
+      guestErrors: [],
+    });
+    if (outcome.status === "completed") {
+      expect(outcome.guestDeferred).toEqual([
+        expect.objectContaining({ ownerRezBookingId: 2 }),
+      ]);
+      expect(Date.parse(outcome.deferredUntil!) - Date.now()).toBeGreaterThan(
+        4 * 60_000,
+      );
+    }
+    expect(mockReservationCreate).toHaveBeenCalledTimes(1);
+    expect(mockSyncLogUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "PARTIAL",
+          errorMessage: expect.stringMatching(
+            new RegExp(`^${OWNERREZ_DEFERRED_MARKER}: 1 booking`),
+          ),
+        }),
+      }),
+    );
+    expect(mockConnectionUpdate).not.toHaveBeenCalled();
+  });
+
+  it("a 429 stops further guest lookups for the rest of the run (no retries); remaining guests are deferred", async () => {
+    setup(
+      Array.from({ length: 12 }, (_, i) =>
+        booking({ id: 100 + i, guest_id: 200 + i }),
+      ),
+    );
+    let calls = 0;
+    mockGetGuest.mockImplementation(async (id: number) => {
+      calls++;
+      if (calls === 3) throw new OwnerrezRequestBudgetError("RATE_LIMITED");
+      return guestRecord(id);
+    });
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    // First batch of 5 was in flight; nothing after it was requested.
+    expect(mockGetGuest).toHaveBeenCalledTimes(5);
+    if (outcome.status === "completed") {
+      expect(outcome.created).toBe(4);
+      expect(outcome.guestDeferred).toHaveLength(8);
+      expect(outcome.guestErrors).toEqual([]);
+    }
+  });
+
+  it("operational priority: upcoming/in-house guests are looked up before past-stay guests", async () => {
+    setup([
+      booking({
+        id: 1,
+        guest_id: 40,
+        arrival: "2020-01-01",
+        departure: "2020-01-05",
+      }),
+      booking({
+        id: 2,
+        guest_id: 41,
+        arrival: "2099-03-01",
+        departure: "2099-03-04",
+      }),
+      booking({
+        id: 3,
+        guest_id: 42,
+        arrival: "2099-01-01",
+        departure: "2099-01-04",
+      }),
+    ]);
+    mockGetGuest.mockImplementation(async (id: number) => guestRecord(id));
+
+    await syncOwnerRezReservations(ACTOR as never);
+
+    expect(mockGetGuest.mock.calls.map((c) => c[0])).toEqual([42, 41, 40]);
+  });
+
+  it("cooldown: within 5 minutes of a deferred/rate-limited run, a new sync is refused before any OwnerRez request or log row", async () => {
+    mockSyncLogFindFirst.mockImplementation(
+      async ({ where }: { where: { errorMessage?: unknown } }) =>
+        where.errorMessage
+          ? { finishedAt: new Date(Date.now() - 60_000) }
+          : null,
+    );
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(outcome).toEqual({
+      status: "cooldown",
+      cooldownUntil: expect.any(String),
+    });
+    expect(mockListBookings).not.toHaveBeenCalled();
+    expect(mockSyncLogCreate).not.toHaveBeenCalled();
+  });
+
+  it("the budget/rate limit hit while fetching bookings fails the run cleanly with the marker (starts the cooldown) and writes nothing", async () => {
+    mockListBookings.mockRejectedValue(
+      new OwnerrezRequestBudgetError("RATE_LIMITED"),
+    );
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(outcome.status).toBe("failed");
+    expect(mockSyncLogUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "FAILED",
+          errorMessage: expect.stringMatching(
+            new RegExp(`^${OWNERREZ_DEFERRED_MARKER}: `),
+          ),
+        }),
+      }),
+    );
+    expect(mockReservationCreate).not.toHaveBeenCalled();
+  });
+
+  it("idempotent follow-up: on the next run the guest created earlier is reused (no lookup) and the deferred booking is written once", async () => {
+    setup([booking({ id: 2, guest_id: 31 })]);
+    mockGuestFindMany.mockResolvedValue([
+      { id: "guest-31", ownerRezGuestId: "31" },
+    ]);
+    mockGetGuest.mockImplementation(async (id: number) => guestRecord(id));
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(mockGetGuest).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ status: "completed", created: 1 });
+    if (outcome.status === "completed") {
+      expect(outcome.guestDeferred).toEqual([]);
+    }
+    expect(mockSyncLogUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: "SUCCEEDED" }),
+      }),
+    );
   });
 });

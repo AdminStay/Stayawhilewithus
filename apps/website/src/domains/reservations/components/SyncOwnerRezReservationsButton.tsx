@@ -23,6 +23,9 @@ function describeOutcome(
       `${state.guestErrors.length} guest error${state.guestErrors.length === 1 ? "" : "s"}`,
     );
   }
+  if (state.guestDeferred.length > 0) {
+    parts.push(`${state.guestDeferred.length} deferred`);
+  }
   return `OwnerRez sync: ${parts.join(", ")}.`;
 }
 
@@ -63,6 +66,37 @@ export function SyncOwnerRezReservationsButton({
       {!isPending && state.status === "success" && (
         <p className="text-right text-xs text-ink-muted">
           {describeOutcome(state)}
+        </p>
+      )}
+
+      {!isPending &&
+        state.status === "success" &&
+        state.guestDeferred.length > 0 &&
+        state.deferredUntil && (
+          <p className="text-right text-xs text-warning-600">
+            OwnerRez&apos;s request limit was reached, so{" "}
+            {state.guestDeferred.length} booking
+            {state.guestDeferred.length === 1 ? " was" : "s were"} deferred. Run
+            the sync again after{" "}
+            {new Date(state.deferredUntil).toLocaleTimeString("en-US", {
+              timeZone: "America/Chicago",
+              hour: "numeric",
+              minute: "2-digit",
+            })}{" "}
+            CT to finish them.
+          </p>
+        )}
+
+      {!isPending && state.status === "cooldown" && (
+        <p className="text-right text-xs text-warning-600">
+          Waiting for OwnerRez&apos;s request limit to reset — run the sync
+          again after{" "}
+          {new Date(state.cooldownUntil).toLocaleTimeString("en-US", {
+            timeZone: "America/Chicago",
+            hour: "numeric",
+            minute: "2-digit",
+          })}{" "}
+          CT.
         </p>
       )}
 
