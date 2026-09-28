@@ -1,5 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SyncOwnerRezReservationsButton } from "./SyncOwnerRezReservationsButton";
@@ -18,16 +25,96 @@ const baseSuccess = {
   deferredUntil: null as string | null,
 };
 
-async function submitWith(state: unknown) {
-  const action = vi.fn().mockResolvedValue(state);
+function renderButton(action = vi.fn()) {
   render(<SyncOwnerRezReservationsButton action={action} />);
-  fireEvent.click(screen.getByRole("button", { name: /Sync OwnerRez/ }));
   return action;
 }
 
+const dialog = () => document.querySelector("dialog")!;
+const openDialog = () =>
+  fireEvent.click(screen.getByRole("button", { name: /^Sync OwnerRez$/ }));
+
+describe("SyncOwnerRezReservationsButton — explicit confirmation (2026-09-28)", () => {
+  it("the first click only opens the confirmation dialog — the sync is NOT executed", () => {
+    const action = renderButton();
+    expect(dialog().hasAttribute("open")).toBe(false);
+
+    openDialog();
+
+    expect(dialog().hasAttribute("open")).toBe(true);
+    expect(action).not.toHaveBeenCalled();
+    expect(dialog().textContent).toContain(
+      "This will read reservation and guest information from OwnerRez and create or update Guests and Reservations in the StayWhile database.",
+    );
+    expect(dialog().textContent).toContain(
+      "OwnerRez itself will not be modified.",
+    );
+    expect(screen.getByRole("button", { name: /Confirm Sync/ })).toBeTruthy();
+  });
+
+  it("Cancel closes the dialog and does nothing", () => {
+    const action = renderButton();
+    openDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(dialog().hasAttribute("open")).toBe(false);
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it("closing the dialog (close button / Escape) does nothing", () => {
+    const action = renderButton();
+    openDialog();
+    fireEvent.click(screen.getByRole("button", { name: /close/i }));
+    expect(dialog().hasAttribute("open")).toBe(false);
+    openDialog();
+    fireEvent(dialog(), new Event("cancel"));
+    expect(dialog().hasAttribute("open")).toBe(false);
+    expect(action).not.toHaveBeenCalled();
+  });
+
+  it("only Confirm Sync invokes the real sync — exactly once", async () => {
+    const action = renderButton(vi.fn().mockResolvedValue(baseSuccess));
+    openDialog();
+    fireEvent.click(screen.getByRole("button", { name: /Confirm Sync/ }));
+    await waitFor(() => expect(action).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/40 new, 0 updated/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Confirm Sync/ })).toBeNull();
+  });
+
+  it("double-submit is prevented: while syncing Confirm is gone and Cancel is disabled; a second click can't start another sync", async () => {
+    let finish: (v: unknown) => void = () => {};
+    const action = renderButton(
+      vi.fn(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    );
+    openDialog();
+    const confirm = screen.getByRole("button", { name: /Confirm Sync/ });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true),
+    );
+    expect(screen.queryByRole("button", { name: /Confirm Sync/ })).toBeNull();
+    await act(async () => finish(baseSuccess));
+    expect(action).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("SyncOwnerRezReservationsButton — rate-limit reporting (2026-09-28)", () => {
+  async function confirmWith(state: unknown) {
+    renderButton(vi.fn().mockResolvedValue(state));
+    openDialog();
+    fireEvent.click(screen.getByRole("button", { name: /Confirm Sync/ }));
+  }
+
   it("a partial run says how many bookings were deferred and when to run again", async () => {
-    await submitWith({
+    await confirmWith({
       ...baseSuccess,
       guestDeferred: [
         { ownerRezBookingId: 1, reason: "x" },
@@ -42,7 +129,7 @@ describe("SyncOwnerRezReservationsButton — rate-limit reporting (2026-09-28)",
   });
 
   it("a cooldown refusal explains the wait instead of looking like a failure", async () => {
-    await submitWith({
+    await confirmWith({
       status: "cooldown",
       cooldownUntil: "2026-09-28T04:05:00.000Z",
     });
@@ -53,7 +140,7 @@ describe("SyncOwnerRezReservationsButton — rate-limit reporting (2026-09-28)",
   });
 
   it("a complete run shows no deferral warning", async () => {
-    await submitWith(baseSuccess);
+    await confirmWith(baseSuccess);
     expect(await screen.findByText(/40 new, 0 updated/)).toBeTruthy();
     expect(screen.queryByText(/deferred/)).toBeNull();
   });

@@ -3,10 +3,15 @@
 import { revalidatePath } from "next/cache";
 
 import {
+  summarizeOwnerRezPreview,
+  type OwnerRezPreviewSummary,
+} from "./lib/ownerrez-preview-summary";
+import {
   createReservationSchema,
   updateReservationStatusSchema,
 } from "./schemas/reservations.schema";
 import {
+  previewOwnerRezReservationSync,
   syncOwnerRezReservations,
   type OwnerRezReservationSyncResult,
 } from "./services/ownerrez-reservation-sync.service";
@@ -99,6 +104,43 @@ export async function syncOwnerRezReservationsAction(
     return {
       status: "failure",
       error: "Something went wrong syncing OwnerRez reservations.",
+    };
+  }
+}
+
+export type PreviewOwnerRezSyncActionState =
+  | { status: "idle" }
+  | { status: "preview"; generatedAt: string; summary: OwnerRezPreviewSummary }
+  | { status: "not_configured" }
+  | { status: "failure"; error: string };
+
+/**
+ * "Preview OwnerRez Sync" (2026-09-28). Strictly read-only: calls only
+ * previewOwnerRezReservationSync(), which issues OwnerRez GETs (the same
+ * operational retrieval and request budget as the real sync) plus
+ * StayWhile database READS — no Guest/Reservation/link writes, no
+ * IntegrationConnection or IntegrationSyncLog row, no audit entry. Nothing
+ * is revalidated because nothing changed. Never calls the real sync.
+ */
+export async function previewOwnerRezSyncAction(
+  _prevState: PreviewOwnerRezSyncActionState,
+): Promise<PreviewOwnerRezSyncActionState> {
+  try {
+    const actor = await getCurrentUser();
+    const result = await previewOwnerRezReservationSync(actor);
+    if (!result.configured) return { status: "not_configured" };
+    if ("error" in result) return { status: "failure", error: result.error };
+    const now = new Date();
+    return {
+      status: "preview",
+      generatedAt: now.toISOString(),
+      summary: summarizeOwnerRezPreview(result.plan, now),
+    };
+  } catch (err) {
+    console.error("previewOwnerRezSyncAction failed:", err);
+    return {
+      status: "failure",
+      error: "Something went wrong previewing the OwnerRez sync.",
     };
   }
 }

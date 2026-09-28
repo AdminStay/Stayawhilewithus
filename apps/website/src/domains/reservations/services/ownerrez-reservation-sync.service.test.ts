@@ -775,3 +775,96 @@ describe("OwnerRez first-sync rate-limit safety (2026-09-28)", () => {
     );
   });
 });
+
+describe("previewOwnerRezReservationSync — ZERO StayWhile writes, proven (2026-09-28, Preview UI)", () => {
+  it("a preview touches no write path at all: no Guest/Reservation/link writes, no IntegrationConnection or IntegrationSyncLog row, no audit, no transaction, no connection-row upsert", async () => {
+    mockListBookings.mockResolvedValue([
+      booking({ id: 9101 }),
+      booking({ id: 9102, property_id: 999999 }),
+      booking({ id: 9103, status: "hold" }),
+    ]);
+    mockPropertyFindMany.mockResolvedValue([AQUA_PALM]);
+    mockReservationFindMany.mockResolvedValue([
+      { externalReservationId: "9101" },
+    ]);
+    const { prisma } = await import("@stayw/database");
+
+    const result = await previewOwnerRezReservationSync(ACTOR as never);
+
+    expect(result.configured && "plan" in result).toBe(true);
+    for (const write of [
+      mockGuestUpsert,
+      mockReservationCreate,
+      mockReservationUpdate,
+      mockReservationGuestUpsert,
+      mockSyncLogCreate,
+      mockSyncLogUpdate,
+      mockConnectionUpdate,
+      mockConnectionFindUniqueOrThrow,
+      mockEnsureConnectionRows,
+      mockRecordAudit,
+      mockGetGuest,
+      mockQueryRaw,
+    ]) {
+      expect(write).not.toHaveBeenCalled();
+    }
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("source-level: the preview function body contains no write or audit call", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { dirname, resolve } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const source = readFileSync(
+      resolve(
+        dirname(fileURLToPath(import.meta.url)),
+        "./ownerrez-reservation-sync.service.ts",
+      ),
+      "utf8",
+    );
+    const start = source.indexOf(
+      "export async function previewOwnerRezReservationSync",
+    );
+    const end = source.indexOf("\nexport ", start + 10);
+    const body = source.slice(start, end);
+    expect(body.length).toBeGreaterThan(100);
+    expect(body).not.toMatch(
+      /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(|\$transaction|\$queryRaw|\$executeRaw|ensureConnectionRows|recordAudit|syncOwnerRezReservations/,
+    );
+  });
+
+  it("a long-lead upcoming stay (booked and last changed 200 days ago) appears in the preview as a create", async () => {
+    mockListBookings.mockResolvedValue([
+      booking({
+        id: 9201,
+        arrival: "2099-01-10",
+        departure: "2099-01-14",
+        created_utc: "2098-06-24T00:00:00Z",
+        updated_utc: "2098-06-24T00:00:00Z",
+      }),
+    ]);
+    mockPropertyFindMany.mockResolvedValue([AQUA_PALM]);
+    mockReservationFindMany.mockResolvedValue([]);
+
+    const result = await previewOwnerRezReservationSync(ACTOR as never);
+
+    expect(mockListOperationalBookings).toHaveBeenCalledTimes(1);
+    if (result.configured && "plan" in result) {
+      expect(result.plan.toCreate.map((i) => i.ownerRezBookingId)).toEqual([
+        9201,
+      ]);
+    } else {
+      throw new Error("expected a plan");
+    }
+  });
+
+  it("preview runs under the same per-run OwnerRez request budget as the sync", async () => {
+    mockListBookings.mockResolvedValue([]);
+    mockPropertyFindMany.mockResolvedValue([]);
+    mockReservationFindMany.mockResolvedValue([]);
+    await previewOwnerRezReservationSync(ACTOR as never);
+    expect(vi.mocked(OwnerrezClient).mock.calls.at(-1)?.[1]).toEqual({
+      requestBudget: OWNERREZ_RUN_REQUEST_BUDGET,
+    });
+  });
+});

@@ -1,11 +1,21 @@
 import { hasPermission } from "@stayw/auth";
-import { DialogTrigger, Metric, MetricStrip, PageHeader } from "@stayw/ui";
+import {
+  Card,
+  DialogTrigger,
+  Metric,
+  MetricStrip,
+  PageHeader,
+} from "@stayw/ui";
 import { TrendingUp, Wallet } from "lucide-react";
 
 import { listGuests } from "@/domains/guests/services/guests.service";
 import { listProperties } from "@/domains/properties/services/properties.service";
-import { syncOwnerRezReservationsAction } from "@/domains/reservations/actions";
+import {
+  previewOwnerRezSyncAction,
+  syncOwnerRezReservationsAction,
+} from "@/domains/reservations/actions";
 import { CreateReservationForm } from "@/domains/reservations/components/CreateReservationForm";
+import { PreviewOwnerRezSyncButton } from "@/domains/reservations/components/PreviewOwnerRezSyncButton";
 import { ReservationList } from "@/domains/reservations/components/ReservationList";
 import { SyncOwnerRezReservationsButton } from "@/domains/reservations/components/SyncOwnerRezReservationsButton";
 import {
@@ -63,11 +73,6 @@ export default async function ReservationsPage() {
         subtitle={`${reservations.length} ${reservations.length === 1 ? "reservation" : "reservations"} on the books`}
         actions={
           <>
-            {canSyncOwnerRez && (
-              <SyncOwnerRezReservationsButton
-                action={syncOwnerRezReservationsAction}
-              />
-            )}
             <DialogTrigger
               label="Create reservation"
               title="Create reservation"
@@ -77,6 +82,20 @@ export default async function ReservationsPage() {
           </>
         }
       />
+      {/* 2026-09-28: Preview (read-only) and Sync (writes, confirmed) side by
+          side in the page body — not the header's actions slot — with room
+          for the preview results. */}
+      {canSyncOwnerRez && (
+        <Card className="mb-6">
+          <h2 className="mb-3 text-sm font-semibold text-ink">OwnerRez sync</h2>
+          <div className="grid gap-4 md:grid-cols-2">
+            <PreviewOwnerRezSyncButton action={previewOwnerRezSyncAction} />
+            <SyncOwnerRezReservationsButton
+              action={syncOwnerRezReservationsAction}
+            />
+          </div>
+        </Card>
+      )}
       <MetricStrip xlColumns={3} className="mb-8">
         <Metric
           label="Revenue"
