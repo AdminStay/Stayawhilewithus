@@ -7,7 +7,7 @@ vi.mock("@stayw/database", () => {
   };
   return {
     prisma: {
-      reservation: { findMany: vi.fn(), update: vi.fn() },
+      reservation: { findMany: vi.fn(), update: vi.fn(), count: vi.fn() },
       $transaction: vi.fn((callback: (tx: unknown) => unknown) => callback(tx)),
       __tx: tx,
     },
@@ -27,7 +27,9 @@ import { prisma } from "@stayw/database";
 
 import {
   createReservation,
+  listReservationRevenueRows,
   listReservations,
+  listReservationView,
   updateReservationStatus,
 } from "./reservations.service";
 
@@ -159,5 +161,172 @@ describe("updateReservationStatus", () => {
     ).rejects.toThrow();
     expect(prisma.reservation.update).not.toHaveBeenCalled();
     expect(recordAudit).not.toHaveBeenCalled();
+  });
+});
+
+describe("listReservationView — operational views, server-side (2026-09-29)", () => {
+  const EAST = "11111111-1111-4111-8111-111111111111";
+  const PROPERTIES = [
+    { id: EAST, name: "Aqua Palm", timezone: "America/New_York" },
+  ];
+  const NOW = new Date("2026-09-29T15:00:00.000Z");
+  const params = (over: Record<string, unknown> = {}) => ({
+    view: "all" as const,
+    propertyId: null,
+    includeCancelled: false,
+    page: 1,
+    ...over,
+  });
+
+  function setup(counts: number[], rows: unknown[] = []) {
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.reservation.count).mockReset();
+    for (const c of counts) {
+      vi.mocked(prisma.reservation.count).mockResolvedValueOnce(c as never);
+    }
+    vi.mocked(prisma.reservation.findMany)
+      .mockReset()
+      .mockResolvedValueOnce(rows as never);
+  }
+
+  it("requires reservations:read and makes no query when denied", async () => {
+    vi.mocked(assertPermission)
+      .mockReset()
+      .mockRejectedValueOnce(new Error("ForbiddenError"));
+    vi.mocked(prisma.reservation.count).mockReset();
+    vi.mocked(prisma.reservation.findMany).mockReset();
+    await expect(
+      listReservationView(actor, params(), PROPERTIES, NOW),
+    ).rejects.toThrow();
+    expect(prisma.reservation.count).not.toHaveBeenCalled();
+    expect(prisma.reservation.findMany).not.toHaveBeenCalled();
+  });
+
+  it("counts every view in the database (5 counts) and fetches only one page of the selected view", async () => {
+    // counts in RESERVATION_VIEWS order: arrivals, in-house, departures, upcoming, all
+    setup([2, 7, 1, 12, 852], [{ id: "r1" }]);
+    const result = await listReservationView(
+      actor,
+      params({ view: "all", page: 3 }),
+      PROPERTIES,
+      NOW,
+    );
+    expect(prisma.reservation.count).toHaveBeenCalledTimes(5);
+    expect(result.counts).toEqual({
+      arrivals: 2,
+      "in-house": 7,
+      departures: 1,
+      upcoming: 12,
+      all: 852,
+    });
+    expect(prisma.reservation.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.reservation.findMany).toHaveBeenCalledWith({
+      where: { AND: [{ status: { not: "CANCELLED" } }] },
+      orderBy: [{ checkInDate: "desc" }, { id: "asc" }],
+      skip: 100,
+      take: 50,
+      include: { property: true, primaryGuest: true },
+    });
+    expect(result).toMatchObject({
+      total: 852,
+      page: 3,
+      pageCount: 18,
+      pageSize: 50,
+      localDays: ["2026-09-29"],
+      unresolvedTimezoneProperties: [],
+    });
+  });
+
+  it("a date view filters by the property's local today, with the property/cancelled filters applied", async () => {
+    setup([1, 0, 0, 0, 3]);
+    await listReservationView(
+      actor,
+      params({ view: "arrivals", propertyId: EAST, includeCancelled: true }),
+      PROPERTIES,
+      NOW,
+    );
+    expect(prisma.reservation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          AND: [
+            { propertyId: EAST },
+            {
+              OR: [
+                {
+                  propertyId: { in: [EAST] },
+                  checkInDate: new Date("2026-09-29T00:00:00.000Z"),
+                },
+              ],
+            },
+          ],
+        },
+        orderBy: [{ property: { name: "asc" } }, { id: "asc" }],
+        skip: 0,
+        take: 50,
+      }),
+    );
+  });
+
+  it("an out-of-range page is clamped to the last page; an empty view returns page 1 and no rows", async () => {
+    setup([0, 0, 0, 0, 60]);
+    const clamped = await listReservationView(
+      actor,
+      params({ page: 9 }),
+      PROPERTIES,
+      NOW,
+    );
+    expect(clamped.page).toBe(2);
+    expect(prisma.reservation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ skip: 50, take: 50 }),
+    );
+
+    setup([0, 0, 0, 0, 0], []);
+    const empty = await listReservationView(
+      actor,
+      params({ view: "arrivals" }),
+      PROPERTIES,
+      NOW,
+    );
+    expect(empty).toMatchObject({ total: 0, page: 1, pageCount: 1, rows: [] });
+  });
+
+  it("a property with an unresolvable timezone is reported, never guessed", async () => {
+    setup([0, 0, 0, 0, 5]);
+    const result = await listReservationView(
+      actor,
+      params({ view: "arrivals" }),
+      [...PROPERTIES, { id: "p-bad", name: "Broken", timezone: "Bad/Zone" }],
+      NOW,
+    );
+    expect(result.unresolvedTimezoneProperties).toEqual([
+      { id: "p-bad", name: "Broken" },
+    ]);
+  });
+
+  it("is read-only: never writes", async () => {
+    setup([0, 0, 0, 0, 0]);
+    await listReservationView(actor, params(), PROPERTIES, NOW);
+    expect(prisma.reservation.update).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+});
+
+describe("listReservationRevenueRows", () => {
+  it("reads only the fields the revenue/ADR metrics need, after reservations:read", async () => {
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.reservation.findMany)
+      .mockReset()
+      .mockResolvedValueOnce([]);
+    await listReservationRevenueRows(actor);
+    expect(assertPermission).toHaveBeenCalledWith(actor, "reservations:read");
+    expect(prisma.reservation.findMany).toHaveBeenCalledWith({
+      select: {
+        status: true,
+        totalAmount: true,
+        checkInDate: true,
+        checkOutDate: true,
+      },
+    });
   });
 });

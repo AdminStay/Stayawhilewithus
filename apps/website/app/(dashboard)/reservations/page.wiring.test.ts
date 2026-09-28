@@ -41,3 +41,24 @@ describe("/reservations OwnerRez sync status (2026-09-30)", () => {
     );
   });
 });
+
+describe("/reservations operational views wiring (2026-09-29)", () => {
+  it("renders one server-filtered page of the selected view, not every reservation", () => {
+    expect(source).toContain("parseReservationViewParams(await searchParams)");
+    expect(source).toMatch(/listReservationView\(actor, params, properties\)/);
+    expect(source).not.toMatch(/\blistReservations\(/);
+    expect(source).toMatch(/<ReservationList\s+reservations=\{view\.rows\}/);
+    expect(source).toContain("<ReservationViewControls");
+    expect(source).toContain("<ReservationPagination");
+  });
+
+  it("revenue/ADR still come from every reservation (narrow select), as before", () => {
+    expect(source).toContain("listReservationRevenueRows(actor)");
+    expect(source).toContain("computeRevenueMetrics(reservations)");
+  });
+
+  it("offers no 'New bookings' view (createdAt is StayWhile import time)", () => {
+    expect(source).not.toMatch(/new booking/i);
+    expect(source).not.toMatch(/createdAt/);
+  });
+});

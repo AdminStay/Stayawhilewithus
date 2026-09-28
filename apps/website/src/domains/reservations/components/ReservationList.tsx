@@ -45,16 +45,21 @@ function formatDate(date: Date): string {
 
 export function ReservationList({
   reservations,
+  emptyTitle = "No reservations yet",
+  emptyDescription = "Create your first reservation to get started.",
 }: {
   reservations: ReservationWithRelations[];
+  /** Empty-state copy — /reservations passes view-specific text (2026-09-29). */
+  emptyTitle?: string;
+  emptyDescription?: string;
 }) {
   if (reservations.length === 0) {
     return (
       <Card noPadding>
         <EmptyState
           icon={CalendarRange}
-          title="No reservations yet"
-          description="Create your first reservation to get started."
+          title={emptyTitle}
+          description={emptyDescription}
         />
       </Card>
     );

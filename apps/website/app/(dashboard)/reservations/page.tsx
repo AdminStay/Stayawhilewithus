@@ -18,11 +18,20 @@ import { CreateReservationForm } from "@/domains/reservations/components/CreateR
 import { OwnerRezSyncStatusLine } from "@/domains/reservations/components/OwnerRezSyncStatusLine";
 import { PreviewOwnerRezSyncButton } from "@/domains/reservations/components/PreviewOwnerRezSyncButton";
 import { ReservationList } from "@/domains/reservations/components/ReservationList";
+import {
+  ReservationPagination,
+  ReservationViewControls,
+} from "@/domains/reservations/components/ReservationViewControls";
 import { SyncOwnerRezReservationsButton } from "@/domains/reservations/components/SyncOwnerRezReservationsButton";
 import { getOwnerRezSyncStatus } from "@/domains/reservations/services/ownerrez-sync-status.service";
 import {
-  listReservations,
-  type Reservation,
+  parseReservationViewParams,
+  RESERVATION_VIEW_LABELS,
+  type ReservationView,
+} from "@/domains/reservations/lib/reservation-views";
+import {
+  listReservationRevenueRows,
+  listReservationView,
 } from "@/domains/reservations/services/reservations.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
@@ -45,7 +54,14 @@ function formatCurrency(n: number): string {
   }).format(n);
 }
 
-function computeRevenueMetrics(reservations: Reservation[]) {
+type RevenueRow = {
+  status: string;
+  totalAmount: unknown;
+  checkInDate: Date;
+  checkOutDate: Date;
+};
+
+function computeRevenueMetrics(reservations: RevenueRow[]) {
   const counted = reservations.filter((r) => REVENUE_STATUSES.has(r.status));
   const revenue = counted.reduce((sum, r) => sum + Number(r.totalAmount), 0);
   const nights = counted.reduce(
@@ -55,11 +71,24 @@ function computeRevenueMetrics(reservations: Reservation[]) {
   return { revenue, adr: nights > 0 ? revenue / nights : 0 };
 }
 
-export default async function ReservationsPage() {
+const EMPTY_STATE: Record<ReservationView, string> = {
+  arrivals: "No arrivals today.",
+  "in-house": "No guests in house right now.",
+  departures: "No departures today.",
+  upcoming: "No arrivals in the next 7 days.",
+  all: "No reservations match these filters.",
+};
+
+export default async function ReservationsPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const actor = await getCurrentUser();
+  const params = parseReservationViewParams(await searchParams);
   const [reservations, properties, guests, canSyncOwnerRez] = await Promise.all(
     [
-      listReservations(actor),
+      listReservationRevenueRows(actor),
       listProperties(actor),
       listGuests(actor),
       hasPermission(actor, "reservations:update"),
@@ -69,6 +98,10 @@ export default async function ReservationsPage() {
   const ownerRezSyncStatus = canSyncOwnerRez
     ? await getOwnerRezSyncStatus(actor)
     : null;
+  // Operational views (2026-09-29): one filtered, paged page of rows plus
+  // per-view counts, all computed in the database.
+  const view = await listReservationView(actor, params, properties);
+  const viewParams = { ...params, page: view.page };
 
   const { revenue, adr } = computeRevenueMetrics(reservations);
 
@@ -121,7 +154,34 @@ export default async function ReservationsPage() {
           hint="Average daily rate"
         />
       </MetricStrip>
-      <ReservationList reservations={reservations} />
+      <ReservationViewControls
+        params={viewParams}
+        counts={view.counts}
+        properties={[...properties]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((p) => ({ id: p.id, name: p.name }))}
+      />
+      {params.view !== "all" &&
+        view.unresolvedTimezoneProperties.length > 0 && (
+          <p className="mb-3 text-xs text-warning-600">
+            Not included in date views (property timezone couldn&apos;t be
+            read):{" "}
+            {view.unresolvedTimezoneProperties.map((p) => p.name).join(", ")}.
+            Their reservations still appear under All.
+          </p>
+        )}
+      <ReservationList
+        reservations={view.rows}
+        emptyTitle={RESERVATION_VIEW_LABELS[params.view]}
+        emptyDescription={EMPTY_STATE[params.view]}
+      />
+      <ReservationPagination
+        params={viewParams}
+        page={view.page}
+        pageCount={view.pageCount}
+        pageSize={view.pageSize}
+        total={view.total}
+      />
     </div>
   );
 }

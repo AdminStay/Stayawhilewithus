@@ -3,10 +3,20 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 
 import { assertPermission, type AuthContext } from "@stayw/auth";
-import { prisma, type Reservation } from "@stayw/database";
+import { prisma, type Prisma, type Reservation } from "@stayw/database";
 
 export type { Reservation };
 
+import {
+  buildReservationViewWhere,
+  groupPropertiesByLocalDay,
+  pageWindow,
+  RESERVATION_VIEWS,
+  reservationViewOrderBy,
+  type PropertyTimeZoneInput,
+  type ReservationView,
+  type ReservationViewParams,
+} from "../lib/reservation-views";
 import type {
   CreateReservationInput,
   UpdateReservationStatusInput,
@@ -19,6 +29,86 @@ export async function listReservations(actor: AuthContext) {
   return prisma.reservation.findMany({
     orderBy: { checkInDate: "desc" },
     include: { property: true, primaryGuest: true },
+  });
+}
+
+/**
+ * One page of an operational view (see lib/reservation-views.ts) plus the
+ * count for every view under the same property/cancelled filters. All
+ * filtering, counting and paging run in the database. `properties`
+ * supplies each property's timezone (the caller's permission-checked
+ * listProperties()). Read-only.
+ */
+export async function listReservationView(
+  actor: AuthContext,
+  params: ReservationViewParams,
+  properties: PropertyTimeZoneInput[],
+  now: Date = new Date(),
+) {
+  await assertPermission(actor, "reservations:read");
+
+  const { groups, unresolved } = groupPropertiesByLocalDay(properties, now);
+  const filters = {
+    propertyId: params.propertyId,
+    includeCancelled: params.includeCancelled,
+  };
+  const whereFor = (view: ReservationView) =>
+    buildReservationViewWhere(
+      view,
+      groups,
+      filters,
+    ) as Prisma.ReservationWhereInput;
+
+  const countEntries = await Promise.all(
+    RESERVATION_VIEWS.map(
+      async (view) =>
+        [
+          view,
+          await prisma.reservation.count({ where: whereFor(view) }),
+        ] as const,
+    ),
+  );
+  const counts = Object.fromEntries(countEntries) as Record<
+    ReservationView,
+    number
+  >;
+
+  const total = counts[params.view];
+  const window = pageWindow(params.page, total);
+  const rows = await prisma.reservation.findMany({
+    where: whereFor(params.view),
+    orderBy: reservationViewOrderBy(
+      params.view,
+    ) as Prisma.ReservationOrderByWithRelationInput[],
+    skip: window.skip,
+    take: window.take,
+    include: { property: true, primaryGuest: true },
+  });
+
+  return {
+    rows,
+    counts,
+    total,
+    page: window.page,
+    pageCount: window.pageCount,
+    pageSize: window.take,
+    /** Distinct local "today" dates in use (one per timezone group). */
+    localDays: groups.map((g) => g.today),
+    /** Properties left out of date-based views because their timezone couldn't be resolved. */
+    unresolvedTimezoneProperties: unresolved,
+  };
+}
+
+/** Narrow rows for the page's existing revenue/ADR metrics and total — no relations. */
+export async function listReservationRevenueRows(actor: AuthContext) {
+  await assertPermission(actor, "reservations:read");
+  return prisma.reservation.findMany({
+    select: {
+      status: true,
+      totalAmount: true,
+      checkInDate: true,
+      checkOutDate: true,
+    },
   });
 }
 
