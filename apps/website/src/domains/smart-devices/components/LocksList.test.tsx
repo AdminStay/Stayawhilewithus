@@ -367,7 +367,7 @@ function metricValue(label: string): string {
 }
 
 describe("LocksList — summary metrics (derived, never hard-coded)", () => {
-  it("computes Locks/Online/Offline/Unknown/Low battery/Needs attention from the real rows", () => {
+  it("computes Locks/Online/Offline/Unknown/Low battery from the real rows", () => {
     renderLocks([
       makeLock({ id: "a", name: "A", status: "ONLINE" }),
       makeLock({ id: "b", name: "B", status: "OFFLINE" }),
@@ -384,21 +384,33 @@ describe("LocksList — summary metrics (derived, never hard-coded)", () => {
     expect(metricValue("Offline")).toBe("1");
     expect(metricValue("Unknown")).toBe("2");
     expect(metricValue("Low battery")).toBe("1");
-    // Offline(1) + low battery(1, distinct row) = 2 needing attention
-    expect(metricValue("Needs attention")).toBe("2");
   });
 
-  it("UNKNOWN connectivity alone does NOT count toward 'Needs attention'", () => {
-    renderLocks([
-      makeLock({
-        name: "Just Unknown",
-        status: "UNKNOWN",
-        metadata: { telemetryUpdatedAt: FRESH_TELEMETRY },
-      }),
-    ]);
-    // Only this one row, purely UNKNOWN/fresh/healthy-battery — "Needs
-    // attention" must read 0.
+  it("'Needs attention' is the canonical classifier count passed in by the page — never a second local definition (2026-09-29)", () => {
+    render(
+      <LocksList
+        locks={
+          [makeLock({ name: "Healthy-looking", status: "ONLINE" })] as never
+        }
+        needsAttentionCount={26}
+      />,
+    );
+    // The row itself looks healthy; the metric still shows the classifier count.
+    expect(metricValue("Needs attention")).toBe("26");
+    expect(
+      screen.getByText("Locks with a health flag — see the daily lock report"),
+    ).toBeTruthy();
+  });
+
+  it("zero → 'All clear'; absent → '—' (no fallback definition)", () => {
+    const { unmount } = render(
+      <LocksList locks={[makeLock()] as never} needsAttentionCount={0} />,
+    );
     expect(metricValue("Needs attention")).toBe("0");
+    expect(screen.getByText("All clear")).toBeTruthy();
+    unmount();
+    renderLocks([makeLock({ status: "OFFLINE" })]);
+    expect(metricValue("Needs attention")).toBe("—");
   });
 });
 

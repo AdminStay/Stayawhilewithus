@@ -19,6 +19,7 @@ import { LockHealthPanel } from "@/domains/smart-devices/components/LockHealthPa
 import { LockVerificationPanel } from "@/domains/smart-devices/components/LockVerificationPanel";
 import { LocksList } from "@/domains/smart-devices/components/LocksList";
 import { RefreshLocksButton } from "@/domains/smart-devices/components/RefreshLocksButton";
+import { countLocksNeedingAttention } from "@/domains/smart-devices/lib/lock-daily-report";
 import {
   classifyLockHealth,
   getLockHealthSnapshot,
@@ -250,7 +251,7 @@ export default async function LocksPage() {
         />
       </div>
       <div className="mb-4">
-        <LockHealthPanel rows={lockHealthRows} />
+        <LockHealthPanel rows={lockHealthRows} now={healthNow.toISOString()} />
       </div>
       <div className="mb-4">
         <LockVerificationPanel
@@ -260,6 +261,7 @@ export default async function LocksPage() {
       </div>
       <LocksList
         locks={locksWithEligibility}
+        needsAttentionCount={countLocksNeedingAttention(lockHealthRows)}
         canRefresh={canRefresh}
         spotRefreshAction={refreshAugustTelemetrySpotAction}
         canControlLocks={canControlLocks}

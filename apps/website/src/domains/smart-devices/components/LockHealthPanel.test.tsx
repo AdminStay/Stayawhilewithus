@@ -1,73 +1,133 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LockHealthPanel } from "./LockHealthPanel";
 
 afterEach(cleanup);
 
-describe("LockHealthPanel (2026-09-25)", () => {
-  it("lists only locks with flags, worst severity first, with reason and timestamp", () => {
-    render(
-      <LockHealthPanel
-        rows={[
-          {
-            smartDeviceId: "a",
-            propertyName: "Bahamas",
-            lockName: "Front Door",
-            flags: [],
-          },
-          {
-            smartDeviceId: "b",
-            propertyName: "Palm Haven",
-            lockName: "Front Door",
-            flags: [
-              {
-                code: "STALE_BATTERY_TELEMETRY",
-                severity: "yellow",
-                label: "Battery reading stale",
-                detail: "Battery last reported 17 days ago.",
-                since: "2026-09-08T21:42:27.555Z",
-              },
-            ],
-          },
-          {
-            smartDeviceId: "c",
-            propertyName: "Florisun",
-            lockName: "Flor Sun - Front Door",
-            flags: [
-              {
-                code: "DOOR_OPEN_UNLOCKED",
-                severity: "red",
-                label: "Door open and unlocked",
-                detail: "Unlocked since before monitoring began.",
-                since: null,
-              },
-            ],
-          },
-        ]}
-      />,
-    );
+const NOW = "2026-09-29T17:00:00.000Z";
 
-    expect(screen.getByText(/needs attention \(2\)/i)).toBeTruthy();
+const ROWS = [
+  {
+    smartDeviceId: "a",
+    propertyName: "Bahamas",
+    lockName: "Front Door",
+    flags: [],
+  },
+  {
+    smartDeviceId: "b",
+    propertyName: "Palm Haven",
+    lockName: "Front Door",
+    flags: [
+      {
+        code: "STALE_BATTERY_TELEMETRY" as const,
+        severity: "yellow" as const,
+        label: "Battery reading stale",
+        detail: "Battery last reported 17 days ago.",
+        since: "2026-09-12T17:00:00.000Z",
+      },
+    ],
+  },
+  {
+    smartDeviceId: "c",
+    propertyName: "Bonjour",
+    lockName: "Front Door",
+    flags: [
+      {
+        code: "DOOR_OPEN_UNLOCKED" as const,
+        severity: "red" as const,
+        label: "Door open and unlocked",
+        detail: "Unlocked for 5 h.",
+        since: "2026-09-29T12:00:00.000Z",
+      },
+    ],
+  },
+];
+
+describe("LockHealthPanel — daily lock report (2026-09-29)", () => {
+  it("lists every problem worst first with severity, problem, detail, since/duration, New and the Ops action", () => {
+    render(<LockHealthPanel rows={ROWS} now={NOW} />);
+
+    expect(
+      screen.getByText("Daily lock report — needs attention (2)"),
+    ).toBeTruthy();
     expect(screen.queryByText("Bahamas")).toBeNull();
-    const items = screen
-      .getAllByRole("listitem")
-      .filter((li) => li.querySelector("p"));
-    expect(within(items[0]!).getByText("Florisun")).toBeTruthy();
-    expect(within(items[1]!).getByText("Palm Haven")).toBeTruthy();
-    expect(screen.getByText("Battery last reported 17 days ago.")).toBeTruthy();
-    expect(screen.getByText(/^since /)).toBeTruthy();
+    const items = screen.getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+
+    const first = within(items[0]!);
+    expect(first.getByText("Urgent")).toBeTruthy();
+    expect(first.getByText("New")).toBeTruthy();
+    expect(first.getByText("Bonjour")).toBeTruthy();
+    expect(first.getByText("Door open and unlocked")).toBeTruthy();
+    expect(first.getByText("Unlocked for 5 h.")).toBeTruthy();
+    expect(first.getByText(/^Since .*\(for 5 h\)$/)).toBeTruthy();
+    expect(
+      first.getByText(
+        "Confirm the door is closed and the property is secure onsite.",
+      ),
+    ).toBeTruthy();
+
+    const second = within(items[1]!);
+    expect(second.getByText("Routine")).toBeTruthy();
+    expect(second.queryByText("New")).toBeNull();
+    // A reading time is labelled as such — never as the problem's start.
+    expect(second.getByText(/^Last reading /)).toBeTruthy();
+    expect(second.queryByText(/^Since /)).toBeNull();
+  });
+
+  it("summary line: items by severity and New count", () => {
+    render(<LockHealthPanel rows={ROWS} now={NOW} />);
+    expect(
+      screen.getByLabelText("Daily lock report summary").textContent,
+    ).toContain("2 items · Urgent 1 · High 0 · Routine 1 · New in last 24 h 1");
+  });
+
+  it("Copy daily lock report copies the plain-text report (no ids)", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<LockHealthPanel rows={ROWS} now={NOW} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy daily lock report" }),
+    );
+    await waitFor(() => expect(screen.getByText("Copied.")).toBeTruthy());
+    const text = writeText.mock.calls[0]![0] as string;
+    expect(text).toContain("StayWhile — Daily lock report");
+    expect(text).toContain(
+      "1. [NEW] Bonjour — Front Door: Door open and unlocked",
+    );
+    expect(text).toContain(
+      "Action: Check the battery level in the August app; replace batteries onsite if low.",
+    );
+    expect(text).not.toMatch(/\bid\b|smartDeviceId/);
   });
 
   it("says so when there are no exceptions", () => {
-    render(<LockHealthPanel rows={[]} />);
+    render(<LockHealthPanel rows={[]} now={NOW} />);
     expect(
       screen.getByText("No lock health exceptions right now."),
     ).toBeTruthy();
+    expect(
+      screen.getByText("Daily lock report — needs attention (0)"),
+    ).toBeTruthy();
   });
 
-  it("lists a calibration-needed lock in Needs attention with its instruction", () => {
+  it("is read-only: the only control is Copy", () => {
+    render(<LockHealthPanel rows={ROWS} now={NOW} />);
+    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Copy daily lock report",
+    ]);
+  });
+
+  it("a calibration-needed lock shows its onsite August-app action and no New", () => {
     render(
       <LockHealthPanel
         rows={[
@@ -86,13 +146,13 @@ describe("LockHealthPanel (2026-09-25)", () => {
             ],
           },
         ]}
+        now={NOW}
       />,
     );
-    expect(screen.getByText(/needs attention \(1\)/i)).toBeTruthy();
-    expect(screen.getByText("Bahamas")).toBeTruthy();
     expect(screen.getByText("⚠ Calibration needed")).toBeTruthy();
     expect(
-      screen.getByText("Door sensor needs calibration in the August app."),
+      screen.getByText("Calibrate DoorSense in the August app onsite."),
     ).toBeTruthy();
+    expect(screen.queryByText("New")).toBeNull();
   });
 });

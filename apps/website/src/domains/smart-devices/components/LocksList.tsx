@@ -196,8 +196,16 @@ export function LocksList({
   retireAction,
   resetAction,
   holdActions,
+  needsAttentionCount,
 }: {
   locks: LockWithProperty[];
+  /**
+   * The canonical "Needs attention" count (2026-09-29): real August locks
+   * with at least one lock-health flag — the same classifier as the daily
+   * lock report (countLocksNeedingAttention), so the two always agree.
+   * Absent → shown as "—" rather than a second, different definition.
+   */
+  needsAttentionCount?: number;
   /** UX-only gate, matching every other write-capable button in this domain — assertPermission inside the server action remains the real enforcement. */
   canRefresh?: boolean;
   spotRefreshAction?: (
@@ -241,13 +249,6 @@ export function LocksList({
   const offline = locks.filter((l) => l.status === "OFFLINE").length;
   const unknown = locks.filter((l) => l.status === "UNKNOWN").length;
   const lowBatteryCount = locks.filter((l) => isLowBattery(l)).length;
-  // Purely derived, never a separate stored flag — "needs a look" is any
-  // lock that's confirmed offline, reporting stale telemetry, or low on
-  // battery. UNKNOWN connectivity alone does NOT count — per the standing
-  // rule, that's not evidence of a problem by itself.
-  const needsAttentionCount = locks.filter(
-    (l) => l.status === "OFFLINE" || isTelemetryStale(l) || isLowBattery(l),
-  ).length;
 
   if (total === 0) {
     return (
@@ -273,12 +274,14 @@ export function LocksList({
         />
         <Metric
           label="Needs attention"
-          value={needsAttentionCount}
+          value={needsAttentionCount ?? "—"}
           icon={ShieldAlert}
           hint={
-            needsAttentionCount > 0
-              ? "Offline, stale, or low battery"
-              : "All clear"
+            needsAttentionCount === undefined
+              ? "See the daily lock report"
+              : needsAttentionCount > 0
+                ? "Locks with a health flag — see the daily lock report"
+                : "All clear"
           }
         />
       </MetricStrip>
