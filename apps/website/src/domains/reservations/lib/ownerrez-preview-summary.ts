@@ -1,4 +1,7 @@
-import type { OwnerRezReservationSyncPlan } from "../services/ownerrez-reservation-sync.service";
+import type {
+  OwnerRezNonGuestCounts,
+  OwnerRezReservationSyncPlan,
+} from "../services/ownerrez-reservation-sync.service";
 
 /**
  * Operator-facing summary of a read-only OwnerRez sync preview (2026-09-28).
@@ -8,6 +11,8 @@ import type { OwnerRezReservationSyncPlan } from "../services/ownerrez-reservati
 export interface OwnerRezPreviewSummary {
   /** Bookings OwnerRez returned (recent changes ∪ stays departing yesterday or later). */
   bookingsEvaluated: number;
+  /** Real guest bookings on linked properties with a recognized status — what a sync would write (create + update). */
+  eligibleGuestBookings: number;
   toCreate: number;
   /** Already in StayWhile; a sync refreshes them (unchanged vs changed is not computed). */
   toUpdate: number;
@@ -17,6 +22,9 @@ export interface OwnerRezPreviewSummary {
   currentOrUpcoming: number;
   unmatchedPropertyBookings: number;
   unrecognizedStatusBookings: number;
+  /** Records that are not guest reservations (blocked-off time, holds, owner stays, unknown type), by kind — never imported. */
+  nonGuest: OwnerRezNonGuestCounts;
+  nonGuestTotal: number;
   /** OwnerRez properties with bookings but no linked StayWhile property (by OwnerRez id only — no guessing). */
   unmatchedProperties: Array<{
     ownerRezPropertyId: number;
@@ -61,6 +69,15 @@ export function summarizeOwnerRezPreview(
     unmatched.set(item.ownerRezPropertyId, entry);
   }
 
+  const nonGuest: OwnerRezNonGuestCounts = {
+    block: 0,
+    quote_hold: 0,
+    linked_availability: 0,
+    owner: 0,
+    unknown: 0,
+  };
+  for (const item of plan.nonGuest) nonGuest[item.kind]++;
+
   const statuses = new Map<string, number>();
   for (const item of plan.unrecognizedStatus) {
     statuses.set(item.status, (statuses.get(item.status) ?? 0) + 1);
@@ -68,6 +85,7 @@ export function summarizeOwnerRezPreview(
 
   return {
     bookingsEvaluated: plan.totalFetched,
+    eligibleGuestBookings: writable.length,
     toCreate: plan.toCreate.length,
     toUpdate: plan.toUpdate.length,
     writable: byStatus,
@@ -76,6 +94,8 @@ export function summarizeOwnerRezPreview(
     ).length,
     unmatchedPropertyBookings: plan.unmatchedProperty.length,
     unrecognizedStatusBookings: plan.unrecognizedStatus.length,
+    nonGuest,
+    nonGuestTotal: plan.nonGuest.length,
     unmatchedProperties: [...unmatched.entries()]
       .map(([ownerRezPropertyId, v]) => ({
         ownerRezPropertyId,

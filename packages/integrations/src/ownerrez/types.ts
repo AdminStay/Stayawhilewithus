@@ -58,16 +58,33 @@ export interface OwnerrezPropertyDetail extends OwnerrezProperty {
   max_guests?: number;
 }
 
+// OwnerRez BookingType (confirmed 2026-09-29 against /openapi/v2.json and
+// all 1,046 live records): only "booking" is a guest stay. "block" is time
+// marked unavailable without a guest; "quote_hold", "linked_availability"
+// and "owner" are likewise not guest reservations. The `string` arm keeps a
+// value OwnerRez adds later representable — callers must not assume this
+// list is complete.
+export type OwnerrezBookingType =
+  "booking" | "block" | "quote_hold" | "linked_availability" | "owner";
+
 export interface OwnerrezBooking {
   id: number;
   property_id: number;
   guest_id: number;
+  // `status` (active/canceled/pending) is independent of `type`: blocked-off
+  // time is returned as status "active".
   status: string;
+  type?: OwnerrezBookingType | (string & {});
+  /** true = simple blocked-off time; false = a full guest booking. */
+  is_block?: boolean;
   arrival: string;
   departure: string;
-  guests_adults: number;
-  guests_children: number;
-  guests_pets: number;
+  // Real field names confirmed 2026-09-29 (spec + every live record). The
+  // previous `guests_adults`/`guests_children`/`guests_pets` never appear in
+  // OwnerRez's responses.
+  adults?: number;
+  children?: number;
+  pets?: number;
   total_amount: number;
   created_utc: string;
   updated_utc: string;

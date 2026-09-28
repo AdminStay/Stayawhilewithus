@@ -153,7 +153,10 @@ export function OwnerRezOverview({
                     {booking.departure}
                   </TableCell>
                   <TableCell className="text-ink-muted">
-                    {booking.guests_adults + booking.guests_children}
+                    {typeof booking.adults === "number" &&
+                    typeof booking.children === "number"
+                      ? booking.adults + booking.children
+                      : "—"}
                   </TableCell>
                   <TableCell>
                     <Badge tone="neutral">{booking.status}</Badge>

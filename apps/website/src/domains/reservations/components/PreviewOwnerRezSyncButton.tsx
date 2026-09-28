@@ -70,8 +70,12 @@ export function PreviewOwnerRezSyncButton({
           </p>
           <dl className="space-y-1">
             <Row
-              label="Bookings evaluated"
+              label="OwnerRez records evaluated"
               value={state.summary.bookingsEvaluated}
+            />
+            <Row
+              label="Guest bookings eligible for import"
+              value={state.summary.eligibleGuestBookings}
             />
             <Row label="Would create" value={state.summary.toCreate} />
             <Row
@@ -94,7 +98,36 @@ export function PreviewOwnerRezSyncButton({
               label="Skipped: unrecognized status"
               value={state.summary.unrecognizedStatusBookings}
             />
+            <Row
+              label="Skipped: not guest reservations"
+              value={state.summary.nonGuestTotal}
+            />
           </dl>
+
+          <div className="mt-3">
+            <p className="text-xs font-semibold text-ink">
+              Not guest reservations — never imported
+            </p>
+            <dl className="mt-1 space-y-1">
+              <Row
+                label="Blocked-off time"
+                value={state.summary.nonGuest.block}
+              />
+              <Row
+                label="Quote holds"
+                value={state.summary.nonGuest.quote_hold}
+              />
+              <Row
+                label="Linked availability"
+                value={state.summary.nonGuest.linked_availability}
+              />
+              <Row label="Owner stays" value={state.summary.nonGuest.owner} />
+              <Row
+                label="Unknown or missing type"
+                value={state.summary.nonGuest.unknown}
+              />
+            </dl>
+          </div>
 
           {state.summary.unmatchedProperties.length > 0 && (
             <div className="mt-3">

@@ -18,6 +18,10 @@ function describeOutcome(
   if (state.unrecognizedStatus.length > 0) {
     parts.push(`${state.unrecognizedStatus.length} unrecognized status`);
   }
+  const nonGuest = Object.values(state.nonGuest).reduce((a, b) => a + b, 0);
+  if (nonGuest > 0) {
+    parts.push(`${nonGuest} non-guest skipped`);
+  }
   if (state.guestErrors.length > 0) {
     parts.push(
       `${state.guestErrors.length} guest error${state.guestErrors.length === 1 ? "" : "s"}`,

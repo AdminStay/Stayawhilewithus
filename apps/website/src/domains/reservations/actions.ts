@@ -95,6 +95,7 @@ export async function syncOwnerRezReservationsAction(
       updated: result.updated,
       unmatchedProperty: result.unmatchedProperty,
       unrecognizedStatus: result.unrecognizedStatus,
+      nonGuest: result.nonGuest,
       guestErrors: result.guestErrors,
       guestDeferred: result.guestDeferred,
       deferredUntil: result.deferredUntil,

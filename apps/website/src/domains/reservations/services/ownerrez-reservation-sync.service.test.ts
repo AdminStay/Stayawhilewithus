@@ -126,6 +126,7 @@ const {
   syncOwnerRezReservations,
   previewOwnerRezReservationSync,
   mapOwnerRezBookingStatus,
+  classifyOwnerRezRecord,
   OWNERREZ_DEFERRED_MARKER,
   OWNERREZ_RUN_REQUEST_BUDGET,
 } = await import("./ownerrez-reservation-sync.service");
@@ -144,11 +145,14 @@ function booking(overrides: Record<string, unknown> = {}) {
     property_id: 500,
     guest_id: 9001,
     status: "active",
+    // A real guest booking, as OwnerRez returns it (2026-09-29).
+    type: "booking" as string | undefined,
+    is_block: false as boolean | undefined,
     arrival: "2026-10-01",
     departure: "2026-10-05",
-    guests_adults: 2,
-    guests_children: 0,
-    guests_pets: 0,
+    adults: 2,
+    children: 0,
+    pets: 0,
     total_amount: 1200.5,
     created_utc: "2026-09-01T00:00:00Z",
     updated_utc: "2026-09-01T00:00:00Z",
@@ -1021,5 +1025,281 @@ describe("sync reporting never contains guest ids (2026-09-28)", () => {
       );
     }
     expect(emitted).not.toContain(String(SYNTHETIC_GUEST_ID));
+  });
+});
+
+describe("OwnerRez guest-booking eligibility — pre-first-sync safety (2026-09-29)", () => {
+  const guestRecord = (id: number) => ({
+    id,
+    first_name: `G${id}`,
+    last_name: "Test",
+    email: null,
+    phone: null,
+  });
+
+  function setup(bookings: ReturnType<typeof booking>[]) {
+    mockListBookings.mockResolvedValue(bookings);
+    mockPropertyFindMany.mockResolvedValue([AQUA_PALM]);
+    mockGuestFindMany.mockResolvedValue([]);
+    mockGuestUpsert.mockImplementation(async ({ create }) => ({
+      id: `guest-${create.ownerRezGuestId}`,
+    }));
+    mockReservationFindUnique.mockResolvedValue(null);
+    mockReservationFindMany.mockResolvedValue([]);
+    mockReservationCreate.mockResolvedValue({ id: "res" });
+    mockGetGuest.mockImplementation(async (id: number) => guestRecord(id));
+  }
+
+  // Shaped like OwnerRez #17031650: an "active" block with no guest,
+  // returned by /bookings exactly like a stay — here on a LINKED property,
+  // the case that would otherwise reach the import.
+  const blockLike17031650 = () =>
+    booking({
+      id: 17031650,
+      type: "block",
+      is_block: true,
+      status: "active",
+      guest_id: 0,
+      arrival: "2026-10-18",
+      departure: "2026-10-24",
+      adults: 0,
+      children: 0,
+      pets: 0,
+    });
+
+  describe("classifyOwnerRezRecord", () => {
+    it("type=booking, is_block=false → eligible guest booking", () => {
+      expect(
+        classifyOwnerRezRecord({ type: "booking", is_block: false }),
+      ).toEqual({ guestBooking: true });
+    });
+
+    it("is_block=true → excluded as blocked-off time even when type is booking", () => {
+      expect(
+        classifyOwnerRezRecord({ type: "booking", is_block: true }),
+      ).toEqual({ guestBooking: false, kind: "block" });
+    });
+
+    it.each([
+      ["block", "block"],
+      ["quote_hold", "quote_hold"],
+      ["linked_availability", "linked_availability"],
+      ["owner", "owner"],
+    ] as const)("type=%s → excluded as %s", (type, kind) => {
+      expect(classifyOwnerRezRecord({ type, is_block: true })).toEqual({
+        guestBooking: false,
+        kind,
+      });
+      expect(classifyOwnerRezRecord({ type, is_block: false })).toEqual({
+        guestBooking: false,
+        kind,
+      });
+    });
+
+    it("missing or unknown type fails closed (excluded as unknown), never treated as a guest booking", () => {
+      for (const type of [undefined, "", "Booking", "reservation", "hold"]) {
+        expect(classifyOwnerRezRecord({ type, is_block: false })).toEqual({
+          guestBooking: false,
+          kind: "unknown",
+        });
+      }
+    });
+  });
+
+  it("an active block on a linked property (shaped like #17031650) is not imported and gets no guest lookup", async () => {
+    setup([blockLike17031650()]);
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(outcome).toMatchObject({
+      status: "completed",
+      created: 0,
+      updated: 0,
+    });
+    if (outcome.status === "completed") {
+      expect(outcome.nonGuest).toEqual({
+        block: 1,
+        quote_hold: 0,
+        linked_availability: 0,
+        owner: 0,
+        unknown: 0,
+      });
+      // Not a false "guest could not be resolved" error either.
+      expect(outcome.guestErrors).toHaveLength(0);
+      expect(outcome.unmatchedProperty).toHaveLength(0);
+    }
+    expect(mockGetGuest).not.toHaveBeenCalled();
+    expect(mockGuestFindMany).toHaveBeenCalledWith({
+      where: { ownerRezGuestId: { in: [] } },
+      select: { id: true, ownerRezGuestId: true },
+    });
+    expect(mockGuestUpsert).not.toHaveBeenCalled();
+    expect(mockReservationCreate).not.toHaveBeenCalled();
+    expect(mockReservationUpdate).not.toHaveBeenCalled();
+  });
+
+  it("is_block=true with status active is excluded even if a guest_id is present", async () => {
+    setup([booking({ id: 7001, is_block: true, guest_id: 555 })]);
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(outcome).toMatchObject({ created: 0 });
+    expect(mockGetGuest).not.toHaveBeenCalled();
+    expect(mockReservationCreate).not.toHaveBeenCalled();
+  });
+
+  it("mixed run: only the real guest booking imports; every non-guest kind is skipped, counted by kind, and never looked up", async () => {
+    setup([
+      booking({ id: 1, guest_id: 10 }),
+      booking({ id: 2, guest_id: 11, type: "block", is_block: true }),
+      booking({ id: 3, guest_id: 12, type: "quote_hold", is_block: true }),
+      booking({
+        id: 4,
+        guest_id: 13,
+        type: "linked_availability",
+        is_block: true,
+      }),
+      booking({ id: 5, guest_id: 14, type: "owner", is_block: false }),
+      booking({ id: 6, guest_id: 15, type: undefined }),
+      booking({ id: 7, guest_id: 16, type: "something_new" }),
+    ]);
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(outcome).toMatchObject({ status: "completed", created: 1 });
+    if (outcome.status === "completed") {
+      expect(outcome.nonGuest).toEqual({
+        block: 1,
+        quote_hold: 1,
+        linked_availability: 1,
+        owner: 1,
+        unknown: 2,
+      });
+    }
+    expect(mockGetGuest.mock.calls.map((c) => c[0])).toEqual([10]);
+    expect(mockReservationCreate).toHaveBeenCalledTimes(1);
+    expect(mockReservationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ externalReservationId: "1" }),
+      }),
+    );
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterState: expect.objectContaining({
+          nonGuestSkipped: {
+            block: 1,
+            quote_hold: 1,
+            linked_availability: 1,
+            owner: 1,
+            unknown: 2,
+          },
+        }),
+      }),
+    );
+  });
+
+  it("a real booking imports OwnerRez's actual adults/children/pets unchanged", async () => {
+    setup([booking({ adults: 3, children: 2, pets: 1 })]);
+
+    await syncOwnerRezReservations(ACTOR as never);
+
+    expect(mockReservationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ adults: 3, children: 2, pets: 1 }),
+      }),
+    );
+  });
+
+  it("a present valid count of 0 is written as 0, never replaced by a default", async () => {
+    setup([booking({ adults: 0, children: 0, pets: 0 })]);
+
+    await syncOwnerRezReservations(ACTOR as never);
+
+    expect(mockReservationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ adults: 0, children: 0, pets: 0 }),
+      }),
+    );
+  });
+
+  it("a missing or invalid count is left unset (DB default on create / unchanged on update), never guessed", async () => {
+    setup([booking({ adults: undefined, children: -1, pets: 1.5 })]);
+
+    await syncOwnerRezReservations(ACTOR as never);
+
+    const data = mockReservationCreate.mock.calls[0]![0].data;
+    expect(data.adults).toBeUndefined();
+    expect(data.children).toBeUndefined();
+    expect(data.pets).toBeUndefined();
+  });
+
+  it("a cancelled real guest booking is still imported as CANCELLED with its real counts", async () => {
+    setup([
+      booking({
+        status: "canceled",
+        updated_utc: "2026-08-23T11:43:27Z",
+        adults: 4,
+        children: 1,
+        pets: 0,
+      }),
+    ]);
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(outcome).toMatchObject({ created: 1 });
+    expect(mockReservationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "CANCELLED",
+          cancelledAt: new Date("2026-08-23T11:43:27Z"),
+          adults: 4,
+          children: 1,
+          pets: 0,
+        }),
+      }),
+    );
+  });
+
+  it("preview: non-guest records go to their own bucket (not create/update/unmatched/unrecognized), with zero writes and no guest lookup", async () => {
+    setup([
+      booking({ id: 1 }),
+      blockLike17031650(),
+      booking({ id: 3, type: "block", is_block: true, property_id: 999999 }),
+      booking({ id: 4, type: "owner", is_block: false }),
+      booking({ id: 5, type: undefined, is_block: undefined }),
+      booking({ id: 6, property_id: 999999 }),
+      booking({ id: 7, status: "hold" }),
+    ]);
+
+    const result = await previewOwnerRezReservationSync(ACTOR as never);
+
+    if (!(result.configured && "plan" in result)) {
+      throw new Error("expected a plan");
+    }
+    const { plan } = result;
+    expect(plan.totalFetched).toBe(7);
+    expect(plan.toCreate.map((i) => i.ownerRezBookingId)).toEqual([1]);
+    expect(plan.unmatchedProperty.map((i) => i.ownerRezBookingId)).toEqual([6]);
+    expect(plan.unrecognizedStatus.map((i) => i.ownerRezBookingId)).toEqual([
+      7,
+    ]);
+    expect(plan.nonGuest.map((i) => [i.ownerRezBookingId, i.kind])).toEqual([
+      [17031650, "block"],
+      [3, "block"],
+      [4, "owner"],
+      [5, "unknown"],
+    ]);
+    for (const write of [
+      mockGuestUpsert,
+      mockReservationCreate,
+      mockReservationUpdate,
+      mockReservationGuestUpsert,
+      mockSyncLogCreate,
+      mockSyncLogUpdate,
+      mockRecordAudit,
+      mockGetGuest,
+    ]) {
+      expect(write).not.toHaveBeenCalled();
+    }
   });
 });

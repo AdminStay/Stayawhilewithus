@@ -46,6 +46,7 @@ describe("previewOwnerRezSyncAction (2026-09-28)", () => {
         toUpdate: [],
         unmatchedProperty: [],
         unrecognizedStatus: [],
+        nonGuest: [],
       },
     });
 

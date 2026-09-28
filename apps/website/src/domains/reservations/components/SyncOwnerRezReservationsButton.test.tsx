@@ -20,6 +20,13 @@ const baseSuccess = {
   updated: 0,
   unmatchedProperty: [],
   unrecognizedStatus: [],
+  nonGuest: {
+    block: 0,
+    quote_hold: 0,
+    linked_availability: 0,
+    owner: 0,
+    unknown: 0,
+  },
   guestErrors: [],
   guestDeferred: [] as Array<{ ownerRezBookingId: number; reason: string }>,
   deferredUntil: null as string | null,
@@ -143,5 +150,21 @@ describe("SyncOwnerRezReservationsButton — rate-limit reporting (2026-09-28)",
     await confirmWith(baseSuccess);
     expect(await screen.findByText(/40 new, 0 updated/)).toBeTruthy();
     expect(screen.queryByText(/deferred/)).toBeNull();
+  });
+
+  it("reports how many non-guest records (blocks, holds, owner stays) were skipped (2026-09-29)", async () => {
+    await confirmWith({
+      ...baseSuccess,
+      nonGuest: {
+        block: 187,
+        quote_hold: 1,
+        linked_availability: 0,
+        owner: 0,
+        unknown: 2,
+      },
+    });
+    expect(
+      await screen.findByText(/40 new, 0 updated, 190 non-guest skipped/),
+    ).toBeTruthy();
   });
 });

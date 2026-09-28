@@ -19,6 +19,7 @@ import type {
 
 export type {
   OwnerrezBooking,
+  OwnerrezBookingType,
   OwnerrezProperty,
   OwnerrezPropertyDetail,
   OwnerrezPropertyAddress,

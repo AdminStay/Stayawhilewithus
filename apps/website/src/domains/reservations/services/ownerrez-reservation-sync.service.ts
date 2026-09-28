@@ -96,6 +96,74 @@ export function mapOwnerRezBookingStatus(
   return { recognized: false };
 }
 
+/**
+ * Guest-booking eligibility (2026-09-29, pre-first-sync safety fix).
+ * OwnerRez returns blocked-off time, quote holds, linked-availability
+ * blocks and owner stays from the same /bookings endpoint as guest stays,
+ * and a block's `status` is "active" — so status alone can't tell them
+ * apart (OwnerRez #17031650 was an "active" block). Only a record that is
+ * explicitly `type: "booking"` and not `is_block: true` is a guest
+ * reservation. Everything else — including a missing or unknown `type` —
+ * fails closed: skipped and reported by kind, never imported, never given
+ * a guest lookup, never modified in OwnerRez.
+ */
+export type OwnerRezNonGuestKind =
+  "block" | "quote_hold" | "linked_availability" | "owner" | "unknown";
+
+export const OWNERREZ_NON_GUEST_KINDS: readonly OwnerRezNonGuestKind[] = [
+  "block",
+  "quote_hold",
+  "linked_availability",
+  "owner",
+  "unknown",
+];
+
+export function classifyOwnerRezRecord(
+  booking: Pick<OwnerrezBooking, "type" | "is_block">,
+):
+  { guestBooking: true } | { guestBooking: false; kind: OwnerRezNonGuestKind } {
+  switch (booking.type) {
+    case "booking":
+      return booking.is_block === true
+        ? { guestBooking: false, kind: "block" }
+        : { guestBooking: true };
+    case "block":
+      return { guestBooking: false, kind: "block" };
+    case "quote_hold":
+      return { guestBooking: false, kind: "quote_hold" };
+    case "linked_availability":
+      return { guestBooking: false, kind: "linked_availability" };
+    case "owner":
+      return { guestBooking: false, kind: "owner" };
+    default:
+      return { guestBooking: false, kind: "unknown" };
+  }
+}
+
+export type OwnerRezNonGuestCounts = Record<OwnerRezNonGuestKind, number>;
+
+function countNonGuest(
+  items: Array<{ kind: OwnerRezNonGuestKind }>,
+): OwnerRezNonGuestCounts {
+  const counts = Object.fromEntries(
+    OWNERREZ_NON_GUEST_KINDS.map((k) => [k, 0]),
+  ) as OwnerRezNonGuestCounts;
+  for (const item of items) counts[item.kind]++;
+  return counts;
+}
+
+/**
+ * A guest count OwnerRez actually supplied (a non-negative integer, 0
+ * included) is written as-is. Anything else is left undefined — Prisma then
+ * keeps the column default on create and the stored value on update —
+ * rather than replacing a real count with a guess.
+ */
+function ownerRezGuestCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
+
 export interface OwnerRezReservationSyncItem {
   ownerRezBookingId: number;
   ownerRezPropertyId: number;
@@ -111,6 +179,8 @@ export interface OwnerRezReservationSyncPlan {
   toUpdate: OwnerRezReservationSyncItem[];
   unmatchedProperty: OwnerRezReservationSyncItem[];
   unrecognizedStatus: OwnerRezReservationSyncItem[];
+  /** Not guest reservations (see classifyOwnerRezRecord) — never imported. */
+  nonGuest: Array<OwnerRezReservationSyncItem & { kind: OwnerRezNonGuestKind }>;
 }
 
 export type OwnerRezReservationPreviewResult =
@@ -186,9 +256,21 @@ export async function previewOwnerRezReservationSync(
       toUpdate: [],
       unmatchedProperty: [],
       unrecognizedStatus: [],
+      nonGuest: [],
     };
 
     for (const booking of bookings) {
+      // Non-guest records are set aside first, so the property/status
+      // buckets below only ever describe real guest bookings.
+      const eligibility = classifyOwnerRezRecord(booking);
+      if (!eligibility.guestBooking) {
+        plan.nonGuest.push({
+          ...toSyncItem(booking, null),
+          kind: eligibility.kind,
+        });
+        continue;
+      }
+
       const property = propertyByOwnerRezId.get(String(booking.property_id));
       const mapped = mapOwnerRezBookingStatus(booking);
 
@@ -233,6 +315,8 @@ export interface OwnerRezReservationSyncResult {
   updated: number;
   unmatchedProperty: OwnerRezReservationSyncItem[];
   unrecognizedStatus: OwnerRezReservationSyncItem[];
+  /** Records skipped as not guest reservations, by kind (see classifyOwnerRezRecord). */
+  nonGuest: OwnerRezNonGuestCounts;
   guestErrors: Array<{ ownerRezBookingId: number; reason: string }>;
   /**
    * Bookings not written this run because their guest couldn't be looked
@@ -520,10 +604,21 @@ export async function syncOwnerRezReservations(
       properties.map((p) => [p.ownerRezPropertyId as string, p] as const),
     );
 
+    // Non-guest records (blocked-off time, holds, owner stays, unknown
+    // types) are dropped before anything else: never imported, never given
+    // a guest lookup.
+    const nonGuestKinds: Array<{ kind: OwnerRezNonGuestKind }> = [];
+    const guestBookings = bookings.filter((b) => {
+      const eligibility = classifyOwnerRezRecord(b);
+      if (eligibility.guestBooking) return true;
+      nonGuestKinds.push({ kind: eligibility.kind });
+      return false;
+    });
+
     // Only bookings this run will actually write need a guest lookup —
     // unmatched-property / unrecognized-status bookings are skipped anyway,
     // so fetching their guests would only spend OwnerRez's rate limit.
-    const writableBookings = bookings.filter(
+    const writableBookings = guestBookings.filter(
       (b) =>
         propertyByOwnerRezId.has(String(b.property_id)) &&
         mapOwnerRezBookingStatus(b).recognized,
@@ -539,6 +634,7 @@ export async function syncOwnerRezReservations(
       updated: 0,
       unmatchedProperty: [],
       unrecognizedStatus: [],
+      nonGuest: countNonGuest(nonGuestKinds),
       guestErrors: guestUpsertErrors.map((e) => ({
         ownerRezBookingId: -1,
         // 2026-09-28: never the guest id (or DB error text) in reported reasons.
@@ -548,7 +644,7 @@ export async function syncOwnerRezReservations(
       deferredUntil: null,
     };
 
-    for (const booking of bookings) {
+    for (const booking of guestBookings) {
       const property = propertyByOwnerRezId.get(String(booking.property_id));
       if (!property) {
         result.unmatchedProperty.push(toSyncItem(booking, null));
@@ -596,9 +692,9 @@ export async function syncOwnerRezReservations(
         status: mapped.status,
         checkInDate: new Date(booking.arrival),
         checkOutDate: new Date(booking.departure),
-        adults: booking.guests_adults,
-        children: booking.guests_children,
-        pets: booking.guests_pets,
+        adults: ownerRezGuestCount(booking.adults),
+        children: ownerRezGuestCount(booking.children),
+        pets: ownerRezGuestCount(booking.pets),
         totalAmount: booking.total_amount ?? 0,
         cancelledAt: mapped.cancelledAt,
       };
@@ -663,6 +759,7 @@ export async function syncOwnerRezReservations(
         updated: result.updated,
         unmatchedPropertyCount: result.unmatchedProperty.length,
         unrecognizedStatusCount: result.unrecognizedStatus.length,
+        nonGuestSkipped: result.nonGuest,
         guestErrorCount: result.guestErrors.length,
         guestDeferredCount: result.guestDeferred.length,
         ownerRezRequestCount: client.usage.requestsMade,
@@ -674,6 +771,7 @@ export async function syncOwnerRezReservations(
       updated: result.updated,
       unmatchedProperty: result.unmatchedProperty.length,
       unrecognizedStatus: result.unrecognizedStatus.length,
+      nonGuestSkipped: result.nonGuest,
       guestErrors: result.guestErrors.length,
       guestDeferred: result.guestDeferred.length,
       ownerRezRequests: client.usage.requestsMade,
