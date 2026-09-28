@@ -1,4 +1,8 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -235,5 +239,40 @@ describe("ThermostatsPage — Nest Phase 1 safety + freshness wiring (2026-09-27
     expect(bannerProps[0]).toMatchObject({
       health: expect.objectContaining({ state: "needs_reauthorization" }),
     });
+  });
+});
+
+describe("ThermostatsPage — obsolete [nest-diag] debug log removed (2026-09-27)", () => {
+  it("rendering the page emits no [nest-diag] log line", async () => {
+    mockHasPermission.mockResolvedValue(true);
+    mockListSmartDevices.mockResolvedValue([
+      {
+        id: "t1",
+        name: "Aqua Palm - Living room",
+        provider: "NEST",
+        deviceType: "THERMOSTAT",
+        propertyId: "p1",
+        property: { name: "Aqua Palm" },
+        metadata: {},
+      },
+    ]);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      render(await ThermostatsPage());
+      expect(
+        log.mock.calls.some((call) => String(call[0]).includes("[nest-diag]")),
+      ).toBe(false);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("the page source hard-codes no device name and no [nest-diag] diagnostic", () => {
+    const source = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), "./page.tsx"),
+      "utf8",
+    );
+    expect(source).not.toContain("[nest-diag]");
+    expect(source).not.toContain("Aqua Palm");
   });
 });

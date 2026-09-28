@@ -40,9 +40,8 @@ import {
  * Every diagnostic line this file (and refreshThermostatsAction in
  * actions.ts) emits goes through this one function, always under the
  * `[thermostat-refresh]` prefix, so a real Production Refresh is
- * conclusively diagnosable from Vercel logs alone. Same convention as the
- * existing `[nest-diag]` log in app/(dashboard)/thermostats/page.tsx —
- * plain console.log, structured JSON, never gated behind anything.
+ * conclusively diagnosable from Vercel logs alone — plain console.log,
+ * structured JSON, never gated behind anything.
  *
  * Hard rule for every call site below: only non-secret operational facts —
  * actor id, provider name, counts, and status strings/messages that are
@@ -605,11 +604,10 @@ export async function refreshThermostats(
 ): Promise<RefreshThermostatsResult> {
   logThermostatRefresh("refresh_requested", { actorUserId: actor.userId });
 
-  // Logged explicitly at this exact boundary — the project has unresolved
-  // history (see the `[nest-diag]` diagnostic still in
-  // app/(dashboard)/thermostats/page.tsx, added for a real, still-open Nest
-  // permission discrepancy) of a computed "can do this" check disagreeing
-  // with actual enforcement. This makes the real, enforced Refresh
+  // Logged explicitly at this exact boundary — the project has history
+  // (HANDOFF.md Increment 38, a Nest permission discrepancy; its temporary
+  // page-level diagnostic was removed 2026-09-27) of a computed "can do
+  // this" check disagreeing with actual enforcement. This makes the real, enforced Refresh
   // authorization outcome directly visible in logs, independent of what the
   // page's own button-visibility check (a separate hasPermission call)
   // decided.
