@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   mockListBookings,
+  mockListOperationalBookings,
   mockGetGuest,
   mockQueryRaw,
   mockEnsureConnectionRows,
@@ -19,26 +20,46 @@ const {
   mockReservationCreate,
   mockReservationUpdate,
   mockReservationGuestUpsert,
-} = vi.hoisted(() => ({
-  mockListBookings: vi.fn(),
-  mockGetGuest: vi.fn(),
-  mockQueryRaw: vi.fn(),
-  mockEnsureConnectionRows: vi.fn().mockResolvedValue(undefined),
-  mockRecordAudit: vi.fn().mockResolvedValue({}),
-  mockConnectionFindUniqueOrThrow: vi.fn(),
-  mockConnectionUpdate: vi.fn().mockResolvedValue({}),
-  mockSyncLogFindFirst: vi.fn().mockResolvedValue(null),
-  mockSyncLogCreate: vi.fn(),
-  mockSyncLogUpdate: vi.fn().mockResolvedValue({}),
-  mockPropertyFindMany: vi.fn(),
-  mockGuestFindMany: vi.fn(),
-  mockGuestUpsert: vi.fn(),
-  mockReservationFindUnique: vi.fn(),
-  mockReservationFindMany: vi.fn(),
-  mockReservationCreate: vi.fn(),
-  mockReservationUpdate: vi.fn(),
-  mockReservationGuestUpsert: vi.fn().mockResolvedValue({}),
-}));
+} = vi.hoisted(() => {
+  const mockListBookings = vi.fn();
+  return {
+    mockListBookings,
+    // The service now calls listOperationalBookings(); by default it returns
+    // whatever each test configured on mockListBookings, so every existing
+    // test exercises the new path unchanged. The retrieval strategy itself is
+    // covered in packages/integrations/src/ownerrez/client.test.ts.
+    mockListOperationalBookings: vi.fn(async () => {
+      const bookings = await mockListBookings();
+      return {
+        bookings,
+        stats: {
+          recentChanges: bookings.length,
+          stayWindow: 0,
+          merged: bookings.length,
+          propertiesQueried: 0,
+          stayWindowFrom: "2026-09-26",
+        },
+      };
+    }),
+    mockGetGuest: vi.fn(),
+    mockQueryRaw: vi.fn(),
+    mockEnsureConnectionRows: vi.fn().mockResolvedValue(undefined),
+    mockRecordAudit: vi.fn().mockResolvedValue({}),
+    mockConnectionFindUniqueOrThrow: vi.fn(),
+    mockConnectionUpdate: vi.fn().mockResolvedValue({}),
+    mockSyncLogFindFirst: vi.fn().mockResolvedValue(null),
+    mockSyncLogCreate: vi.fn(),
+    mockSyncLogUpdate: vi.fn().mockResolvedValue({}),
+    mockPropertyFindMany: vi.fn(),
+    mockGuestFindMany: vi.fn(),
+    mockGuestUpsert: vi.fn(),
+    mockReservationFindUnique: vi.fn(),
+    mockReservationFindMany: vi.fn(),
+    mockReservationCreate: vi.fn(),
+    mockReservationUpdate: vi.fn(),
+    mockReservationGuestUpsert: vi.fn().mockResolvedValue({}),
+  };
+});
 
 const txClient = {
   $queryRaw: mockQueryRaw,
@@ -79,6 +100,7 @@ vi.mock("@stayw/auth", () => ({
 vi.mock("@stayw/integrations/ownerrez", () => ({
   OwnerrezClient: vi.fn().mockImplementation(() => ({
     listBookings: mockListBookings,
+    listOperationalBookings: mockListOperationalBookings,
     getGuest: mockGetGuest,
   })),
 }));
@@ -468,5 +490,61 @@ describe("previewOwnerRezReservationSync — read-only, never writes", () => {
     const result = await previewOwnerRezReservationSync(ACTOR as never);
 
     expect(result).toEqual({ configured: false });
+  });
+});
+
+describe("OwnerRez operational retrieval wiring (2026-09-27, OwnerRez step 1)", () => {
+  it("sync: a long-lead booking (created/changed 200 days ago, arriving next week) returned by the operational retrieval is imported like any other — same property/guest matching", async () => {
+    mockListBookings.mockResolvedValue([
+      booking({
+        id: 5501,
+        arrival: "2026-10-03",
+        departure: "2026-10-06",
+        created_utc: "2026-03-11T00:00:00Z",
+        updated_utc: "2026-03-11T00:00:00Z",
+      }),
+    ]);
+    mockPropertyFindMany.mockResolvedValue([AQUA_PALM]);
+    mockGuestFindMany.mockResolvedValue([]);
+    mockGetGuest.mockResolvedValue({
+      id: 9001,
+      first_name: "Jane",
+      last_name: "Doe",
+      email: null,
+      phone: null,
+    });
+    mockGuestUpsert.mockResolvedValue({ id: "guest-1" });
+    mockReservationFindUnique.mockResolvedValue(null);
+    mockReservationCreate.mockResolvedValue({ id: "res-1" });
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(outcome).toMatchObject({ status: "completed", created: 1 });
+    expect(mockListOperationalBookings).toHaveBeenCalledTimes(1);
+    expect(mockListBookings).toHaveBeenCalledTimes(1); // only via the operational wrapper
+    expect(mockReservationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          propertyId: "prop-1",
+          externalReservationId: "5501",
+        }),
+      }),
+    );
+  });
+
+  it("preview uses the operational retrieval too, and still never writes", async () => {
+    mockListBookings.mockResolvedValue([booking({ id: 5601 })]);
+    mockPropertyFindMany.mockResolvedValue([AQUA_PALM]);
+    mockReservationFindMany.mockResolvedValue([]);
+
+    const result = await previewOwnerRezReservationSync(ACTOR as never);
+
+    expect(mockListOperationalBookings).toHaveBeenCalledTimes(1);
+    if (result.configured && "plan" in result) {
+      expect(result.plan.totalFetched).toBe(1);
+      expect(result.plan.toCreate).toHaveLength(1);
+    }
+    expect(mockReservationCreate).not.toHaveBeenCalled();
+    expect(mockGuestUpsert).not.toHaveBeenCalled();
   });
 });

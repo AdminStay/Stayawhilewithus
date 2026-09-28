@@ -31,10 +31,17 @@ const PROPERTIES_PATH_PREFIX = `${API_BASE_PATH}/properties`;
 const BOOKINGS_PATH_PREFIX = `${API_BASE_PATH}/bookings`;
 
 // Hard cap independent of cycle detection below — belt-and-suspenders, not
-// a substitute for it. OwnerRez's real portfolio pages at 20 items/page
-// (confirmed live 2026-08-26); 50 pages is generously above any realistic
-// property or 90-day-booking volume.
-const MAX_PAGINATION_PAGES = 50;
+// a substitute for it. OwnerRez pages at 20 items/page (confirmed live
+// 2026-08-26).
+/**
+ * Runaway-loop guard per paginated query. /bookings pages are server-sized
+ * at 20 items (observed; not configurable per OwnerRez's docs), so the old
+ * cap of 50 pages silently limited one booking query to 1,000 bookings —
+ * already close to the 941 a real 90-day Production preview returned
+ * (2026-09-27). 200 pages (4,000 bookings per query) keeps the guard while
+ * leaving real headroom; the repeated-URL check is unchanged.
+ */
+const MAX_PAGINATION_PAGES = 200;
 
 /**
  * Validates and normalizes a `next_page_url` OwnerRez returned in a page
@@ -87,6 +94,49 @@ function resolvePaginationPath(
  * nothing here scopes bookings by property yet.
  */
 const DEFAULT_BOOKINGS_LOOKBACK_DAYS = 90;
+
+/**
+ * Operational booking retrieval (2026-09-27, OwnerRez step 1). OwnerRez's
+ * own docs (GET /v2/bookings):
+ *   - `since_utc`: "Filter for bookings created or changed since a specific
+ *     date (UTC)." — so the 90-day default misses any booking created and
+ *     last changed more than 90 days ago, even if the guest arrives
+ *     tomorrow or is in the house today.
+ *   - `from`: "Filter for bookings that depart on or after a specific date
+ *     (in property timezone)."
+ *   - "Either property_ids or since_utc is required." — so a stay-window
+ *     query must be scoped by `property_ids`.
+ * listOperationalBookings() therefore unions two documented queries:
+ *   A. recent changes: `since_utc` = now − 90 days (unchanged — new
+ *      bookings, cancellations, recent departures);
+ *   B. stay window: `property_ids` = every OwnerRez property (active and
+ *      inactive) + `from` = yesterday, i.e. every booking departing
+ *      yesterday or later, however long ago it was booked (in-house now,
+ *      arrivals, all future stays). Past stays older than that are not
+ *      re-downloaded.
+ * Merged by booking id; for a booking returned by both, the copy with the
+ * later `updated_utc` wins.
+ */
+export const OPERATIONAL_STAY_WINDOW_BUFFER_DAYS = 1;
+const PROPERTY_IDS_PER_BOOKINGS_QUERY = 50;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export interface OperationalBookingsResult {
+  bookings: OwnerrezBooking[];
+  stats: {
+    recentChanges: number;
+    stayWindow: number;
+    merged: number;
+    propertiesQueried: number;
+    stayWindowFrom: string;
+  };
+}
+
+function laterUpdated(a: OwnerrezBooking, b: OwnerrezBooking): OwnerrezBooking {
+  const ta = Date.parse(a.updated_utc);
+  const tb = Date.parse(b.updated_utc);
+  return !Number.isNaN(tb) && (Number.isNaN(ta) || tb > ta) ? b : a;
+}
 
 function defaultSinceUtc(): string {
   const cutoff = new Date(
@@ -266,6 +316,65 @@ export class OwnerrezClient
       `/bookings?since_utc=${encodeURIComponent(sinceUtc)}`,
       BOOKINGS_PATH_PREFIX,
     );
+  }
+
+  /**
+   * Every booking the operational views need — see the "Operational
+   * booking retrieval" notes near the top of this file.
+   * Read-only (GETs only). Stay-window property ids are sent in chunks so a
+   * large portfolio never produces an oversized URL; each query is fully
+   * paginated with the same URL validation and guards as every other list.
+   */
+  async listOperationalBookings(options?: {
+    now?: Date;
+  }): Promise<OperationalBookingsResult> {
+    const now = options?.now ?? new Date();
+    const recent = await this.listBookings({
+      sinceUtc: new Date(
+        now.getTime() - DEFAULT_BOOKINGS_LOOKBACK_DAYS * DAY_MS,
+      ).toISOString(),
+    });
+
+    const stayWindowFrom = new Date(
+      now.getTime() - OPERATIONAL_STAY_WINDOW_BUFFER_DAYS * DAY_MS,
+    )
+      .toISOString()
+      .slice(0, 10);
+    const propertyIds = (await this.listProperties()).map((p) => p.id);
+    const stay: OwnerrezBooking[] = [];
+    for (
+      let i = 0;
+      i < propertyIds.length;
+      i += PROPERTY_IDS_PER_BOOKINGS_QUERY
+    ) {
+      const ids = propertyIds.slice(i, i + PROPERTY_IDS_PER_BOOKINGS_QUERY);
+      stay.push(
+        ...(await this.fetchAllPages<OwnerrezBooking>(
+          `/bookings?property_ids=${ids.join(",")}&from=${stayWindowFrom}`,
+          BOOKINGS_PATH_PREFIX,
+        )),
+      );
+    }
+
+    const byId = new Map<number, OwnerrezBooking>();
+    for (const booking of [...recent, ...stay]) {
+      const existing = byId.get(booking.id);
+      byId.set(
+        booking.id,
+        existing ? laterUpdated(existing, booking) : booking,
+      );
+    }
+
+    return {
+      bookings: [...byId.values()],
+      stats: {
+        recentChanges: recent.length,
+        stayWindow: stay.length,
+        merged: byId.size,
+        propertiesQueried: propertyIds.length,
+        stayWindowFrom,
+      },
+    };
   }
 
   async getGuest(guestId: number): Promise<OwnerrezGuest> {

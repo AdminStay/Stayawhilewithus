@@ -251,7 +251,7 @@ describe("OwnerrezClient", () => {
       const client = new OwnerrezClient(credentials);
 
       await expect(client.listProperties()).rejects.toThrow(
-        /exceeded the maximum of 50 pages/,
+        /exceeded the maximum of 200 pages/,
       );
     });
 
@@ -437,5 +437,240 @@ describe("OwnerrezClient", () => {
     await expect(client.receiveWebhook("{}", {})).rejects.toThrow(
       /not implemented yet/,
     );
+  });
+
+  describe("listOperationalBookings (2026-09-27, OwnerRez step 1)", () => {
+    const NOW = new Date("2026-09-27T18:00:00.000Z");
+    const daysFromNow = (d: number) =>
+      new Date(NOW.getTime() + d * 86_400_000).toISOString();
+
+    function booking(id: number, overrides: Record<string, unknown> = {}) {
+      return {
+        id,
+        property_id: 1,
+        guest_id: id + 1000,
+        status: "active",
+        arrival: daysFromNow(10).slice(0, 10),
+        departure: daysFromNow(14).slice(0, 10),
+        created_utc: daysFromNow(-5),
+        updated_utc: daysFromNow(-5),
+        ...overrides,
+      };
+    }
+
+    /** Routes the mocked HTTP layer by path, the way OwnerRez would answer. */
+    function serve(routes: {
+      active?: unknown[];
+      inactive?: unknown[];
+      recent?: unknown[];
+      stay?: (path: string) => {
+        items: unknown[];
+        next_page_url?: string | null;
+      };
+    }) {
+      mockRequest.mockReset().mockImplementation(async (path: string) => {
+        if (path === "/properties?active=true")
+          return { items: routes.active ?? [] };
+        if (path === "/properties?active=false")
+          return { items: routes.inactive ?? [] };
+        if (path.startsWith("/bookings?since_utc="))
+          return { items: routes.recent ?? [] };
+        if (path.startsWith("/bookings?property_ids="))
+          return routes.stay ? routes.stay(path) : { items: [] };
+        throw new Error(`unexpected path ${path}`);
+      });
+    }
+
+    it("REGRESSION: a booking created and last changed 200 days ago that arrives tomorrow is NOT omitted (the 90-day since_utc query can't return it; the stay window does)", async () => {
+      const longLead = booking(501, {
+        arrival: daysFromNow(1).slice(0, 10),
+        departure: daysFromNow(5).slice(0, 10),
+        created_utc: daysFromNow(-200),
+        updated_utc: daysFromNow(-200),
+      });
+      serve({
+        active: [{ id: 1 }],
+        recent: [],
+        stay: () => ({ items: [longLead] }),
+      });
+
+      const { bookings } = await new OwnerrezClient(
+        credentials,
+      ).listOperationalBookings({ now: NOW });
+
+      expect(bookings).toEqual([longLead]);
+    });
+
+    it("includes a currently in-house stay booked long ago (arrived 3 days ago, departs in 2 days)", async () => {
+      const inHouse = booking(502, {
+        arrival: daysFromNow(-3).slice(0, 10),
+        departure: daysFromNow(2).slice(0, 10),
+        created_utc: daysFromNow(-150),
+        updated_utc: daysFromNow(-150),
+      });
+      serve({ active: [{ id: 1 }], stay: () => ({ items: [inHouse] }) });
+
+      const { bookings } = await new OwnerrezClient(
+        credentials,
+      ).listOperationalBookings({ now: NOW });
+      expect(bookings.map((b) => b.id)).toEqual([502]);
+    });
+
+    it("keeps recent-change bookings (new bookings, cancellations, recent past stays) from the unchanged 90-day query", async () => {
+      const newBooking = booking(601);
+      const cancelled = booking(602, { status: "canceled" });
+      const recentPast = booking(603, {
+        arrival: daysFromNow(-20).slice(0, 10),
+        departure: daysFromNow(-15).slice(0, 10),
+      });
+      serve({
+        active: [{ id: 1 }],
+        recent: [newBooking, cancelled, recentPast],
+      });
+
+      const { bookings } = await new OwnerrezClient(
+        credentials,
+      ).listOperationalBookings({ now: NOW });
+      expect(bookings.map((b) => b.id).sort()).toEqual([601, 602, 603]);
+      expect(bookings.find((b) => b.id === 602)?.status).toBe("canceled");
+    });
+
+    it("a cancelled future booking returned only by the stay window keeps its cancelled status", async () => {
+      serve({
+        active: [{ id: 1 }],
+        stay: () => ({
+          items: [
+            booking(604, {
+              status: "canceled",
+              updated_utc: daysFromNow(-120),
+            }),
+          ],
+        }),
+      });
+      const { bookings } = await new OwnerrezClient(
+        credentials,
+      ).listOperationalBookings({ now: NOW });
+      expect(bookings).toEqual([
+        expect.objectContaining({ id: 604, status: "canceled" }),
+      ]);
+    });
+
+    it("de-duplicates a booking returned by both queries (idempotent), keeping the copy with the later updated_utc", async () => {
+      const older = booking(700, {
+        updated_utc: daysFromNow(-10),
+        status: "active",
+      });
+      const newer = booking(700, {
+        updated_utc: daysFromNow(-1),
+        status: "canceled",
+      });
+      serve({
+        active: [{ id: 1 }],
+        recent: [older],
+        stay: () => ({ items: [newer] }),
+      });
+
+      const result = await new OwnerrezClient(
+        credentials,
+      ).listOperationalBookings({ now: NOW });
+      expect(result.bookings).toEqual([newer]);
+      expect(result.stats).toMatchObject({
+        recentChanges: 1,
+        stayWindow: 1,
+        merged: 1,
+      });
+    });
+
+    it("sends exactly the documented GETs: since_utc = now − 90 days; property_ids of ALL properties (active + inactive) with from = yesterday", async () => {
+      serve({ active: [{ id: 11 }, { id: 12 }], inactive: [{ id: 13 }] });
+
+      const result = await new OwnerrezClient(
+        credentials,
+      ).listOperationalBookings({ now: NOW });
+
+      const paths = mockRequest.mock.calls.map((c) => c[0] as string);
+      expect(paths).toContain(
+        `/bookings?since_utc=${encodeURIComponent(daysFromNow(-90))}`,
+      );
+      expect(paths).toContain(
+        "/bookings?property_ids=11,12,13&from=2026-09-26",
+      );
+      for (const call of mockRequest.mock.calls) {
+        expect(call).toHaveLength(1); // plain GET, no write-shaped init
+      }
+      expect(result.stats).toMatchObject({
+        propertiesQueried: 3,
+        stayWindowFrom: "2026-09-26",
+      });
+    });
+
+    it("chunks property_ids at 50 per request for a large portfolio", async () => {
+      serve({
+        active: Array.from({ length: 120 }, (_, i) => ({ id: i + 1 })),
+      });
+      await new OwnerrezClient(credentials).listOperationalBookings({
+        now: NOW,
+      });
+      const stayCalls = mockRequest.mock.calls
+        .map((c) => c[0] as string)
+        .filter((p) => p.startsWith("/bookings?property_ids="));
+      expect(stayCalls).toHaveLength(3);
+      expect(
+        stayCalls.map((p) => p.split("=")[1]!.split("&")[0]!.split(",").length),
+      ).toEqual([50, 50, 20]);
+    });
+
+    it("follows stay-window pagination and still rejects a next_page_url outside /v2/bookings", async () => {
+      serve({
+        active: [{ id: 1 }],
+        stay: (path) =>
+          path.includes("offset=20")
+            ? { items: [booking(802)], next_page_url: null }
+            : {
+                items: [booking(801)],
+                next_page_url:
+                  "https://api.ownerreservations.com/v2/bookings?property_ids=1&from=2026-09-26&offset=20",
+              },
+      });
+      const { bookings } = await new OwnerrezClient(
+        credentials,
+      ).listOperationalBookings({ now: NOW });
+      expect(bookings.map((b) => b.id)).toEqual([801, 802]);
+
+      serve({
+        active: [{ id: 1 }],
+        stay: () => ({
+          items: [booking(803)],
+          next_page_url:
+            "https://api.ownerreservations.com/v2/properties?offset=20",
+        }),
+      });
+      await expect(
+        new OwnerrezClient(credentials).listOperationalBookings({ now: NOW }),
+      ).rejects.toThrow(/unexpected path/);
+    });
+
+    it("with no OwnerRez properties it runs only the recent-changes query (never an empty property_ids request)", async () => {
+      serve({ recent: [booking(900)] });
+      const result = await new OwnerrezClient(
+        credentials,
+      ).listOperationalBookings({ now: NOW });
+      expect(result.bookings.map((b) => b.id)).toEqual([900]);
+      expect(
+        mockRequest.mock.calls.some((c) =>
+          String(c[0]).startsWith("/bookings?property_ids="),
+        ),
+      ).toBe(false);
+    });
+
+    it("listBookings() itself is unchanged: bare call still uses the 90-day since_utc only", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      mockRequest.mockReset().mockResolvedValueOnce({ items: [] });
+      await new OwnerrezClient(credentials).listBookings();
+      expect(mockRequest).toHaveBeenCalledWith(
+        `/bookings?since_utc=${encodeURIComponent(daysFromNow(-90))}`,
+      );
+    });
   });
 });

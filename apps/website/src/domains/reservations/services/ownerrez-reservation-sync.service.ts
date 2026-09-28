@@ -148,14 +148,19 @@ export async function previewOwnerRezReservationSync(
 
   try {
     const client = new OwnerrezClient(credentials);
-    const [bookings, properties] = await Promise.all([
-      client.listBookings(),
+    // 2026-09-27: operational retrieval (recent changes ∪ every stay
+    // departing yesterday or later) — see OwnerrezClient
+    // .listOperationalBookings(). A bare listBookings() only returned
+    // bookings created/changed in the last 90 days.
+    const [{ bookings, stats }, properties] = await Promise.all([
+      client.listOperationalBookings(),
       prisma.property.findMany({
         where: { deletedAt: null, ownerRezPropertyId: { not: null } },
         select: { id: true, name: true, ownerRezPropertyId: true },
       }),
     ]);
 
+    logOwnerRezReservationSync("preview_bookings_retrieved", stats);
     const propertyByOwnerRezId = new Map(
       properties.map((p) => [p.ownerRezPropertyId as string, p] as const),
     );
@@ -393,7 +398,8 @@ export async function syncOwnerRezReservations(
 
   try {
     const client = new OwnerrezClient(credentials);
-    const bookings = await client.listBookings();
+    const { bookings, stats } = await client.listOperationalBookings();
+    logOwnerRezReservationSync("sync_bookings_retrieved", stats);
 
     const properties = await prisma.property.findMany({
       where: { deletedAt: null, ownerRezPropertyId: { not: null } },
