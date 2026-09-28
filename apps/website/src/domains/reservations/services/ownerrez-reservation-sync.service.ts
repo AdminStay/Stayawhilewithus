@@ -5,6 +5,7 @@ import { prisma, type Prisma } from "@stayw/database";
 import {
   OwnerrezClient,
   OwnerrezRequestBudgetError,
+  OwnerrezUnexpectedResponseError,
   type OwnerrezBooking,
 } from "@stayw/integrations/ownerrez";
 
@@ -210,9 +211,19 @@ export async function previewOwnerRezReservationSync(
 
     return { configured: true, plan };
   } catch (err) {
+    // 2026-09-28 diagnostic: an undocumented OwnerRez response shape is
+    // logged as operation/page/type/key-names only (no values), and every
+    // preview failure says plainly that nothing was written.
+    if (err instanceof OwnerrezUnexpectedResponseError) {
+      logOwnerRezReservationSync("preview_unexpected_response", {
+        ...err.diagnostic,
+      });
+    }
+    const reason =
+      err instanceof Error ? err.message : "OwnerRez request failed.";
     return {
       configured: true,
-      error: err instanceof Error ? err.message : "OwnerRez request failed.",
+      error: `${reason.replace(/\.?\s*$/, ".")} Nothing was written to StayWhile.`,
     };
   }
 }

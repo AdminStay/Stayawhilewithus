@@ -18,6 +18,7 @@ import {
 } from "@stayw/integrations/notion";
 import {
   OwnerrezClient,
+  OwnerrezUnexpectedResponseError,
   type OwnerrezBooking,
   type OwnerrezProperty,
 } from "@stayw/integrations/ownerrez";
@@ -630,6 +631,14 @@ export async function getOwnerRezHighlights(
       items: pickRelevantBookings(bookings, limit),
     };
   } catch (err) {
+    if (err instanceof OwnerrezUnexpectedResponseError) {
+      // Same safe diagnostic as the reservation preview: operation, page,
+      // JSON type and key names only — never values.
+      console.warn(
+        "[ownerrez-highlights]",
+        JSON.stringify({ event: "unexpected_response", ...err.diagnostic }),
+      );
+    }
     return {
       configured: true,
       ok: false,

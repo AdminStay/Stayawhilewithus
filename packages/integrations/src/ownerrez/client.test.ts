@@ -14,7 +14,12 @@ vi.mock("../core", async (importOriginal) => {
 
 import { HttpRequestError } from "../core";
 
-import { OwnerrezClient, OwnerrezRequestBudgetError } from "./client";
+import {
+  describeOwnerrezResponseShape,
+  OwnerrezClient,
+  OwnerrezRequestBudgetError,
+  OwnerrezUnexpectedResponseError,
+} from "./client";
 
 const credentials = { username: "stayW", token: "sk-ownerrez-test" };
 
@@ -783,6 +788,208 @@ describe("OwnerrezClient", () => {
       expect(
         mockRequest.mock.calls.some((c) => String(c[0]).includes("since_utc")),
       ).toBe(false);
+    });
+  });
+
+  describe("response-shape validation + safe diagnostic (2026-09-28)", () => {
+    const serveOnce = (body: unknown) =>
+      mockRequest.mockReset().mockResolvedValueOnce(body);
+
+    async function failure(body: unknown) {
+      serveOnce(body);
+      const err = await new OwnerrezClient(credentials)
+        .listBookings({ sinceUtc: "2026-01-01T00:00:00Z" })
+        .then(
+          () => {
+            throw new Error("expected a rejection, got a result");
+          },
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(OwnerrezUnexpectedResponseError);
+      return err as InstanceType<typeof OwnerrezUnexpectedResponseError>;
+    }
+
+    it("a normal { items: [...] } page still succeeds", async () => {
+      serveOnce({ items: [{ id: 1 }], next_page_url: null });
+      await expect(
+        new OwnerrezClient(credentials).listBookings({
+          sinceUtc: "2026-01-01T00:00:00Z",
+        }),
+      ).resolves.toEqual([{ id: 1 }]);
+    });
+
+    it("an object without items fails visibly with operation, page, type and key names only", async () => {
+      const err = await failure({ count: 0, limit: 20, offset: 0 });
+      expect(err.diagnostic).toEqual({
+        operation: "bookings:recent-changes",
+        page: 1,
+        type: "object",
+        keys: ["count", "limit", "offset"],
+      });
+      expect(err.message).toBe(
+        "OwnerRez returned an unexpected response for bookings:recent-changes (page 1): object with keys [count, limit, offset].",
+      );
+    });
+
+    it("items that is not an array fails (its JSON type is reported, not its content)", async () => {
+      const err = await failure({ items: { "901": { guest: "Jane" } } });
+      expect(err.diagnostic).toMatchObject({
+        type: "object",
+        keys: ["items"],
+        itemsType: "object",
+      });
+      expect(err.message).toContain('"items" is object, not an array');
+      expect(err.message).not.toMatch(/901|Jane/);
+    });
+
+    it("a top-level array fails: length + first element key names only", async () => {
+      const err = await failure([
+        { id: 4471, arrival: "2026-10-01", guest_email: "jane@example.com" },
+        { id: 4472 },
+      ]);
+      expect(err.diagnostic).toMatchObject({
+        type: "array",
+        length: 2,
+        firstElementKeys: ["arrival", "guest_email", "id"],
+      });
+      expect(err.message).not.toMatch(/4471|2026-10-01|jane@example\.com/);
+    });
+
+    it("null, a string, a number and an empty array all fail visibly — none become zero bookings", async () => {
+      for (const [body, type] of [
+        [null, "null"],
+        ["<html>error</html>", "string"],
+        [0, "number"],
+        [[], "array"],
+      ] as const) {
+        const err = await failure(body);
+        expect(err.diagnostic.type).toBe(type);
+        expect(err.message).not.toContain("<html>");
+      }
+    });
+
+    it("an error-style object returned with 2xx fails, and none of its values are exposed", async () => {
+      const err = await failure({
+        message: "Invalid token sk-ownerrez-test for user stayW",
+        errors: [{ field: "from", detail: "bad value 2026-09-27" }],
+        status: 400,
+      });
+      expect(err.diagnostic).toEqual({
+        operation: "bookings:recent-changes",
+        page: 1,
+        type: "object",
+        keys: ["errors", "message", "status"],
+      });
+      const emitted = JSON.stringify({ m: err.message, d: err.diagnostic });
+      for (const secret of [
+        "sk-ownerrez-test",
+        "stayW",
+        "Invalid token",
+        "2026-09-27",
+        "400",
+      ]) {
+        expect(emitted).not.toContain(secret);
+      }
+    });
+
+    it("keys that aren't ordinary field names (numeric ids, emails) are counted as redacted, never shown", () => {
+      const shape = describeOwnerrezResponseShape({
+        "4471": {},
+        "jane@example.com": 1,
+        next_page_url: null,
+      });
+      expect(shape).toEqual({
+        type: "object",
+        keys: ["next_page_url"],
+        redactedKeyCount: 2,
+      });
+    });
+
+    it("the stay-window diagnostic names the operation, batch and page — never property ids, the date or the URL", async () => {
+      mockRequest.mockReset().mockImplementation(async (path: string) => {
+        if (path === "/properties?active=true")
+          return { items: [{ id: 11 }, { id: 12 }] };
+        if (path === "/properties?active=false") return { items: [] };
+        if (path.startsWith("/bookings?property_ids=")) {
+          return path.includes("offset=20")
+            ? { message: "nope" }
+            : {
+                items: [{ id: 1 }],
+                next_page_url:
+                  "https://api.ownerreservations.com/v2/bookings?property_ids=11,12&from=2026-09-26&offset=20",
+              };
+        }
+        throw new Error(`unexpected path ${path}`);
+      });
+
+      const err = await new OwnerrezClient(credentials)
+        .listStayWindowBookings({ now: new Date("2026-09-27T18:00:00.000Z") })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(OwnerrezUnexpectedResponseError);
+      const e = err as InstanceType<typeof OwnerrezUnexpectedResponseError>;
+      expect(e.message).toBe(
+        "OwnerRez returned an unexpected response for bookings:stay-window (page 2, batch 1): object with keys [message].",
+      );
+      expect(JSON.stringify(e.diagnostic)).not.toMatch(
+        /11,12|2026-09-26|property_ids|nope|http/,
+      );
+    });
+
+    it("properties pages are labelled too", async () => {
+      mockRequest
+        .mockReset()
+        .mockResolvedValueOnce({ items: [] })
+        .mockResolvedValueOnce({ data: [] });
+      const err = await new OwnerrezClient(credentials)
+        .listProperties()
+        .catch((e: unknown) => e);
+      expect(
+        (err as InstanceType<typeof OwnerrezUnexpectedResponseError>).diagnostic
+          .operation,
+      ).toBe("properties:inactive");
+    });
+
+    it("the operational retrieval rejects on a malformed page instead of returning fewer bookings", async () => {
+      mockRequest.mockReset().mockImplementation(async (path: string) => {
+        if (path.startsWith("/bookings?since_utc="))
+          return { items: [{ id: 1 }] };
+        if (path.startsWith("/properties")) return { items: [{ id: 5 }] };
+        return { count: 3 };
+      });
+      await expect(
+        new OwnerrezClient(credentials).listOperationalBookings({
+          now: new Date("2026-09-27T18:00:00.000Z"),
+        }),
+      ).rejects.toBeInstanceOf(OwnerrezUnexpectedResponseError);
+    });
+
+    it("a paged HTTP error is re-labelled with the operation (status kept) — no URL or query values in the message", async () => {
+      mockRequest.mockReset().mockImplementation(async (path: string) => {
+        if (path.startsWith("/properties")) return { items: [{ id: 77 }] };
+        throw new HttpRequestError(path, 400);
+      });
+      const err = await new OwnerrezClient(credentials)
+        .listStayWindowBookings({ now: new Date("2026-09-27T18:00:00.000Z") })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(HttpRequestError);
+      expect((err as HttpRequestError).status).toBe(400);
+      expect((err as Error).message).toBe(
+        "Request to OwnerRez bookings:stay-window (page 1, batch 1) failed with 400",
+      );
+      expect((err as Error).message).not.toMatch(/property_ids|77|from=/);
+    });
+
+    it("pagination-validation errors keep their protection but no longer echo the URL", async () => {
+      mockRequest.mockReset().mockResolvedValueOnce({
+        items: [{ id: 1 }],
+        next_page_url: "https://evil.example.com/v2/bookings?secret=abc",
+      });
+      const err = await new OwnerrezClient(credentials)
+        .listBookings({ sinceUtc: "2026-01-01T00:00:00Z" })
+        .catch((e: unknown) => e);
+      expect((err as Error).message).toMatch(/unexpected host/);
+      expect((err as Error).message).not.toMatch(/evil|secret|abc/);
     });
   });
 });

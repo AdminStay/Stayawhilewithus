@@ -44,6 +44,137 @@ const BOOKINGS_PATH_PREFIX = `${API_BASE_PATH}/bookings`;
 const MAX_PAGINATION_PAGES = 200;
 
 /**
+ * Response-shape diagnostic (2026-09-28). The first Production preview
+ * failed with "a.items is not iterable": OwnerRez answered 2xx with JSON
+ * that has no `items` array, which its docs never describe. Every paginated
+ * call now carries a safe operation label and every page is validated
+ * before `items` is read. A page that isn't `{ items: [...] }` throws
+ * OwnerrezUnexpectedResponseError — never treated as an empty list — whose
+ * message and `diagnostic` contain ONLY: operation label, page (and batch)
+ * number, JSON type, and top-level key NAMES (for an array: its length and
+ * the first element's key names). Never values, URLs, query values, ids,
+ * dates, guest data or headers. Key names that don't look like ordinary
+ * field names (e.g. numeric ids used as keys) are counted as redacted, not
+ * shown.
+ */
+export type OwnerrezPagedOperation =
+  | "bookings:recent-changes"
+  | "bookings:stay-window"
+  | "properties:active"
+  | "properties:inactive";
+
+export interface OwnerrezResponseShape {
+  type:
+    | "object"
+    | "array"
+    | "null"
+    | "string"
+    | "number"
+    | "boolean"
+    | "undefined"
+    | "other";
+  keys?: string[];
+  redactedKeyCount?: number;
+  /** When `items` is present but not an array: its JSON type only. */
+  itemsType?: string;
+  length?: number;
+  firstElementKeys?: string[];
+  firstElementRedactedKeyCount?: number;
+}
+
+export interface OwnerrezResponseDiagnostic extends OwnerrezResponseShape {
+  operation: OwnerrezPagedOperation;
+  page: number;
+  batch?: number;
+}
+
+const SAFE_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const MAX_KEYS_SHOWN = 30;
+
+function jsonType(value: unknown): OwnerrezResponseShape["type"] {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  const t = typeof value;
+  return t === "object" ||
+    t === "string" ||
+    t === "number" ||
+    t === "boolean" ||
+    t === "undefined"
+    ? t
+    : "other";
+}
+
+function safeKeys(value: object): { keys: string[]; redacted: number } {
+  const all = Object.keys(value);
+  const shown = all.filter((k) => SAFE_KEY.test(k)).sort();
+  return {
+    keys: shown.slice(0, MAX_KEYS_SHOWN),
+    redacted: all.length - Math.min(shown.length, MAX_KEYS_SHOWN),
+  };
+}
+
+export function describeOwnerrezResponseShape(
+  value: unknown,
+): OwnerrezResponseShape {
+  const type = jsonType(value);
+  if (type === "object") {
+    const { keys, redacted } = safeKeys(value as object);
+    const items = (value as Record<string, unknown>).items;
+    return {
+      type,
+      keys,
+      ...(redacted > 0 && { redactedKeyCount: redacted }),
+      ...(items !== undefined &&
+        !Array.isArray(items) && { itemsType: jsonType(items) }),
+    };
+  }
+  if (type === "array") {
+    const array = value as unknown[];
+    const first = array[0];
+    if (jsonType(first) === "object") {
+      const { keys, redacted } = safeKeys(first as object);
+      return {
+        type,
+        length: array.length,
+        firstElementKeys: keys,
+        ...(redacted > 0 && { firstElementRedactedKeyCount: redacted }),
+      };
+    }
+    return { type, length: array.length };
+  }
+  return { type };
+}
+
+function formatShape(shape: OwnerrezResponseShape): string {
+  if (shape.type === "object") {
+    const redacted = shape.redactedKeyCount
+      ? ` (+${shape.redactedKeyCount} redacted)`
+      : "";
+    const items = shape.itemsType
+      ? `; "items" is ${shape.itemsType}, not an array`
+      : "";
+    return `object with keys [${(shape.keys ?? []).join(", ")}]${redacted}${items}`;
+  }
+  if (shape.type === "array") {
+    const first = shape.firstElementKeys
+      ? `, first element keys [${shape.firstElementKeys.join(", ")}]${shape.firstElementRedactedKeyCount ? ` (+${shape.firstElementRedactedKeyCount} redacted)` : ""}`
+      : "";
+    return `array of length ${shape.length}${first}`;
+  }
+  return shape.type;
+}
+
+export class OwnerrezUnexpectedResponseError extends Error {
+  constructor(readonly diagnostic: OwnerrezResponseDiagnostic) {
+    const where = `${diagnostic.operation} (page ${diagnostic.page}${diagnostic.batch ? `, batch ${diagnostic.batch}` : ""})`;
+    super(
+      `OwnerRez returned an unexpected response for ${where}: ${formatShape(diagnostic)}.`,
+    );
+    this.name = "OwnerrezUnexpectedResponseError";
+  }
+}
+
+/**
  * Validates and normalizes a `next_page_url` OwnerRez returned in a page
  * response into a path safe to pass to this client's own `HttpClient`
  * (which always prepends `BASE_URL` itself) — never fetches an arbitrary
@@ -63,20 +194,18 @@ function resolvePaginationPath(
   try {
     url = new URL(nextPageUrl, API_ORIGIN);
   } catch {
-    throw new Error(
-      `OwnerRez returned a malformed pagination URL: "${nextPageUrl}"`,
-    );
+    throw new Error("OwnerRez returned a malformed pagination URL.");
   }
 
   if (url.origin !== API_ORIGIN) {
     throw new Error(
-      `Refusing to follow OwnerRez pagination URL with unexpected host: "${url.origin}"`,
+      "Refusing to follow OwnerRez pagination URL with unexpected host.",
     );
   }
 
   if (!url.pathname.startsWith(expectedPathPrefix)) {
     throw new Error(
-      `Refusing to follow OwnerRez pagination URL with unexpected path: "${url.pathname}"`,
+      "Refusing to follow OwnerRez pagination URL with unexpected path.",
     );
   }
 
@@ -300,6 +429,7 @@ export class OwnerrezClient
   private async fetchAllPages<T>(
     initialPath: string,
     expectedPathPrefix: string,
+    context: { operation: OwnerrezPagedOperation; batch?: number },
   ): Promise<T[]> {
     const items: T[] = [];
     const seenPaths = new Set<string>();
@@ -320,11 +450,38 @@ export class OwnerrezClient
       seenPaths.add(path);
       pageCount++;
 
-      const page: OwnerrezPage<T> = await this.get<OwnerrezPage<T>>(path);
-      items.push(...page.items);
+      let page: unknown;
+      try {
+        page = await this.get<unknown>(path);
+      } catch (err) {
+        // Re-label a paged HTTP failure with the safe operation label: the
+        // original message contains the request path and query values.
+        if (err instanceof HttpRequestError) {
+          throw new HttpRequestError(
+            `OwnerRez ${context.operation} (page ${pageCount}${context.batch ? `, batch ${context.batch}` : ""})`,
+            err.status,
+          );
+        }
+        throw err;
+      }
+      if (
+        page === null ||
+        typeof page !== "object" ||
+        Array.isArray(page) ||
+        !Array.isArray((page as OwnerrezPage<T>).items)
+      ) {
+        throw new OwnerrezUnexpectedResponseError({
+          operation: context.operation,
+          page: pageCount,
+          ...(context.batch !== undefined && { batch: context.batch }),
+          ...describeOwnerrezResponseShape(page),
+        });
+      }
+      const validPage = page as OwnerrezPage<T>;
+      items.push(...validPage.items);
 
-      path = page.next_page_url
-        ? resolvePaginationPath(page.next_page_url, expectedPathPrefix)
+      path = validPage.next_page_url
+        ? resolvePaginationPath(validPage.next_page_url, expectedPathPrefix)
         : null;
     }
 
@@ -343,10 +500,12 @@ export class OwnerrezClient
     const active = await this.fetchAllPages<OwnerrezProperty>(
       "/properties?active=true",
       PROPERTIES_PATH_PREFIX,
+      { operation: "properties:active" },
     );
     const inactive = await this.fetchAllPages<OwnerrezProperty>(
       "/properties?active=false",
       PROPERTIES_PATH_PREFIX,
+      { operation: "properties:inactive" },
     );
 
     const byId = new Map<number, OwnerrezProperty>();
@@ -376,6 +535,7 @@ export class OwnerrezClient
     return this.fetchAllPages<OwnerrezBooking>(
       `/bookings?since_utc=${encodeURIComponent(sinceUtc)}`,
       BOOKINGS_PATH_PREFIX,
+      { operation: "bookings:recent-changes" },
     );
   }
 
@@ -450,6 +610,10 @@ export class OwnerrezClient
         ...(await this.fetchAllPages<OwnerrezBooking>(
           `/bookings?property_ids=${ids.join(",")}&from=${from}`,
           BOOKINGS_PATH_PREFIX,
+          {
+            operation: "bookings:stay-window",
+            batch: i / PROPERTY_IDS_PER_BOOKINGS_QUERY + 1,
+          },
         )),
       );
     }

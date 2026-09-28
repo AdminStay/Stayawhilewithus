@@ -63,13 +63,19 @@ const mockListStayWindowBookings = vi.fn(async () => ({
   propertiesQueried: 1,
   from: "2026-09-27",
 }));
-vi.mock("@stayw/integrations/ownerrez", () => ({
-  OwnerrezClient: vi.fn().mockImplementation(() => ({
-    listBookings: mockListBookings,
-    listProperties: mockListProperties,
-    listStayWindowBookings: mockListStayWindowBookings,
-  })),
-}));
+vi.mock("@stayw/integrations/ownerrez", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@stayw/integrations/ownerrez")>();
+  return {
+    // Real error class so the service's instanceof check is genuine.
+    OwnerrezUnexpectedResponseError: actual.OwnerrezUnexpectedResponseError,
+    OwnerrezClient: vi.fn().mockImplementation(() => ({
+      listBookings: mockListBookings,
+      listProperties: mockListProperties,
+      listStayWindowBookings: mockListStayWindowBookings,
+    })),
+  };
+});
 
 import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
@@ -1269,6 +1275,42 @@ describe("searchNotionContent", () => {
 });
 
 describe("getOwnerRezHighlights", () => {
+  it("2026-09-28: an undocumented OwnerRez response surfaces as a visible error (never an empty list) and logs only the safe diagnostic", async () => {
+    process.env.OWNERREZ_USERNAME = "demo-user";
+    process.env.OWNERREZ_API_TOKEN = "demo-token";
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    const { OwnerrezUnexpectedResponseError } = await vi.importActual<
+      typeof import("@stayw/integrations/ownerrez")
+    >("@stayw/integrations/ownerrez");
+    mockListStayWindowBookings.mockRejectedValueOnce(
+      new OwnerrezUnexpectedResponseError({
+        operation: "bookings:stay-window",
+        page: 1,
+        batch: 1,
+        type: "array",
+        length: 0,
+      }),
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const result = await getOwnerRezHighlights(actor, 20);
+
+      expect(result).toEqual({
+        configured: true,
+        ok: false,
+        error:
+          "OwnerRez returned an unexpected response for bookings:stay-window (page 1, batch 1): array of length 0.",
+      });
+      expect(warn).toHaveBeenCalledWith(
+        "[ownerrez-highlights]",
+        expect.stringContaining('"operation":"bookings:stay-window"'),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("2026-09-28 REGRESSION: a long-lead upcoming stay (booked and last changed 200 days ago) appears — highlights use the stay-window retrieval, not the 90-day recent-changes query", async () => {
     process.env.OWNERREZ_USERNAME = "demo-user";
     process.env.OWNERREZ_API_TOKEN = "demo-token";

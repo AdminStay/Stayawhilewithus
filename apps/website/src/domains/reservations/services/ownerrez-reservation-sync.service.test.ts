@@ -103,6 +103,7 @@ vi.mock("@stayw/integrations/ownerrez", async (importOriginal) => {
   return {
     // The real error class, so the service's instanceof checks are genuine.
     OwnerrezRequestBudgetError: actual.OwnerrezRequestBudgetError,
+    OwnerrezUnexpectedResponseError: actual.OwnerrezUnexpectedResponseError,
     OwnerrezClient: vi.fn().mockImplementation(() => ({
       listBookings: mockListBookings,
       listOperationalBookings: mockListOperationalBookings,
@@ -128,8 +129,11 @@ const {
   OWNERREZ_DEFERRED_MARKER,
   OWNERREZ_RUN_REQUEST_BUDGET,
 } = await import("./ownerrez-reservation-sync.service");
-const { OwnerrezClient, OwnerrezRequestBudgetError } =
-  await import("@stayw/integrations/ownerrez");
+const {
+  OwnerrezClient,
+  OwnerrezRequestBudgetError,
+  OwnerrezUnexpectedResponseError,
+} = await import("@stayw/integrations/ownerrez");
 
 const ACTOR = { userId: "user-1" };
 const CONNECTION = { id: "conn-1", provider: "OWNERREZ" };
@@ -865,6 +869,80 @@ describe("previewOwnerRezReservationSync — ZERO StayWhile writes, proven (2026
     await previewOwnerRezReservationSync(ACTOR as never);
     expect(vi.mocked(OwnerrezClient).mock.calls.at(-1)?.[1]).toEqual({
       requestBudget: OWNERREZ_RUN_REQUEST_BUDGET,
+    });
+  });
+});
+
+describe("preview — undocumented OwnerRez response shape (2026-09-28 diagnostic)", () => {
+  const diagnostic = {
+    operation: "bookings:stay-window" as const,
+    page: 1,
+    batch: 1,
+    type: "object" as const,
+    keys: ["message", "status"],
+  };
+
+  it("fails visibly (never '0 bookings'), ends with 'Nothing was written to StayWhile.', and logs only the safe diagnostic", async () => {
+    mockListOperationalBookings.mockRejectedValueOnce(
+      new OwnerrezUnexpectedResponseError(diagnostic),
+    );
+    mockPropertyFindMany.mockResolvedValue([AQUA_PALM]);
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    try {
+      const result = await previewOwnerRezReservationSync(ACTOR as never);
+
+      expect(result).toEqual({
+        configured: true,
+        error:
+          "OwnerRez returned an unexpected response for bookings:stay-window (page 1, batch 1): object with keys [message, status]. Nothing was written to StayWhile.",
+      });
+      const call = log.mock.calls.find((c) =>
+        String(c[1]).includes("preview_unexpected_response"),
+      );
+      expect(call?.[0]).toBe("[ownerrez-reservation-sync]");
+      expect(JSON.parse(String(call?.[1]))).toMatchObject({
+        event: "preview_unexpected_response",
+        ...diagnostic,
+      });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("the failure path writes nothing either", async () => {
+    mockListOperationalBookings.mockRejectedValueOnce(
+      new OwnerrezUnexpectedResponseError(diagnostic),
+    );
+    mockPropertyFindMany.mockResolvedValue([AQUA_PALM]);
+    const { prisma } = await import("@stayw/database");
+
+    await previewOwnerRezReservationSync(ACTOR as never);
+
+    for (const write of [
+      mockGuestUpsert,
+      mockReservationCreate,
+      mockReservationUpdate,
+      mockReservationGuestUpsert,
+      mockSyncLogCreate,
+      mockSyncLogUpdate,
+      mockConnectionUpdate,
+      mockEnsureConnectionRows,
+      mockRecordAudit,
+    ]) {
+      expect(write).not.toHaveBeenCalled();
+    }
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("any other preview failure also ends with 'Nothing was written to StayWhile.'", async () => {
+    mockListOperationalBookings.mockRejectedValueOnce(
+      new OwnerrezRequestBudgetError("RATE_LIMITED"),
+    );
+    mockPropertyFindMany.mockResolvedValue([AQUA_PALM]);
+    const result = await previewOwnerRezReservationSync(ACTOR as never);
+    expect(result).toMatchObject({
+      error: expect.stringMatching(/Nothing was written to StayWhile\.$/),
     });
   });
 });
