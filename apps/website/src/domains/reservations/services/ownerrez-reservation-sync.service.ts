@@ -389,9 +389,14 @@ async function resolveGuestIds(
         });
         guestIdByOwnerRezId.set(ownerRezGuestId, created.id);
       } catch (err) {
+        // A DB error message can contain the unique-key value (the guest
+        // id); only its class name is logged and a fixed reason reported.
+        logOwnerRezReservationSync("guest_upsert_failed", {
+          error: err instanceof Error ? err.name : "unknown",
+        });
         errors.push({
           ownerRezGuestId,
-          reason: err instanceof Error ? err.message : "Guest upsert failed.",
+          reason: "A guest record could not be saved.",
         });
       }
     }
@@ -536,7 +541,8 @@ export async function syncOwnerRezReservations(
       unrecognizedStatus: [],
       guestErrors: guestUpsertErrors.map((e) => ({
         ownerRezBookingId: -1,
-        reason: `Guest ${e.ownerRezGuestId}: ${e.reason}`,
+        // 2026-09-28: never the guest id (or DB error text) in reported reasons.
+        reason: e.reason,
       })),
       guestDeferred: [],
       deferredUntil: null,
@@ -559,14 +565,15 @@ export async function syncOwnerRezReservations(
       if (!guestId && deferredGuestIds.has(booking.guest_id)) {
         result.guestDeferred.push({
           ownerRezBookingId: booking.id,
-          reason: `Guest ${booking.guest_id} not looked up yet (OwnerRez request limit for this run) — deferred to the next sync.`,
+          reason:
+            "Guest not looked up yet (OwnerRez request limit for this run) — deferred to the next sync.",
         });
         continue;
       }
       if (!guestId) {
         result.guestErrors.push({
           ownerRezBookingId: booking.id,
-          reason: `Guest ${booking.guest_id} could not be resolved — reservation skipped.`,
+          reason: "Guest could not be resolved — reservation skipped.",
         });
         continue;
       }

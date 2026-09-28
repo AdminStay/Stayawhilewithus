@@ -17,6 +17,7 @@ import { HttpRequestError } from "../core";
 import {
   describeOwnerrezResponseShape,
   OwnerrezClient,
+  OwnerrezFilterNotHonoredError,
   OwnerrezRequestBudgetError,
   OwnerrezUnexpectedResponseError,
 } from "./client";
@@ -763,6 +764,7 @@ describe("OwnerrezClient", () => {
     it("fetches only properties + the stay window (no 90-day since_utc query) and returns a long-lead upcoming stay", async () => {
       const longLead = {
         id: 42,
+        property_id: 5,
         arrival: "2026-10-02",
         departure: "2026-10-05",
         created_utc: "2026-03-01T00:00:00Z",
@@ -990,6 +992,171 @@ describe("OwnerrezClient", () => {
         .catch((e: unknown) => e);
       expect((err as Error).message).toMatch(/unexpected host/);
       expect((err as Error).message).not.toMatch(/evil|secret|abc/);
+    });
+  });
+
+  describe("PRODUCTION REGRESSION 2026-09-28: stay-window batch 2 returned { limit, offset } (no items, no next_page_url)", () => {
+    // Synthetic reproduction of the exact Production shape: 58 properties
+    // (38 active + 20 inactive), 50 ids per batch → batch 2 = the last 8
+    // (inactive) properties, whose page came back as { limit, offset } only.
+    function serve58(batch2Body: unknown) {
+      const active = Array.from({ length: 38 }, (_, i) => ({ id: 1000 + i }));
+      const inactive = Array.from({ length: 20 }, (_, i) => ({ id: 2000 + i }));
+      mockRequest.mockReset().mockImplementation(async (path: string) => {
+        if (path === "/properties?active=true") return { items: active };
+        if (path === "/properties?active=false") return { items: inactive };
+        if (path.startsWith("/bookings?property_ids=")) {
+          const ids = path.split("property_ids=")[1]!.split("&")[0]!.split(",");
+          if (ids.length === 50) {
+            return {
+              items: [
+                {
+                  id: 1,
+                  property_id: 1000,
+                  arrival: "2026-10-02",
+                  departure: "2026-10-05",
+                },
+              ],
+              limit: 20,
+              offset: 0,
+              next_page_url: null,
+            };
+          }
+          return batch2Body;
+        }
+        throw new Error(`unexpected path ${path}`);
+      });
+    }
+
+    it("{ limit, offset, next_page_url: null } is also an empty final page", async () => {
+      serve58({ limit: 20, offset: 0, next_page_url: null });
+      const result = await new OwnerrezClient(
+        credentials,
+      ).listStayWindowBookings({
+        now: new Date("2026-09-27T18:00:00.000Z"),
+      });
+      expect(result.bookings.map((b) => b.id)).toEqual([1]);
+    });
+
+    it("near-misses still FAIL visibly — only the exact documented-contract empty shape is accepted", async () => {
+      for (const body of [
+        { items: null, limit: 20, offset: 0 },
+        {
+          limit: 20,
+          offset: 0,
+          next_page_url:
+            "https://api.ownerreservations.com/v2/bookings?offset=20",
+        },
+        { limit: 20, offset: 0, messages: ["Something went wrong"] },
+        { limit: 20, offset: 0, count: 0 },
+        { limit: "20", offset: 0 },
+        { limit: 20 },
+        {},
+        { items: {}, limit: 20, offset: 0 },
+      ]) {
+        serve58(body);
+        await expect(
+          new OwnerrezClient(credentials).listStayWindowBookings({
+            now: new Date("2026-09-27T18:00:00.000Z"),
+          }),
+        ).rejects.toBeInstanceOf(OwnerrezUnexpectedResponseError);
+      }
+    });
+
+    it("an empty recent-changes result ({ limit, offset }) is zero bookings — the documented empty case, not an error", async () => {
+      mockRequest.mockReset().mockResolvedValueOnce({ limit: 20, offset: 0 });
+      await expect(
+        new OwnerrezClient(credentials).listBookings({
+          sinceUtc: "2026-01-01T00:00:00Z",
+        }),
+      ).resolves.toEqual([]);
+    });
+
+    it("an empty page after a full page ends pagination and keeps page 1's records", async () => {
+      mockRequest
+        .mockReset()
+        .mockResolvedValueOnce({
+          items: [{ id: 1 }, { id: 2 }],
+          limit: 2,
+          offset: 0,
+          next_page_url:
+            "https://api.ownerreservations.com/v2/bookings?since_utc=x&offset=2",
+        })
+        .mockResolvedValueOnce({ limit: 2, offset: 2 });
+      await expect(
+        new OwnerrezClient(credentials).listBookings({
+          sinceUtc: "2026-01-01T00:00:00Z",
+        }),
+      ).resolves.toEqual([{ id: 1 }, { id: 2 }]);
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+    });
+
+    it("a stay-window page with bookings for properties that weren't requested fails visibly (filter not honored) — counts only, no ids", async () => {
+      mockRequest.mockReset().mockImplementation(async (path: string) => {
+        if (path === "/properties?active=true") return { items: [{ id: 11 }] };
+        if (path === "/properties?active=false") return { items: [] };
+        return {
+          items: [
+            { id: 1, property_id: 11 },
+            { id: 2, property_id: 99999 },
+          ],
+          limit: 20,
+          offset: 0,
+        };
+      });
+      const err = await new OwnerrezClient(credentials)
+        .listStayWindowBookings({ now: new Date("2026-09-27T18:00:00.000Z") })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(OwnerrezFilterNotHonoredError);
+      expect((err as Error).message).toBe(
+        "OwnerRez returned bookings outside the requested properties for bookings:stay-window (batch 1): 1 of 2.",
+      );
+      expect((err as Error).message).not.toMatch(/99999|11/);
+    });
+
+    it("reproduces: batch 1 has bookings, batch 2 is { limit: 20, offset: 0 } → the stay window returns batch 1's bookings (an empty final page, not an error)", async () => {
+      serve58({ limit: 20, offset: 0 });
+      const result = await new OwnerrezClient(
+        credentials,
+      ).listStayWindowBookings({
+        now: new Date("2026-09-27T18:00:00.000Z"),
+      });
+      expect(result.bookings.map((b) => b.id)).toEqual([1]);
+      expect(result.propertiesQueried).toBe(58);
+    });
+  });
+
+  describe("guest lookup errors never carry the guest id (2026-09-28)", () => {
+    it("an HTTP failure keeps its status but drops the id/path", async () => {
+      mockRequest
+        .mockReset()
+        .mockRejectedValueOnce(new HttpRequestError("/guests/987654", 404));
+      const err = await new OwnerrezClient(credentials)
+        .getGuest(987654)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(HttpRequestError);
+      expect((err as HttpRequestError).status).toBe(404);
+      expect((err as Error).message).toBe(
+        "Request to OwnerRez guest lookup failed with 404",
+      );
+      expect((err as Error).message).not.toContain("987654");
+    });
+
+    it("any other failure becomes a generic message", async () => {
+      mockRequest
+        .mockReset()
+        .mockRejectedValueOnce(new Error("socket hang up at /guests/987654"));
+      await expect(
+        new OwnerrezClient(credentials).getGuest(987654),
+      ).rejects.toThrow(/^OwnerRez guest lookup failed\.$/);
+    });
+
+    it("budget / 429 errors still pass through unchanged (deferral logic depends on them)", async () => {
+      mockRequest.mockReset().mockResolvedValue({ id: 1 });
+      const client = new OwnerrezClient(credentials, { requestBudget: 0 });
+      await expect(client.getGuest(987654)).rejects.toBeInstanceOf(
+        OwnerrezRequestBudgetError,
+      );
     });
   });
 });

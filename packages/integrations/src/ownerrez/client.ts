@@ -164,6 +164,57 @@ function formatShape(shape: OwnerrezResponseShape): string {
   return shape.type;
 }
 
+/**
+ * The ONE non-`items` page shape accepted as a legitimate empty final page
+ * (2026-09-28). Production evidence: the stay-window batch holding only the
+ * 8 inactive properties answered `{ limit, offset }`. OwnerRez's own
+ * OpenAPI contract (/openapi/v2.json) marks NO property of its pageable
+ * models as required, documents "A null value [for next_page_url] indicates
+ * that there are no more pages", and documents error responses as JSON with
+ * a `messages` array. So a page is treated as empty and final ONLY when:
+ *   - it is a plain object whose keys are exactly `limit` and `offset`
+ *     (optionally plus `next_page_url` whose value is null);
+ *   - `limit` and `offset` are integers;
+ *   - `items` is absent (not null) and there is no `messages` key.
+ * Anything else — `items: null`, a present `next_page_url`, any other key,
+ * non-integer limit/offset — still fails visibly.
+ */
+function isEmptyFinalPage(page: unknown): boolean {
+  if (page === null || typeof page !== "object" || Array.isArray(page)) {
+    return false;
+  }
+  const record = page as Record<string, unknown>;
+  const keys = Object.keys(record);
+  const allowed = new Set(["limit", "offset", "next_page_url"]);
+  if (keys.some((k) => !allowed.has(k))) return false;
+  if (!Number.isInteger(record.limit) || !Number.isInteger(record.offset)) {
+    return false;
+  }
+  return !("next_page_url" in record) || record.next_page_url === null;
+}
+
+/**
+ * Thrown when OwnerRez returns stay-window bookings for properties that
+ * weren't requested — i.e. the `property_ids` filter wasn't honored. Its
+ * spec declares `property_ids` as `style: form, explode: true` while the
+ * description says "Comma separated integers"; the comma form is what
+ * Production accepted, and this check makes a silently ignored filter fail
+ * visibly instead of producing a partial dataset. Counts only — no ids.
+ */
+export class OwnerrezFilterNotHonoredError extends Error {
+  constructor(
+    readonly operation: OwnerrezPagedOperation,
+    readonly batch: number,
+    readonly outsideCount: number,
+    readonly totalCount: number,
+  ) {
+    super(
+      `OwnerRez returned bookings outside the requested properties for ${operation} (batch ${batch}): ${outsideCount} of ${totalCount}.`,
+    );
+    this.name = "OwnerrezFilterNotHonoredError";
+  }
+}
+
 export class OwnerrezUnexpectedResponseError extends Error {
   constructor(readonly diagnostic: OwnerrezResponseDiagnostic) {
     const where = `${diagnostic.operation} (page ${diagnostic.page}${diagnostic.batch ? `, batch ${diagnostic.batch}` : ""})`;
@@ -464,6 +515,10 @@ export class OwnerrezClient
         }
         throw err;
       }
+      if (isEmptyFinalPage(page)) {
+        // Documented-contract empty final page: no records, no more pages.
+        break;
+      }
       if (
         page === null ||
         typeof page !== "object" ||
@@ -606,22 +661,45 @@ export class OwnerrezClient
       i += PROPERTY_IDS_PER_BOOKINGS_QUERY
     ) {
       const ids = propertyIds.slice(i, i + PROPERTY_IDS_PER_BOOKINGS_QUERY);
-      bookings.push(
-        ...(await this.fetchAllPages<OwnerrezBooking>(
-          `/bookings?property_ids=${ids.join(",")}&from=${from}`,
-          BOOKINGS_PATH_PREFIX,
-          {
-            operation: "bookings:stay-window",
-            batch: i / PROPERTY_IDS_PER_BOOKINGS_QUERY + 1,
-          },
-        )),
+      const batch = i / PROPERTY_IDS_PER_BOOKINGS_QUERY + 1;
+      const batchBookings = await this.fetchAllPages<OwnerrezBooking>(
+        `/bookings?property_ids=${ids.join(",")}&from=${from}`,
+        BOOKINGS_PATH_PREFIX,
+        { operation: "bookings:stay-window", batch },
       );
+      const requested = new Set(ids);
+      const outside = batchBookings.filter(
+        (b) => !requested.has(b.property_id),
+      ).length;
+      if (outside > 0) {
+        throw new OwnerrezFilterNotHonoredError(
+          "bookings:stay-window",
+          batch,
+          outside,
+          batchBookings.length,
+        );
+      }
+      bookings.push(...batchBookings);
     }
     return { bookings, propertiesQueried: propertyIds.length, from };
   }
 
+  /**
+   * 2026-09-28: errors never carry the guest id or request path — an HTTP
+   * failure becomes "Request to OwnerRez guest lookup failed with <status>"
+   * (status kept, still HttpRequestError); budget/429 errors pass through;
+   * anything else becomes a generic message.
+   */
   async getGuest(guestId: number): Promise<OwnerrezGuest> {
-    return this.get<OwnerrezGuest>(`/guests/${guestId}`);
+    try {
+      return await this.get<OwnerrezGuest>(`/guests/${guestId}`);
+    } catch (err) {
+      if (err instanceof OwnerrezRequestBudgetError) throw err;
+      if (err instanceof HttpRequestError) {
+        throw new HttpRequestError("OwnerRez guest lookup", err.status);
+      }
+      throw new Error("OwnerRez guest lookup failed.");
+    }
   }
 
   /**

@@ -946,3 +946,80 @@ describe("preview — undocumented OwnerRez response shape (2026-09-28 diagnosti
     });
   });
 });
+
+describe("sync reporting never contains guest ids (2026-09-28)", () => {
+  const SYNTHETIC_GUEST_ID = 987654;
+
+  async function runAndCapture() {
+    const logs: string[] = [];
+    const log = vi
+      .spyOn(console, "log")
+      .mockImplementation((...args) => logs.push(args.map(String).join(" ")));
+    try {
+      const outcome = await syncOwnerRezReservations(ACTOR as never);
+      return { outcome, emitted: JSON.stringify(outcome) + logs.join("\n") };
+    } finally {
+      log.mockRestore();
+    }
+  }
+
+  beforeEach(() => {
+    mockListBookings.mockResolvedValue([
+      booking({ id: 1, guest_id: SYNTHETIC_GUEST_ID }),
+    ]);
+    mockPropertyFindMany.mockResolvedValue([AQUA_PALM]);
+    mockGuestFindMany.mockResolvedValue([]);
+    mockReservationFindUnique.mockResolvedValue(null);
+  });
+
+  it("a failed guest lookup is reported and logged without the guest id", async () => {
+    const { HttpRequestError } = await import("@stayw/integrations/core");
+    mockGetGuest.mockRejectedValue(
+      new HttpRequestError("OwnerRez guest lookup", 404),
+    );
+    const { outcome, emitted } = await runAndCapture();
+    expect(outcome).toMatchObject({ status: "completed", created: 0 });
+    if (outcome.status === "completed") {
+      expect(outcome.guestErrors[0]?.reason).toBe(
+        "Guest could not be resolved — reservation skipped.",
+      );
+    }
+    expect(emitted).not.toContain(String(SYNTHETIC_GUEST_ID));
+  });
+
+  it("a guest save failure (DB error text containing the id) reports a fixed reason and logs only the error class", async () => {
+    mockGetGuest.mockResolvedValue({
+      id: SYNTHETIC_GUEST_ID,
+      first_name: "Synthetic",
+      last_name: "Guest",
+      email: null,
+      phone: null,
+    });
+    mockGuestUpsert.mockRejectedValue(
+      new Error(
+        `Unique constraint failed on ownerRezGuestId=${SYNTHETIC_GUEST_ID}`,
+      ),
+    );
+    const { outcome, emitted } = await runAndCapture();
+    if (outcome.status === "completed") {
+      expect(outcome.guestErrors.map((e) => e.reason)).toContain(
+        "A guest record could not be saved.",
+      );
+    }
+    expect(emitted).not.toContain(String(SYNTHETIC_GUEST_ID));
+    expect(emitted).not.toContain("Unique constraint");
+  });
+
+  it("a deferred booking's reason has no guest id", async () => {
+    mockGetGuest.mockRejectedValue(
+      new OwnerrezRequestBudgetError("BUDGET_EXHAUSTED"),
+    );
+    const { outcome, emitted } = await runAndCapture();
+    if (outcome.status === "completed") {
+      expect(outcome.guestDeferred[0]?.reason).toBe(
+        "Guest not looked up yet (OwnerRez request limit for this run) — deferred to the next sync.",
+      );
+    }
+    expect(emitted).not.toContain(String(SYNTHETIC_GUEST_ID));
+  });
+});
