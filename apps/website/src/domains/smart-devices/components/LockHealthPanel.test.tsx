@@ -127,6 +127,57 @@ describe("LockHealthPanel — daily lock report (2026-09-29)", () => {
     ]);
   });
 
+  it("on-page detail uses the same presentation as Copy: formatted times and the hold full stop (2026-09-29)", () => {
+    const { container } = render(
+      <LockHealthPanel
+        rows={[
+          {
+            smartDeviceId: "e",
+            propertyName: "Royal Eden",
+            lockName: "Front Door",
+            flags: [
+              {
+                code: "UNKNOWN_STATE",
+                severity: "orange",
+                label: "State unknown (persistent)",
+                detail:
+                  "Reason: unknown_error_during_connect. Unknown for 6 h. Last valid state: locked at 2026-09-29T16:54:00.000Z.",
+                since: "2026-09-29T11:00:00.000Z",
+              },
+            ],
+          },
+          {
+            smartDeviceId: "f",
+            propertyName: "Florisun",
+            lockName: "Flor Sun - Front Door",
+            flags: [
+              {
+                code: "OPERATIONAL_HOLD",
+                severity: "red",
+                label: "Out of service",
+                detail:
+                  "Lock replacement required (Kenny inspected 09-26) Remote commands and testing are blocked until an admin clears this.",
+                since: "2026-09-29T14:00:00.000Z",
+              },
+            ],
+          },
+        ]}
+        now={NOW}
+      />,
+    );
+    expect(
+      screen.getByText(
+        "Reason: unknown_error_during_connect. Unknown for 6 h. Last valid state: locked at Sep 29, 2026, 11:54 AM CDT.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Lock replacement required (Kenny inspected 09-26). Remote commands and testing are blocked until an admin clears this.",
+      ),
+    ).toBeTruthy();
+    expect(container.textContent).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+  });
+
   it("a calibration-needed lock shows its onsite August-app action and no New", () => {
     render(
       <LockHealthPanel

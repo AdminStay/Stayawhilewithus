@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import { formatTimestamp } from "./format-timestamp";
 import {
   buildDailyLockReport,
   countLocksNeedingAttention,
   formatDailyLockReportText,
   getLockFlagAction,
   NEW_WITHIN_MS,
+  presentLockDetail,
   type LockReportRow,
 } from "./lock-daily-report";
 import {
@@ -653,6 +655,122 @@ const _exhaustive: Record<LockHealthFlagCode, true> = {
   STALE_LOCK_TELEMETRY: true,
   STALE_BATTERY_TELEMETRY: true,
 };
+
+describe("presentation polish (2026-09-29): no raw ISO timestamps, hold-note full stop", () => {
+  const central = (iso: string) => formatTimestamp(new Date(iso));
+  const ISO = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+
+  const unknownRow = row("Royal Eden", {
+    metadata: snapshot({
+      lockState: "unknown",
+      lockStatusValid: false,
+      unknownReason: "unknown_error_during_connect",
+      lockStateSince: hoursAgo(6),
+      unknownSince: hoursAgo(6),
+      consecutiveUnknownRefreshes: 4,
+      lastValidLockState: "locked",
+      lastValidLockStateAt: "2026-09-29T16:54:00.000Z",
+    }),
+  });
+
+  it("the classifier's own detail still contains the raw ISO time (classifier unchanged)", () => {
+    const flag = unknownRow.flags.find((f) => f.code === "UNKNOWN_STATE")!;
+    expect(flag.detail).toContain(
+      "Last valid state: locked at 2026-09-29T16:54:00.000Z.",
+    );
+  });
+
+  it("an ISO time in the detail is shown in the dashboard's Central-time format", () => {
+    const item = buildDailyLockReport([unknownRow], NOW).items.find(
+      (i) => i.code === "UNKNOWN_STATE",
+    )!;
+    const shown = presentLockDetail(item, central);
+    expect(shown).toContain(
+      `Last valid state: locked at ${central("2026-09-29T16:54:00.000Z")}.`,
+    );
+    expect(central("2026-09-29T16:54:00.000Z")).toBe(
+      "Sep 29, 2026, 11:54 AM CDT",
+    );
+    expect(shown).not.toMatch(ISO);
+  });
+
+  it("a hold note without a full stop gets one before the fixed sentence", () => {
+    const item = buildDailyLockReport(
+      [
+        row("Florisun", {
+          operationalHold: hold(
+            "OUT_OF_SERVICE",
+            "Lock replacement required (Kenny inspected 09-26)",
+          ),
+        }),
+      ],
+      NOW,
+    ).items[0]!;
+    expect(presentLockDetail(item, central)).toBe(
+      "Lock replacement required (Kenny inspected 09-26). Remote commands and testing are blocked until an admin clears this.",
+    );
+  });
+
+  it("a hold note that already ends a sentence is not given a second full stop", () => {
+    for (const note of ["Replaced 10-01.", "Check this!", "Is it jammed?"]) {
+      const item = buildDailyLockReport(
+        [
+          row("X", {
+            operationalHold: hold("ONSITE_INSPECTION_REQUIRED", note),
+          }),
+        ],
+        NOW,
+      ).items[0]!;
+      expect(presentLockDetail(item, central)).toBe(
+        `${note} Remote commands and testing are blocked until an admin clears this.`,
+      );
+    }
+  });
+
+  it("details without a timestamp or hold are unchanged", () => {
+    const report = buildDailyLockReport(
+      [
+        row("Battery", { metadata: snapshot({ batteryLevel: 17 }) }),
+        row("Blocked", { lastCommandOutcome: "AMBIGUOUS" }),
+      ],
+      NOW,
+    );
+    for (const item of report.items) {
+      expect(presentLockDetail(item, central)).toBe(item.detail);
+    }
+  });
+
+  it("the copied text uses the same presentation: formatted times, hold full stop, no ISO anywhere", () => {
+    const rows = [
+      unknownRow,
+      row("Florisun", {
+        operationalHold: hold(
+          "OUT_OF_SERVICE",
+          "Lock replacement required (Kenny inspected 09-26)",
+        ),
+      }),
+      row("Lucky Charm", {
+        operationalHold: hold(
+          "EXCLUDED_FROM_TESTING",
+          "unknown_error_during_connect on 09-25",
+        ),
+      }),
+      row("Palm Haven", { metadata: snapshot({ batteryLevel: 25 }) }),
+    ];
+    const text = formatDailyLockReportText(buildDailyLockReport(rows, NOW), {
+      generatedAt: central(NOW.toISOString()),
+      formatTime: central,
+    });
+    expect(text).not.toMatch(ISO);
+    expect(text).toContain(
+      "Detail: Lock replacement required (Kenny inspected 09-26). Remote commands",
+    );
+    expect(text).toContain(
+      "Detail: unknown_error_during_connect on 09-25. Remote commands",
+    );
+    expect(text).toContain("locked at Sep 29, 2026, 11:54 AM CDT.");
+  });
+});
 
 describe("coverage", () => {
   it("every flag code has a non-empty action", () => {

@@ -217,6 +217,36 @@ export function buildDailyLockReport(
   };
 }
 
+// ISO-8601 instants as the classifier writes them (e.g. "Last valid state:
+// locked at 2026-09-29T16:54:00.000Z").
+const ISO_TIMESTAMP_RE =
+  /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})\b/g;
+
+const HOLD_BLOCKED_SENTENCE = " Remote commands and testing are blocked";
+
+/**
+ * Presentation only (2026-09-29): the detail as Ops should read it. Raw ISO
+ * timestamps become the dashboard's human-readable time (`formatTime`), and
+ * a hold note that doesn't end a sentence gets its full stop before the
+ * fixed "Remote commands…" sentence. The classifier's text itself is not
+ * changed.
+ */
+export function presentLockDetail(
+  item: Pick<LockReportItem, "code" | "detail">,
+  formatTime: (iso: string) => string,
+): string {
+  let detail = item.detail.replace(ISO_TIMESTAMP_RE, (iso) =>
+    Number.isNaN(Date.parse(iso)) ? iso : formatTime(iso),
+  );
+  if (item.code === "OPERATIONAL_HOLD") {
+    const at = detail.indexOf(HOLD_BLOCKED_SENTENCE);
+    if (at > 0 && !/[.!?]$/.test(detail.slice(0, at))) {
+      detail = `${detail.slice(0, at)}.${detail.slice(at)}`;
+    }
+  }
+  return detail;
+}
+
 /**
  * Plain text for pasting into Slack/Asana. Operational facts only — never
  * ids, PINs, access codes, guest data or credentials. `formatTime` renders
@@ -250,7 +280,9 @@ export function formatDailyLockReportText(
         : null;
     lines.push(
       `${n}. ${item.isNew ? "[NEW] " : ""}${item.propertyName} — ${item.lockName}: ${item.problem}`,
-      ...(item.detail ? [`   Detail: ${item.detail}`] : []),
+      ...(item.detail
+        ? [`   Detail: ${presentLockDetail(item, options.formatTime)}`]
+        : []),
       ...(when ? [`   ${when}`] : []),
       `   Action: ${item.action}`,
     );

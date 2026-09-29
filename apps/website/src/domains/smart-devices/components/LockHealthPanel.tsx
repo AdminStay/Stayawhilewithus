@@ -5,6 +5,7 @@ import { formatTimestamp } from "../lib/format-timestamp";
 import {
   buildDailyLockReport,
   formatDailyLockReportText,
+  presentLockDetail,
   SEVERITY_LABELS,
   type LockReportRow,
 } from "../lib/lock-daily-report";
@@ -85,7 +86,9 @@ export function LockHealthPanel({
                 <span className="text-ink-muted">— {item.lockName}</span>
                 <span className="font-medium text-ink">{item.problem}</span>
               </p>
-              {item.detail && <p className="text-ink-muted">{item.detail}</p>}
+              {item.detail && (
+                <p className="text-ink-muted">{presentLockDetail(item, fmt)}</p>
+              )}
               {item.startedAt ? (
                 <p className="text-ink-faint">
                   Since {fmt(item.startedAt)} ({item.duration ?? "just now"})
