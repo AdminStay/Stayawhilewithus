@@ -129,6 +129,20 @@ describe("recordLockVerificationEvidence — append-only, admin-only, no command
     expect(mockRecordAudit).not.toHaveBeenCalled();
   });
 
+  it("rejects evidence for a retired lock (e.g. the retired Majestic Isla - Front Door record)", async () => {
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce({
+      id: LOCK,
+      deviceType: "LOCK",
+      provider: "AUGUST",
+      metadata: { retiredAt: "2026-09-23T22:14:47.836Z" },
+    } as never);
+    expect(await recordLockVerificationEvidence(actor, input)).toEqual({
+      status: "rejected",
+      reason: "This lock is retired.",
+    });
+    expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+
   it("has no path to the August client or the command service", () => {
     const source = readFileSync(
       resolve(
@@ -137,9 +151,14 @@ describe("recordLockVerificationEvidence — append-only, admin-only, no command
       ),
       "utf8",
     );
-    expect(source).not.toMatch(
-      /@stayw\/integrations|august-commands|sendAugust/,
-    );
+    const imports = [...source.matchAll(/from\s+"([^"]+)"/g)].map((m) => m[1]);
+    expect(imports.length).toBeGreaterThan(0);
+    for (const specifier of imports) {
+      expect(specifier).not.toMatch(
+        /@stayw\/integrations|august-commands|smart-devices\.service/,
+      );
+    }
+    expect(source).not.toMatch(/sendAugust/);
   });
 });
 

@@ -113,6 +113,17 @@ export interface RecordLockVerificationEvidenceInput {
 export type RecordLockVerificationEvidenceResult =
   { status: "success" } | { status: "rejected"; reason: string };
 
+function isRetiredLock(metadata: unknown): boolean {
+  const retiredAt =
+    metadata && typeof metadata === "object"
+      ? (metadata as Record<string, unknown>).retiredAt
+      : undefined;
+  return (
+    typeof retiredAt === "string" &&
+    !Number.isNaN(new Date(retiredAt).getTime())
+  );
+}
+
 /** Allowance for clock skew between the recorder's device and the server. */
 const FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 
@@ -151,10 +162,17 @@ export async function recordLockVerificationEvidence(
   }
   const device = await prisma.smartDevice.findUnique({
     where: { id: input.smartDeviceId },
-    select: { id: true, deviceType: true, provider: true },
+    select: { id: true, deviceType: true, provider: true, metadata: true },
   });
   if (!device || device.deviceType !== "LOCK" || device.provider !== "AUGUST") {
     return { status: "rejected", reason: "Lock not found." };
+  }
+  // A retired lock is off the fleet (same rule as isRetired() in
+  // smart-devices.service.ts, not imported so this file never loads the
+  // August client); evidence can't be attached to it, even by a
+  // hand-crafted request.
+  if (isRetiredLock(device.metadata)) {
+    return { status: "rejected", reason: "This lock is retired." };
   }
 
   const evidence: OpsEvidence = {

@@ -302,3 +302,40 @@ describe("Ops evidence", () => {
     expect(r.history).toEqual([]);
   });
 });
+
+describe("Orion's Landing — FAILED then AMBIGUOUS (Production Q3, 2026-09-30)", () => {
+  const orion = [
+    cmd(
+      "2026-09-24T16:19:49.831Z",
+      { operation: "LOCK", result: "FAILED" },
+      "Kris Rys",
+    ),
+    cmd(
+      "2026-09-24T18:05:39.424Z",
+      { operation: "LOCK", result: "AMBIGUOUS" },
+      "Admin Tech",
+    ),
+  ];
+
+  it("is not verified, needs attention, and the LOCK direction reflects the latest attempt", () => {
+    const r = trackerFor("Orion's Landing", orion, {
+      lastCommandOutcome: "AMBIGUOUS",
+    });
+    expect(r.verification.status).toBe("NOT_VERIFIED_NEEDS_ATTENTION");
+    expect(r.remoteLock.status).toBe("AMBIGUOUS");
+    expect(r.remoteLock.firstPassed).toBeNull();
+    expect(r.remoteUnlock.status).toBe("NOT_TESTED");
+    expect(r.holdOrBlock).toMatch(/Last remote command AMBIGUOUS/);
+  });
+
+  it("keeps BOTH attempts in the history, newest first, each with who sent it", () => {
+    const r = trackerFor("Orion's Landing", orion, {
+      lastCommandOutcome: "AMBIGUOUS",
+    });
+    expect(r.history.map((h) => [h.step, h.outcome, h.by, h.source])).toEqual([
+      ["REMOTE_LOCK", "Ambiguous", "Admin Tech", "STAYWHILE_COMMAND"],
+      ["REMOTE_LOCK", "Failed", "Kris Rys", "STAYWHILE_COMMAND"],
+    ]);
+    expect(r.lastEvidence?.outcome).toBe("Ambiguous");
+  });
+});
