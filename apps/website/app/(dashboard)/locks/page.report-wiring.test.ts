@@ -15,7 +15,30 @@ describe("/locks daily lock report wiring (2026-09-29)", () => {
       /<LockHealthPanel\s+rows=\{lockHealthRows\}\s+now=\{healthNow\.toISOString\(\)\}/,
     );
     expect(source).toContain(
-      "needsAttentionCount={countLocksNeedingAttention(lockHealthRows)}",
+      "const needsAttentionCount = countLocksNeedingAttention(lockHealthRows);",
+    );
+    expect(source).toContain("needsAttentionCount={needsAttentionCount}");
+  });
+
+  it("three tabs (2026-09-30): report unchanged in its own tab; controls only on Fleet Status", () => {
+    const report = source.slice(source.indexOf('{tab === "report" && ('));
+    expect(report.slice(0, 200)).toMatch(
+      /<LockHealthPanel rows=\{lockHealthRows\} now=\{healthNow\.toISOString\(\)\} \/>/,
+    );
+    const fleet = source.slice(
+      source.indexOf('{tab === "fleet" && ('),
+      source.indexOf('{tab === "report" && ('),
+    );
+    expect(fleet).toContain("<LockControlKillSwitch");
+    expect(fleet).toContain("lockCommandAction={sendAugustLockCommandAction}");
+    const verification = source.slice(
+      source.indexOf('{tab === "verification" && ('),
+    );
+    expect(verification).not.toMatch(
+      /sendAugustLockCommandAction|resetAugustLockAction/,
+    );
+    expect(verification).toContain(
+      "canControlLocks ? recordLockVerificationEvidenceAction : undefined",
     );
   });
 

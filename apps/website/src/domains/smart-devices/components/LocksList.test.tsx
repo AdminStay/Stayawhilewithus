@@ -153,7 +153,7 @@ describe("LocksList — consolidated Status column", () => {
     expect(within(row).queryByText("Low battery")).toBeNull();
   });
 
-  it("UNKNOWN renders the short 'Unknown' label — never implies offline", () => {
+  it("UNKNOWN renders 'Connectivity unknown' (2026-09-30: never a bare 'Unknown') — never implies offline", () => {
     renderLocks([
       makeLock({
         name: "Casa Del Mar Lock",
@@ -162,7 +162,7 @@ describe("LocksList — consolidated Status column", () => {
       }),
     ]);
     const statusCell = statusCellFor("Casa Del Mar Lock");
-    expect(within(statusCell).getByText("Unknown")).toBeTruthy();
+    expect(within(statusCell).getByText("Connectivity unknown")).toBeTruthy();
     expect(
       within(rowFor("Casa Del Mar Lock")).queryByText(/offline/i),
     ).toBeNull();
@@ -201,7 +201,7 @@ describe("LocksList — consolidated Status column", () => {
       }),
     ]);
     const statusCell = statusCellFor("Las Sirenas - Front Door");
-    expect(within(statusCell).getByText("Unknown")).toBeTruthy();
+    expect(within(statusCell).getByText("Connectivity unknown")).toBeTruthy();
     expect(within(statusCell).getByText("Low battery")).toBeTruthy();
   });
 
@@ -245,9 +245,11 @@ describe("LocksList — Lock state column", () => {
     expect(within(rowFor("Unlocked Door")).getByText("Unlocked")).toBeTruthy();
   });
 
-  it("renders an Unknown badge when lockState is not reported — never guessed", () => {
+  it("renders a 'State unknown' badge when lockState is not reported — never guessed", () => {
     renderLocks([makeLock({ name: "No State Door", metadata: {} })]);
-    expect(within(rowFor("No State Door")).getByText("Unknown")).toBeTruthy();
+    expect(
+      within(rowFor("No State Door")).getByText("State unknown"),
+    ).toBeTruthy();
   });
 });
 
@@ -298,7 +300,7 @@ describe("LocksList — UNKNOWN connectivity explanation (item A)", () => {
     expect(within(row).getByText("Locked")).toBeTruthy();
     expect(
       within(statusCellFor("Known State Unknown Connectivity Lock")).getByText(
-        "Unknown",
+        "Connectivity unknown",
       ),
     ).toBeTruthy();
   });
@@ -312,7 +314,7 @@ describe("LocksList — UNKNOWN connectivity explanation (item A)", () => {
     ]);
 
     const cell = statusCellFor("Non-August Unknown");
-    expect(within(cell).getByText("Unknown")).toBeTruthy();
+    expect(within(cell).getByText("Connectivity unknown")).toBeTruthy();
     expect(cell.querySelector("[title]")).toBeNull();
     expect(cell.querySelector("svg")).toBeNull();
   });
@@ -382,7 +384,7 @@ describe("LocksList — summary metrics (derived, never hard-coded)", () => {
     expect(metricValue("Locks")).toBe("4");
     expect(metricValue("Online")).toBe("1");
     expect(metricValue("Offline")).toBe("1");
-    expect(metricValue("Unknown")).toBe("2");
+    expect(metricValue("Connectivity unknown")).toBe("2");
     expect(metricValue("Low battery")).toBe("1");
   });
 
@@ -1202,5 +1204,120 @@ describe("LocksList — remote-control verification badge (2026-09-29, display-o
       }
     }
     expect(action).not.toHaveBeenCalled();
+  });
+});
+
+describe("LocksList — Fleet Status clarity (2026-09-30)", () => {
+  const flag = (code: string, label: string) => ({
+    code,
+    severity: "yellow",
+    label,
+    detail: "",
+    since: null,
+  });
+
+  it("low battery and stale badges come from the report's canonical flags, not a second threshold", () => {
+    renderLocks([
+      {
+        ...makeLock({
+          id: "a",
+          name: "Canonical Low",
+          metadata: { batteryLevel: 25 },
+        }),
+        healthFlags: [
+          flag("LOW_BATTERY", "Battery low"),
+          flag("STALE_LOCK_TELEMETRY", "Lock status stale"),
+        ],
+      } as never,
+      {
+        ...makeLock({
+          id: "b",
+          name: "Canonical Fine",
+          // 30h-old reading: the generic 24h helper would call it stale,
+          // but the classifier (the report's source of truth) did not.
+          metadata: { batteryLevel: 15, telemetryUpdatedAt: STALE_TELEMETRY },
+        }),
+        healthFlags: [],
+      } as never,
+    ]);
+    const low = rowFor("Canonical Low");
+    expect(within(low).getByText("Low battery")).toBeTruthy();
+    expect(within(low).getByText("Lock status stale")).toBeTruthy();
+    const fine = rowFor("Canonical Fine");
+    expect(within(fine).queryByText("Low battery")).toBeNull();
+    expect(within(fine).queryByText("Stale telemetry")).toBeNull();
+    expect(metricValue("Low battery")).toBe("1");
+  });
+
+  it("shows three separate, labeled times — never one ambiguous 'Last update'", () => {
+    renderLocks([
+      makeLock({
+        name: "Timed Lock",
+        metadata: {
+          lockHealth: {
+            observedAt: "2026-09-30T15:00:00.000Z",
+            lockStatusAt: "2026-09-30T14:00:00.000Z",
+            batteryReadingAt: "2026-09-29T10:00:00.000Z",
+            lockState: "locked",
+          },
+        },
+      }),
+    ]);
+    const row = rowFor("Timed Lock");
+    expect(screen.queryByText("Last update")).toBeNull();
+    expect(within(row).getByText(/Status reported by August/)).toBeTruthy();
+    expect(within(row).getByText(/Last checked by StayWhile/)).toBeTruthy();
+    expect(within(row).getByText(/Battery reading time/)).toBeTruthy();
+    expect(within(row).getByText(/Sep 30, 2026, 9:00 AM/)).toBeTruthy();
+    expect(within(row).getByText(/Sep 30, 2026, 10:00 AM/)).toBeTruthy();
+    expect(within(row).getByText(/Sep 29, 2026, 5:00 AM/)).toBeTruthy();
+  });
+
+  it("shows remote-control availability to read-only viewers, with no controls", () => {
+    render(
+      <LocksList
+        locks={
+          [
+            {
+              ...makeLock({ id: "a", name: "Avail Lock" }),
+              remoteControl: { available: true, label: "Available" },
+            },
+            {
+              ...makeLock({ id: "b", name: "Held Lock" }),
+              remoteControl: {
+                available: false,
+                label: "Unavailable — on hold",
+              },
+            },
+          ] as never
+        }
+        canControlLocks={false}
+      />,
+    );
+    expect(
+      within(rowFor("Avail Lock")).getByText("Remote control: Available"),
+    ).toBeTruthy();
+    expect(
+      within(rowFor("Held Lock")).getByText(
+        "Remote control: Unavailable — on hold",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /lock|unlock/i })).toBeNull();
+  });
+
+  it("demo rows stay listed but are not counted in fleet metrics", () => {
+    renderLocks([
+      makeLock({ id: "a", name: "Real", status: "ONLINE" }),
+      makeLock({
+        id: "b",
+        name: "Demo",
+        status: "ONLINE",
+        externalDeviceId: "demo-1",
+      }),
+    ]);
+    expect(rowFor("Demo")).toBeTruthy();
+    expect(metricValue("Locks")).toBe("1");
+    expect(metricValue("Online")).toBe("1");
+    expect(screen.getByText("1 demo row not counted")).toBeTruthy();
   });
 });

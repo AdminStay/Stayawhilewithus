@@ -25,7 +25,9 @@ const {
   mockResetAugustLock,
   mockSetHold,
   mockClearHold,
+  mockRecordEvidence,
 } = vi.hoisted(() => ({
+  mockRecordEvidence: vi.fn(),
   mockSetHold: vi.fn(),
   mockClearHold: vi.fn(),
   mockSetLockControlEnabled: vi.fn(),
@@ -81,6 +83,10 @@ vi.mock("./services/lock-control-settings.service", () => ({
   setLockControlEnabled: mockSetLockControlEnabled,
 }));
 
+vi.mock("./services/lock-verification-evidence.service", () => ({
+  recordLockVerificationEvidence: mockRecordEvidence,
+}));
+
 vi.mock("./services/lock-operational-hold.service", () => ({
   setLockOperationalHold: mockSetHold,
   clearLockOperationalHold: mockClearHold,
@@ -118,6 +124,7 @@ import {
   retireSmartDeviceAction,
   sendAugustLockCommandAction,
   setLockControlEnabledAction,
+  recordLockVerificationEvidenceAction,
   setLockOperationalHoldAction,
   setThermostatControlEnabledAction,
 } from "./actions";
@@ -1206,5 +1213,52 @@ describe("setThermostatControlEnabledAction (2026-09-27, Nest Phase 1)", () => {
     formData.set("enabled", "false");
     await setThermostatControlEnabledAction({ status: "idle" }, formData);
     expect(mockSetLockControlEnabled).not.toHaveBeenCalled();
+  });
+});
+
+describe("recordLockVerificationEvidenceAction (2026-09-30)", () => {
+  const LOCK_ID = "11111111-1111-4111-8111-111111111111";
+  beforeEach(() => {
+    mockRecordEvidence.mockReset().mockResolvedValue({ status: "success" });
+    mockRevalidatePath.mockClear();
+  });
+
+  it("rejects incomplete input without calling the service", async () => {
+    const fd = new FormData();
+    fd.set("smartDeviceId", LOCK_ID);
+    fd.set("step", "REMOTE_LOCK");
+    expect(
+      (await recordLockVerificationEvidenceAction({ status: "idle" }, fd))
+        .status,
+    ).toBe("invalid");
+    expect(mockRecordEvidence).not.toHaveBeenCalled();
+  });
+
+  it("passes parsed evidence to the service (never a command) and revalidates /locks", async () => {
+    const fd = new FormData();
+    fd.set("smartDeviceId", LOCK_ID);
+    fd.set("step", "REMOTE_UNLOCK");
+    fd.set("outcome", "PASSED");
+    fd.set("method", "AUGUST_APP_ONSITE");
+    fd.set("performedBy", "  Ops tech  ");
+    fd.set("performedAt", "2026-09-30T15:00:00.000Z");
+    fd.set("notes", "Unlocked from the August app at the door.");
+    expect(
+      await recordLockVerificationEvidenceAction({ status: "idle" }, fd),
+    ).toEqual({ status: "success" });
+    expect(mockRecordEvidence).toHaveBeenCalledWith(
+      { userId: "user-1" },
+      {
+        smartDeviceId: LOCK_ID,
+        step: "REMOTE_UNLOCK",
+        outcome: "PASSED",
+        method: "AUGUST_APP_ONSITE",
+        performedBy: "Ops tech",
+        performedAt: new Date("2026-09-30T15:00:00.000Z"),
+        notes: "Unlocked from the August app at the door.",
+      },
+    );
+    expect(mockSendAugustLockCommand).not.toHaveBeenCalled();
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
   });
 });

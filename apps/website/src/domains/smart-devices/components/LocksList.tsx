@@ -35,6 +35,7 @@ import {
   DOOR_SENSOR_CALIBRATION_LABEL,
   getLockHealthSnapshot,
   isDoorSensorCalibrationNeeded,
+  type LockHealthFlag,
 } from "../lib/lock-health";
 import {
   LOCK_VERIFICATION_LABELS,
@@ -73,13 +74,49 @@ type LockWithProperty = SmartDevice & {
   operationalHoldLabel?: string | null;
   /** Historical remote-control verification (display-only; see lib/lock-verification) — null/absent for non-August devices. */
   verificationStatus?: LockVerificationStatus | null;
+  /**
+   * The canonical lock-health flags (classifyLockHealth — the same rows as
+   * the accepted Daily Lock Report) for a real August lock; null/absent for
+   * demo or non-August rows, which fall back to the generic telemetry
+   * helpers. Low-battery and stale badges/metrics come from these flags, so
+   * Fleet Status and the report never disagree (2026-09-30).
+   */
+  healthFlags?: LockHealthFlag[] | null;
+  /**
+   * Remote-control availability for EVERY viewer (2026-09-30) — the same
+   * rule as the command eligibility (describeRemoteControlAvailability).
+   * Display-only; the controls themselves still need locks:manage.
+   */
+  remoteControl?: { available: boolean; label: string } | null;
 };
 
 const VERIFICATION_BADGE_TONE: Record<LockVerificationStatus, Tone> = {
   VERIFIED: "success",
   AWAITING_OPS: "neutral",
   NOT_VERIFIED_ON_HOLD: "error",
+  NOT_VERIFIED_NEEDS_ATTENTION: "warning",
 };
+
+/** Canonical low battery: the report's LOW_BATTERY flag (< 30% or an August warning); generic < 20% only without flags. */
+function hasLowBattery(lock: LockWithProperty): boolean {
+  return lock.healthFlags
+    ? lock.healthFlags.some((f) => f.code === "LOW_BATTERY")
+    : isLowBattery(lock);
+}
+
+/** Canonical staleness badges: the report's own stale flags, with its labels. */
+function staleLabels(lock: LockWithProperty): string[] {
+  if (lock.healthFlags) {
+    return lock.healthFlags
+      .filter(
+        (f) =>
+          f.code === "STALE_LOCK_TELEMETRY" ||
+          f.code === "STALE_BATTERY_TELEMETRY",
+      )
+      .map((f) => f.label);
+  }
+  return isTelemetryStale(lock) ? ["Stale telemetry"] : [];
+}
 
 type HoldAction = (
   prevState: OperationalHoldActionState,
@@ -101,7 +138,9 @@ type HoldAction = (
 const CONNECTIVITY_LABEL: Record<LockWithProperty["status"], string> = {
   ONLINE: "Online",
   OFFLINE: "Offline",
-  UNKNOWN: "Unknown",
+  // 2026-09-30: never a bare "Unknown" — that word also meant an unknown
+  // lock state. This one is about connectivity only.
+  UNKNOWN: "Connectivity unknown",
   ERROR: "Error",
 };
 
@@ -159,8 +198,18 @@ function LockStateBadge({ state }: { state: string | null }) {
   return (
     <Badge tone="neutral">
       <HelpCircle className="h-3 w-3" />
-      Unknown
+      State unknown
     </Badge>
+  );
+}
+
+/** One labeled time line; "—" when the source didn't report it (never substituted). */
+function TimeLine({ label, iso }: { label: string; iso: string | null }) {
+  return (
+    <span className="text-xs text-ink-muted">
+      <span className="text-ink-faint">{label}: </span>
+      {iso ? formatTimestamp(new Date(iso)) : "—"}
+    </span>
   );
 }
 
@@ -175,7 +224,7 @@ function BatteryIndicator({ lock }: { lock: LockWithProperty }) {
   if (level === null) {
     return <span className="text-ink-faint">—</span>;
   }
-  const low = isLowBattery(lock);
+  const low = hasLowBattery(lock);
   const Icon = low ? BatteryWarning : Battery;
   return (
     <span
@@ -244,13 +293,17 @@ export function LocksList({
   /** Admin operational hold set/clear (2026-09-26) — shown only with canControlLocks. */
   holdActions?: { set: HoldAction; clear: HoldAction };
 }) {
-  const total = locks.length;
-  const online = locks.filter((l) => l.status === "ONLINE").length;
-  const offline = locks.filter((l) => l.status === "OFFLINE").length;
-  const unknown = locks.filter((l) => l.status === "UNKNOWN").length;
-  const lowBatteryCount = locks.filter((l) => isLowBattery(l)).length;
+  // Metrics count real locks only (2026-09-30): demo rows stay listed with
+  // their "Demo data" badge but never inflate fleet counts.
+  const real = locks.filter((l) => !isDemoSmartDevice(l));
+  const demoCount = locks.length - real.length;
+  const total = real.length;
+  const online = real.filter((l) => l.status === "ONLINE").length;
+  const offline = real.filter((l) => l.status === "OFFLINE").length;
+  const unknown = real.filter((l) => l.status === "UNKNOWN").length;
+  const lowBatteryCount = real.filter(hasLowBattery).length;
 
-  if (total === 0) {
+  if (locks.length === 0) {
     return (
       <EmptyState
         icon={Lock}
@@ -263,14 +316,28 @@ export function LocksList({
   return (
     <div className="space-y-6">
       <MetricStrip xlColumns={6}>
-        <Metric label="Locks" value={total} icon={Lock} />
+        <Metric
+          label="Locks"
+          value={total}
+          icon={Lock}
+          hint={
+            demoCount > 0
+              ? `${demoCount} demo row${demoCount > 1 ? "s" : ""} not counted`
+              : undefined
+          }
+        />
         <Metric label="Online" value={online} icon={Lock} />
         <Metric label="Offline" value={offline} icon={WifiOff} />
-        <Metric label="Unknown" value={unknown} icon={HelpCircle} />
+        <Metric
+          label="Connectivity unknown"
+          value={unknown}
+          icon={HelpCircle}
+        />
         <Metric
           label="Low battery"
           value={lowBatteryCount}
           icon={BatteryWarning}
+          hint="Same rule as the daily lock report"
         />
         <Metric
           label="Needs attention"
@@ -288,11 +355,13 @@ export function LocksList({
 
       <Table>
         <TableHead>
-          <TableHeaderCell className="w-[26%]">Property / Lock</TableHeaderCell>
-          <TableHeaderCell className="w-[16%]">Status</TableHeaderCell>
-          <TableHeaderCell className="w-[12%]">Lock state</TableHeaderCell>
-          <TableHeaderCell className="w-[10%]">Battery</TableHeaderCell>
-          <TableHeaderCell className="w-[16%]">Last update</TableHeaderCell>
+          <TableHeaderCell className="w-[22%]">Property / Lock</TableHeaderCell>
+          <TableHeaderCell className="w-[16%]">Connectivity</TableHeaderCell>
+          <TableHeaderCell className="w-[10%]">Lock state</TableHeaderCell>
+          <TableHeaderCell className="w-[8%]">Battery</TableHeaderCell>
+          <TableHeaderCell className="w-[24%]">
+            Reported / checked
+          </TableHeaderCell>
           {((canRefresh && spotRefreshAction) ||
             (canControlLocks && lockCommandAction) ||
             (canRefresh && retireAction)) && (
@@ -301,13 +370,19 @@ export function LocksList({
         </TableHead>
         <TableBody>
           {locks.map((lock) => {
-            const lowBatteryFlag = isLowBattery(lock);
-            const staleFlag = isTelemetryStale(lock);
+            const lowBatteryFlag = hasLowBattery(lock);
+            const stale = staleLabels(lock);
             const demo = isDemoSmartDevice(lock);
             const lockState = getLockState(lock);
             const normalizedLockState = lockState?.toLowerCase();
-            const telemetryUpdatedAt = getTelemetryUpdatedAt(lock);
             const isAugust = lock.provider === "AUGUST";
+            // Three different times, never merged (2026-09-30): what August
+            // says, when StayWhile last read it, and the battery report.
+            const snapshot = getLockHealthSnapshot(lock.metadata);
+            const telemetryUpdatedAt = getTelemetryUpdatedAt(lock);
+            const batteryReadingAt =
+              snapshot?.batteryReadingAt ??
+              (telemetryUpdatedAt ? telemetryUpdatedAt.toISOString() : null);
             // Informational only (2026-09-28): shown next to, never instead
             // of, the connectivity and lock state; no effect on commands.
             const calibrationNeeded =
@@ -338,6 +413,13 @@ export function LocksList({
                         </Badge>
                       </span>
                     )}
+                    {lock.remoteControl && (
+                      <span
+                        className={`mt-0.5 text-[10px] ${lock.remoteControl.available ? "text-success-600" : "text-ink-muted"}`}
+                      >
+                        Remote control: {lock.remoteControl.label}
+                      </span>
+                    )}
                   </div>
                 </TableCell>
 
@@ -365,11 +447,15 @@ export function LocksList({
                           Demo data
                         </Badge>
                       )}
-                      {staleFlag && (
-                        <Badge tone="warning" className="text-[10px]">
-                          Stale telemetry
+                      {stale.map((label) => (
+                        <Badge
+                          key={label}
+                          tone="warning"
+                          className="text-[10px]"
+                        >
+                          {label}
                         </Badge>
-                      )}
+                      ))}
                       {lowBatteryFlag && (
                         <Badge tone="warning" className="text-[10px]">
                           Low battery
@@ -402,16 +488,19 @@ export function LocksList({
                 </TableCell>
 
                 <TableCell>
-                  <div
-                    className="flex flex-col"
-                    title={`Last synced: ${formatTimestamp(lock.updatedAt)}`}
-                  >
-                    <span className="text-ink-muted">
-                      {formatTimestamp(telemetryUpdatedAt)}
-                    </span>
-                    <span className="text-xs text-ink-faint">
-                      Synced {formatTimestamp(lock.updatedAt)}
-                    </span>
+                  <div className="flex flex-col">
+                    <TimeLine
+                      label="Status reported by August"
+                      iso={snapshot?.lockStatusAt ?? null}
+                    />
+                    <TimeLine
+                      label="Last checked by StayWhile"
+                      iso={snapshot?.observedAt ?? null}
+                    />
+                    <TimeLine
+                      label="Battery reading time"
+                      iso={batteryReadingAt}
+                    />
                   </div>
                 </TableCell>
 

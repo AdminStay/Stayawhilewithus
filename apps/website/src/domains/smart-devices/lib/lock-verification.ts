@@ -26,13 +26,17 @@ import {
 } from "./lock-health";
 
 export type LockVerificationStatus =
-  "VERIFIED" | "AWAITING_OPS" | "NOT_VERIFIED_ON_HOLD";
+  | "VERIFIED"
+  | "AWAITING_OPS"
+  | "NOT_VERIFIED_ON_HOLD"
+  | "NOT_VERIFIED_NEEDS_ATTENTION";
 
 export const LOCK_VERIFICATION_LABELS: Record<LockVerificationStatus, string> =
   {
     VERIFIED: "Verified",
     AWAITING_OPS: "Awaiting Ops verification",
     NOT_VERIFIED_ON_HOLD: "Not verified (on hold)",
+    NOT_VERIFIED_NEEDS_ATTENTION: "Not verified — needs attention",
   };
 
 export interface LockVerification {
@@ -41,10 +45,22 @@ export interface LockVerification {
   verifiedAt: string | null;
 }
 
+/**
+ * Overall verification (2026-09-30, three-way /locks separation). Order:
+ * verified (never downgraded) > on hold > needs attention > awaiting Ops.
+ * "Needs attention" = an unverified lock whose latest remote command is
+ * FAILED/AMBIGUOUS (e.g. Coco Vista / Orion), or whose latest Ops evidence
+ * for some step recorded a failure. Ops-confirmed-via-August-app evidence
+ * never makes a lock verified: only a successful StayWhile command does.
+ */
 export function deriveLockVerification(input: {
   /** From getAugustLockVerificationHistory(); null = no successful command ever recorded. */
   firstVerifiedAt: string | null;
   operationalHold: OperationalHold | null;
+  /** Latest recorded command outcome (SUCCEEDED/FAILED/AMBIGUOUS/ADMIN_RESET). */
+  lastCommandOutcome?: string | null;
+  /** True when the latest Ops evidence for any step is a failure. */
+  opsReportedFailure?: boolean;
 }): LockVerification {
   if (input.firstVerifiedAt) {
     return { status: "VERIFIED", verifiedAt: input.firstVerifiedAt };
@@ -52,6 +68,13 @@ export function deriveLockVerification(input: {
   const hold = input.operationalHold?.kind;
   if (hold === "OUT_OF_SERVICE" || hold === "EXCLUDED_FROM_TESTING") {
     return { status: "NOT_VERIFIED_ON_HOLD", verifiedAt: null };
+  }
+  if (
+    input.lastCommandOutcome === "FAILED" ||
+    input.lastCommandOutcome === "AMBIGUOUS" ||
+    input.opsReportedFailure
+  ) {
+    return { status: "NOT_VERIFIED_NEEDS_ATTENTION", verifiedAt: null };
   }
   return { status: "AWAITING_OPS", verifiedAt: null };
 }
@@ -147,9 +170,10 @@ const CONNECTIVITY_TEXT: Record<string, string> = {
 };
 
 const CHECKLIST_GROUP_ORDER: Record<LockVerificationStatus, number> = {
-  AWAITING_OPS: 0,
-  NOT_VERIFIED_ON_HOLD: 1,
-  VERIFIED: 2,
+  NOT_VERIFIED_NEEDS_ATTENTION: 0,
+  AWAITING_OPS: 1,
+  NOT_VERIFIED_ON_HOLD: 2,
+  VERIFIED: 3,
 };
 
 /**

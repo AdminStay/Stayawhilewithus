@@ -15,6 +15,7 @@ import {
   refreshAugustBatchSchema,
   refreshAugustSpotSchema,
 } from "./schemas/lock-spot-refresh.schema";
+import { recordLockVerificationEvidenceSchema } from "./schemas/lock-verification-evidence.schema";
 import {
   setNestCoolSetpointSchema,
   setNestFanSchema,
@@ -54,6 +55,10 @@ import {
   refreshAugustTelemetryForSelectedLocks,
   type SpotRefreshOutcome,
 } from "./services/lock-spot-refresh.service";
+import {
+  recordLockVerificationEvidence,
+  type RecordLockVerificationEvidenceResult,
+} from "./services/lock-verification-evidence.service";
 import {
   sendNestThermostatCommand,
   type NestCommandResult,
@@ -493,6 +498,42 @@ export async function clearLockOperationalHoldAction(
     };
   }
   const result = await clearLockOperationalHold(actor, parsed.data);
+  if (result.status === "success") revalidatePath(LOCKS_PAGE_PATH);
+  return result;
+}
+
+export type LockVerificationEvidenceActionState =
+  | { status: "idle" }
+  | RecordLockVerificationEvidenceResult
+  | { status: "invalid"; reason: string };
+
+/**
+ * Records Ops verification evidence for one lock (2026-09-30) as a new
+ * AuditLog row. Never sends a command to the lock. RBAC (locks:manage) and
+ * the evidence rules live server-side in recordLockVerificationEvidence().
+ */
+export async function recordLockVerificationEvidenceAction(
+  _prevState: LockVerificationEvidenceActionState,
+  formData: FormData,
+): Promise<LockVerificationEvidenceActionState> {
+  const actor = await getCurrentUser();
+  const parsed = recordLockVerificationEvidenceSchema.safeParse({
+    smartDeviceId: formData.get("smartDeviceId"),
+    step: formData.get("step"),
+    outcome: formData.get("outcome"),
+    method: formData.get("method"),
+    performedBy: formData.get("performedBy") ?? "",
+    performedAt: formData.get("performedAt") ?? "",
+    notes: formData.get("notes") ?? undefined,
+  });
+  if (!parsed.success) {
+    return {
+      status: "invalid",
+      reason:
+        "Choose the step, result and method, and enter who did the check and when.",
+    };
+  }
+  const result = await recordLockVerificationEvidence(actor, parsed.data);
   if (result.status === "success") revalidatePath(LOCKS_PAGE_PATH);
   return result;
 }

@@ -6,6 +6,7 @@ import {
   refreshAugustTelemetryBatchAction,
   refreshAugustTelemetrySpotAction,
   clearLockOperationalHoldAction,
+  recordLockVerificationEvidenceAction,
   resetAugustLockAction,
   retireSmartDeviceAction,
   sendAugustLockCommandAction,
@@ -16,9 +17,14 @@ import { BulkRefreshDialog } from "@/domains/smart-devices/components/BulkRefres
 import { LockAutoRefresh } from "@/domains/smart-devices/components/LockAutoRefresh";
 import { LockControlKillSwitch } from "@/domains/smart-devices/components/LockControlKillSwitch";
 import { LockHealthPanel } from "@/domains/smart-devices/components/LockHealthPanel";
-import { LockVerificationPanel } from "@/domains/smart-devices/components/LockVerificationPanel";
+import { LockVerificationTracker } from "@/domains/smart-devices/components/LockVerificationTracker";
 import { LocksList } from "@/domains/smart-devices/components/LocksList";
+import {
+  LocksTabs,
+  parseLocksTab,
+} from "@/domains/smart-devices/components/LocksTabs";
 import { RefreshLocksButton } from "@/domains/smart-devices/components/RefreshLocksButton";
+import { UnmappedAugustDevicesPanel } from "@/domains/smart-devices/components/UnmappedAugustDevicesPanel";
 import { countLocksNeedingAttention } from "@/domains/smart-devices/lib/lock-daily-report";
 import {
   classifyLockHealth,
@@ -31,6 +37,11 @@ import {
   describeDoorCondition,
   type LockVerificationRow,
 } from "@/domains/smart-devices/lib/lock-verification";
+import { buildVerificationTrackerRow } from "@/domains/smart-devices/lib/lock-verification-tracker";
+import {
+  describeRemoteControlAvailability,
+  REMOTE_CONTROL_AVAILABILITY_LABELS,
+} from "@/domains/smart-devices/lib/remote-control-availability";
 import {
   computeFirstTestEligibility,
   computeLockControlEligibility,
@@ -42,12 +53,14 @@ import { getLockControlSetting } from "@/domains/smart-devices/services/lock-con
 import { getRecentUnknownTransitionCounts } from "@/domains/smart-devices/services/lock-health.service";
 import { getActiveOperationalHolds } from "@/domains/smart-devices/services/lock-operational-hold.service";
 import { getAugustRefreshFreshness } from "@/domains/smart-devices/services/lock-refresh.service";
+import { getLockVerificationEvidence } from "@/domains/smart-devices/services/lock-verification-evidence.service";
 import {
   getBatteryLevel,
   isDemoSmartDevice,
   isLockVisible,
   listSmartDevices,
 } from "@/domains/smart-devices/services/smart-devices.service";
+import { listUnmappedAugustDevices } from "@/domains/smart-devices/services/unmapped-august-devices.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
 /**
@@ -59,7 +72,19 @@ import { getCurrentUser } from "@/platform/auth/get-current-user";
  */
 export const maxDuration = 60;
 
-export default async function LocksPage() {
+/**
+ * /locks has three tabs (2026-09-30, three-way separation), each its own
+ * server render at `?tab=…`: Fleet Status (default) — current state and
+ * controls; Daily Lock Report — the accepted report, unchanged; and
+ * Remote-Control Verification — historical evidence. All three read the
+ * same data below, so their numbers can't drift apart.
+ */
+export default async function LocksPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string | string[] }>;
+}) {
+  const tab = parseLocksTab((await searchParams).tab);
   const actor = await getCurrentUser();
   const devices = await listSmartDevices(actor);
   // isLockVisible() is the one centralized rule for this normal operational
@@ -148,20 +173,25 @@ export default async function LocksPage() {
         ? { label: OPERATIONAL_HOLD_LABELS[hold.kind], note: hold.note }
         : null,
     };
+    // Shown to every viewer (2026-09-30); same rule as the eligibility
+    // below, display-only. The controls themselves stay locks:manage-only.
+    const availability =
+      lock.provider === "AUGUST"
+        ? describeRemoteControlAvailability(ctx)
+        : null;
     return {
       ...lock,
+      remoteControlCode: availability,
+      remoteControl: availability
+        ? {
+            available: availability === "AVAILABLE",
+            label: REMOTE_CONTROL_AVAILABILITY_LABELS[availability],
+          }
+        : null,
       controlEligibility: isAugust ? computeLockControlEligibility(ctx) : null,
       firstTestEligibility: isAugust ? computeFirstTestEligibility(ctx) : null,
       adminResetAvailable: isAugust && isAdminResetAvailable(lastOutcome),
       operationalHoldLabel: hold ? OPERATIONAL_HOLD_LABELS[hold.kind] : null,
-      verificationStatus:
-        lock.provider === "AUGUST"
-          ? deriveLockVerification({
-              firstVerifiedAt:
-                verificationHistory.get(lock.id)?.firstVerifiedAt ?? null,
-              operationalHold: hold,
-            }).status
-          : null,
     };
   });
 
@@ -215,6 +245,55 @@ export default async function LocksPage() {
     };
   });
 
+  // Remote-Control Verification (2026-09-30): per-step evidence from the
+  // append-only AuditLog (StayWhile commands + Ops evidence). Read-only.
+  const evidence = await getLockVerificationEvidence(
+    actor,
+    healthLocks.map((lock) => lock.id),
+  );
+  const trackerRows = verificationRows.map((base, i) => {
+    const lock = healthLocks[i]!;
+    const withEligibility = locksWithEligibility.find((l) => l.id === lock.id)!;
+    const mapping = lock.providerDevice;
+    return buildVerificationTrackerRow({
+      base,
+      firstVerifiedAt:
+        verificationHistory.get(lock.id)?.firstVerifiedAt ?? null,
+      operationalHold: operationalHolds.get(lock.id) ?? null,
+      lastCommandOutcome: lastCommandOutcomes.get(lock.id) ?? null,
+      mapped: Boolean(mapping?.enabled && mapping.propertyId),
+      lockState: getLockHealthSnapshot(lock.metadata)?.lockState ?? "unknown",
+      commands: evidence.get(lock.id)?.commands ?? [],
+      ops: evidence.get(lock.id)?.ops ?? [],
+      availability: withEligibility.remoteControlCode ?? "NOT_MAPPED",
+    });
+  });
+  const trackerById = new Map(trackerRows.map((r) => [r.smartDeviceId, r]));
+  const flagsById = new Map(
+    lockHealthRows.map((r) => [r.smartDeviceId, r.flags]),
+  );
+
+  // Fleet Status rows: the verification badge is the tracker's overall
+  // status, and badges/metrics use the report's own classifier flags.
+  const fleetRows = locksWithEligibility.map((lock) => ({
+    ...lock,
+    healthFlags: flagsById.get(lock.id) ?? null,
+    verificationStatus:
+      lock.provider === "AUGUST"
+        ? (trackerById.get(lock.id)?.verification.status ??
+          deriveLockVerification({
+            firstVerifiedAt:
+              verificationHistory.get(lock.id)?.firstVerifiedAt ?? null,
+            operationalHold: operationalHolds.get(lock.id) ?? null,
+            lastCommandOutcome: lastCommandOutcomes.get(lock.id) ?? null,
+          }).status)
+        : null,
+  }));
+
+  const unmapped =
+    tab === "fleet" ? await listUnmappedAugustDevices(actor) : null;
+  const needsAttentionCount = countLocksNeedingAttention(lockHealthRows);
+
   return (
     <div>
       {/* 2026-09-18 UI cleanup: Refresh all / Bulk refresh now live in the
@@ -244,35 +323,56 @@ export default async function LocksPage() {
         />
       </div>
       <div className="mb-4">
-        <LockControlKillSwitch
-          enabled={lockControl.enabled}
-          canToggle={canControlLocks}
-          action={setLockControlEnabledAction}
-        />
+        <LocksTabs active={tab} counts={{ report: needsAttentionCount }} />
       </div>
-      <div className="mb-4">
+
+      {tab === "fleet" && (
+        <>
+          <div className="mb-4">
+            <LockControlKillSwitch
+              enabled={lockControl.enabled}
+              canToggle={canControlLocks}
+              action={setLockControlEnabledAction}
+            />
+          </div>
+          <LocksList
+            locks={fleetRows}
+            needsAttentionCount={needsAttentionCount}
+            canRefresh={canRefresh}
+            spotRefreshAction={refreshAugustTelemetrySpotAction}
+            canControlLocks={canControlLocks}
+            lockCommandAction={sendAugustLockCommandAction}
+            retireAction={retireSmartDeviceAction}
+            resetAction={resetAugustLockAction}
+            holdActions={{
+              set: setLockOperationalHoldAction,
+              clear: clearLockOperationalHoldAction,
+            }}
+          />
+          {unmapped && (
+            <div className="mt-6">
+              <UnmappedAugustDevicesPanel
+                devices={unmapped.devices}
+                retiredCount={unmapped.retiredCount}
+              />
+            </div>
+          )}
+        </>
+      )}
+
+      {tab === "report" && (
         <LockHealthPanel rows={lockHealthRows} now={healthNow.toISOString()} />
-      </div>
-      <div className="mb-4">
-        <LockVerificationPanel
-          rows={verificationRows}
+      )}
+
+      {tab === "verification" && (
+        <LockVerificationTracker
+          rows={trackerRows}
           generatedAt={healthNow.toISOString()}
+          recordAction={
+            canControlLocks ? recordLockVerificationEvidenceAction : undefined
+          }
         />
-      </div>
-      <LocksList
-        locks={locksWithEligibility}
-        needsAttentionCount={countLocksNeedingAttention(lockHealthRows)}
-        canRefresh={canRefresh}
-        spotRefreshAction={refreshAugustTelemetrySpotAction}
-        canControlLocks={canControlLocks}
-        lockCommandAction={sendAugustLockCommandAction}
-        retireAction={retireSmartDeviceAction}
-        resetAction={resetAugustLockAction}
-        holdActions={{
-          set: setLockOperationalHoldAction,
-          clear: clearLockOperationalHoldAction,
-        }}
-      />
+      )}
     </div>
   );
 }
