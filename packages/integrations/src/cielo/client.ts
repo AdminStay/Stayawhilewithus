@@ -10,9 +10,30 @@ import type {
   WebhookReceivable,
 } from "../core";
 
+import {
+  parseCieloControlSnapshot,
+  type CieloControlSnapshot,
+  type CieloSession,
+} from "./control";
 import type { CieloCredentials, CieloDevice } from "./types";
 
 export type { CieloDevice } from "./types";
+export {
+  buildCieloSetpointFrame,
+  CIELO_ALLOWED_SETPOINT_MODES,
+  CIELO_SETPOINT_SAFETY,
+  cieloSetpointRange,
+  parseCieloControlSnapshot,
+  sendCieloFrameAndAwaitState,
+  validateCieloSetpoint,
+  type CieloControlSnapshot,
+  type CieloFrameOutcome,
+  type CieloSendState,
+  type CieloSession,
+  type CieloSetpointValidation,
+  type CieloSocketFactory,
+  type CieloSocketLike,
+} from "./control";
 
 const BASE_URL = "https://api.smartcielo.com";
 
@@ -181,8 +202,10 @@ export function parseCieloDevice(raw: RawCieloDevice): CieloDevice {
  * Cielo integration client — real HTTP calls against the verified (if
  * unofficial — there is no public developer program) api.smartcielo.com
  * endpoints, ported from bodyscape/cielo_home's cielohome.py and
- * cielohomedevice.py. Read-only: does not implement AC control (StayWhile's
- * need is status visibility, not remote control). Stateless per call —
+ * cielohomedevice.py. This class itself sends no control command: the only
+ * Cielo command (a setpoint) lives in ./control.ts and is sent only by
+ * apps/website's cielo-commands.service.ts, behind RBAC, an allowlist and a
+ * default-OFF kill switch (2026-09-30). Stateless per call —
  * logs in fresh each time rather than caching a session, matching this
  * package's other real clients (OwnerrezClient, NotionClient); Cielo's
  * login has no interactive step, so this costs one extra HTTP call, not a
@@ -203,7 +226,7 @@ export class CieloClient
     this.http = new HttpClient({ baseUrl: BASE_URL });
   }
 
-  private async login(): Promise<{ accessToken: string }> {
+  private async login(): Promise<{ accessToken: string; userId: string }> {
     const passwordHash = createHash("sha256")
       .update(this.credentials.password, "utf8")
       .digest("hex");
@@ -247,7 +270,56 @@ export class CieloClient
       );
     }
 
-    return { accessToken: response.data.user.accessToken };
+    return {
+      accessToken: response.data.user.accessToken,
+      userId: response.data.user.userId,
+    };
+  }
+
+  /**
+   * Fresh login for one setpoint command (2026-09-30). The mobile login
+   * returns no sessionId, so — like the reference integration — a
+   * client-side identifier is generated for the WebSocket.
+   */
+  async openControlSession(): Promise<CieloSession> {
+    const { accessToken, userId } = await this.login();
+    return { accessToken, userId, sessionId: `stw-${Date.now()}` };
+  }
+
+  /**
+   * Read-only: the live `/web/devices` entry for one MAC address — parsed
+   * for control (appliance range/units, firmware, latestAction, …) and as
+   * the normal telemetry `CieloDevice` — or null when the account doesn't
+   * return that device.
+   */
+  async getControlSnapshot(
+    session: Pick<CieloSession, "accessToken">,
+    macAddress: string,
+  ): Promise<{ snapshot: CieloControlSnapshot; device: CieloDevice } | null> {
+    const response = await this.http.request<{
+      status: number;
+      message: string;
+      data?: { listDevices: Array<Record<string, unknown>> };
+    }>("/web/devices?limit=420", {
+      headers: {
+        authorization: session.accessToken,
+        "x-api-key": WEB_X_API_KEY,
+      },
+    });
+    if (response.status !== 200 || !response.data) {
+      throw new Error(
+        `Cielo device list failed: ${response.message || "unknown error"}`,
+      );
+    }
+    const raw = response.data.listDevices.find(
+      (d) => d.macAddress === macAddress,
+    );
+    return raw
+      ? {
+          snapshot: parseCieloControlSnapshot(raw),
+          device: parseCieloDevice(raw as unknown as RawCieloDevice),
+        }
+      : null;
   }
 
   async connect(): Promise<{ connected: boolean; connectedAt: Date }> {

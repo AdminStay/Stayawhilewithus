@@ -3,8 +3,11 @@ import { PageHeader } from "@stayw/ui";
 
 import {
   refreshThermostatsAction,
+  setCieloControlEnabledAction,
+  setCieloSetpointAction,
   setThermostatControlEnabledAction,
 } from "@/domains/smart-devices/actions";
+import { CieloControlKillSwitch } from "@/domains/smart-devices/components/CieloControlKillSwitch";
 import { NestHealthBanner } from "@/domains/smart-devices/components/NestHealthBanner";
 import { RefreshThermostatsButton } from "@/domains/smart-devices/components/RefreshThermostatsButton";
 import { ThermostatControlKillSwitch } from "@/domains/smart-devices/components/ThermostatControlKillSwitch";
@@ -14,6 +17,8 @@ import {
   summarizeNestHealth,
 } from "@/domains/smart-devices/lib/nest-health";
 import { getTelemetryUpdatedAt } from "@/domains/smart-devices/lib/thermostat-metadata";
+import { isCieloDeviceOnControlAllowlist } from "@/domains/smart-devices/services/cielo-commands.service";
+import { getCieloControlSetting } from "@/domains/smart-devices/services/cielo-control-settings.service";
 import {
   isThermostatVisible,
   listSmartDevices,
@@ -75,6 +80,15 @@ export default async function ThermostatsPage() {
     nestThermostatCount: nestThermostats.length,
     now,
   });
+  // Cielo setpoint control (2026-09-30): its own default-OFF switch and the
+  // temporary allowlist (existing mappings only). UX gating only — the
+  // command service re-checks both, plus RBAC and a fresh Cielo read.
+  const cieloControl = await getCieloControlSetting(actor);
+  const cieloControllableIds = thermostats
+    .filter((t) => isCieloDeviceOnControlAllowlist(t))
+    .map((t) => t.id);
+  const hasCieloThermostats = thermostats.some((t) => t.provider === "CIELO");
+
   const staleReadingIds = thermostats
     .filter((t) => isThermostatReadingStale(getTelemetryUpdatedAt(t), now))
     .map((t) => t.id);
@@ -106,12 +120,22 @@ export default async function ThermostatsPage() {
           canToggle={canToggleThermostatControl}
           action={setThermostatControlEnabledAction}
         />
+        {hasCieloThermostats && (
+          <CieloControlKillSwitch
+            enabled={cieloControl.enabled}
+            canToggle={canToggleThermostatControl}
+            action={setCieloControlEnabledAction}
+          />
+        )}
       </div>
       <ThermostatsList
         thermostats={thermostats}
         canManageByPropertyId={canManageByPropertyId}
         controlEnabled={thermostatControl.enabled}
         staleReadingIds={staleReadingIds}
+        cieloControlEnabled={cieloControl.enabled}
+        cieloControllableIds={cieloControllableIds}
+        cieloSetpointAction={setCieloSetpointAction}
       />
     </div>
   );

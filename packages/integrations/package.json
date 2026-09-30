@@ -29,7 +29,8 @@
     "nest:discover": "tsx src/nest/scripts/discover.ts"
   },
   "dependencies": {
-    "@stayw/database": "workspace:*"
+    "@stayw/database": "workspace:*",
+    "ws": "8.21.3"
   },
   "devDependencies": {
     "@stayw/vitest-config": "workspace:*",

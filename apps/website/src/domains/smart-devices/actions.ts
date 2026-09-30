@@ -12,6 +12,10 @@ import {
   setLockOperationalHoldSchema,
 } from "./schemas/august-lock-command.schema";
 import {
+  setCieloControlEnabledSchema,
+  setCieloSetpointSchema,
+} from "./schemas/cielo-commands.schema";
+import {
   refreshAugustBatchSchema,
   refreshAugustSpotSchema,
 } from "./schemas/lock-spot-refresh.schema";
@@ -36,6 +40,14 @@ import {
   type AugustLockCommandResult,
   type ResetAugustLockResult,
 } from "./services/august-commands.service";
+import {
+  sendCieloSetpointCommand,
+  type CieloCommandResult,
+} from "./services/cielo-commands.service";
+import {
+  setCieloControlEnabled,
+  type SetCieloControlResult,
+} from "./services/cielo-control-settings.service";
 import {
   setLockControlEnabled,
   type SetLockControlResult,
@@ -826,4 +838,54 @@ export async function refreshAugustAction(
       error: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+export type CieloSetpointActionState =
+  | { status: "idle" }
+  | CieloCommandResult
+  | { status: "invalid"; reason: string };
+
+/**
+ * Cielo setpoint (2026-09-30, first version). Parses the form and hands
+ * off to sendCieloSetpointCommand(), the single enforcement point. Expected
+ * outcomes (rejected / failed / ambiguous / already running) are returned
+ * inline, never thrown; an RBAC failure still throws.
+ */
+export async function setCieloSetpointAction(
+  _prevState: CieloSetpointActionState,
+  formData: FormData,
+): Promise<CieloSetpointActionState> {
+  const actor = await getCurrentUser();
+  const parsed = setCieloSetpointSchema.safeParse({
+    smartDeviceId: formData.get("smartDeviceId"),
+    targetTemperatureF: Number(formData.get("targetTemperatureF")),
+  });
+  if (!parsed.success) {
+    return {
+      status: "invalid",
+      reason: "Enter a whole-number temperature between 60°F and 85°F.",
+    };
+  }
+  const result = await sendCieloSetpointCommand(actor, parsed.data);
+  if (result.status === "succeeded" || result.status === "ambiguous") {
+    revalidatePath(THERMOSTATS_PAGE_PATH);
+  }
+  return result;
+}
+
+export type SetCieloControlActionState =
+  { status: "idle" } | SetCieloControlResult;
+
+/** Admin kill switch for Cielo commands only (default OFF). RBAC + audit live in setCieloControlEnabled(). */
+export async function setCieloControlEnabledAction(
+  _prevState: SetCieloControlActionState,
+  formData: FormData,
+): Promise<SetCieloControlActionState> {
+  const actor = await getCurrentUser();
+  const { enabled } = setCieloControlEnabledSchema.parse({
+    enabled: formData.get("enabled"),
+  });
+  const result = await setCieloControlEnabled(actor, enabled);
+  revalidatePath(THERMOSTATS_PAGE_PATH);
+  return result;
 }

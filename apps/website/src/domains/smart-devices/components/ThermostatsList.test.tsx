@@ -9,6 +9,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("./NestThermostatControls", () => ({
   NestThermostatControls: () => <div>REAL CONTROLS</div>,
 }));
+vi.mock("./CieloSetpointControl", () => ({
+  CieloSetpointControl: (p: {
+    deviceName: string;
+    currentTargetF: number | null;
+  }) => (
+    <div>
+      CIELO SETPOINT {p.deviceName} {String(p.currentTargetF)}
+    </div>
+  ),
+}));
 
 import { formatTimestamp } from "../lib/format-timestamp";
 import { ThermostatsList } from "./ThermostatsList";
@@ -401,5 +411,90 @@ describe("ThermostatsList — Nest Phase 1: kill switch + stale readings (2026-0
     expect(screen.getByText(/Stale reading/).textContent).toContain(
       "none recorded",
     );
+  });
+});
+
+describe("ThermostatsList — Cielo setpoint cell (2026-09-30)", () => {
+  const cielo = (o: Record<string, unknown> = {}) =>
+    makeThermostat({
+      id: "c-1",
+      provider: "CIELO",
+      name: "Island Tides - Man cave",
+      property: { name: "Island Tides" },
+      metadata: { targetTemperature: 72 },
+      ...o,
+    });
+  const action = vi.fn();
+
+  it("allowlisted + permitted + switch ON → the setpoint control, with the current target", () => {
+    render(
+      <ThermostatsList
+        thermostats={[cielo()]}
+        canManageByPropertyId={{ "prop-1": true }}
+        cieloControlEnabled
+        cieloControllableIds={["c-1"]}
+        cieloSetpointAction={action}
+      />,
+    );
+    expect(
+      screen.getByText("CIELO SETPOINT Island Tides - Man cave 72"),
+    ).toBeTruthy();
+  });
+
+  it("switch OFF → 'Remote control is OFF', no control", () => {
+    render(
+      <ThermostatsList
+        thermostats={[cielo()]}
+        canManageByPropertyId={{ "prop-1": true }}
+        cieloControllableIds={["c-1"]}
+        cieloSetpointAction={action}
+      />,
+    );
+    expect(screen.getByText("Remote control is OFF")).toBeTruthy();
+    expect(screen.queryByText(/CIELO SETPOINT/)).toBeNull();
+  });
+
+  it("not on the allowlist → no control even with permission and switch ON", () => {
+    render(
+      <ThermostatsList
+        thermostats={[cielo()]}
+        canManageByPropertyId={{ "prop-1": true }}
+        cieloControlEnabled
+        cieloControllableIds={[]}
+        cieloSetpointAction={action}
+      />,
+    );
+    expect(screen.getByText("Not on the Cielo control allowlist")).toBeTruthy();
+    expect(screen.queryByText(/CIELO SETPOINT/)).toBeNull();
+  });
+
+  it("no thermostats:manage → view only", () => {
+    render(
+      <ThermostatsList
+        thermostats={[cielo()]}
+        canManageByPropertyId={{ "prop-1": false }}
+        cieloControlEnabled
+        cieloControllableIds={["c-1"]}
+        cieloSetpointAction={action}
+      />,
+    );
+    expect(
+      screen.getByText("View only — no permission to control this device"),
+    ).toBeTruthy();
+    expect(screen.queryByText(/CIELO SETPOINT/)).toBeNull();
+  });
+
+  it("the Cielo switch never gives a Nest row controls", () => {
+    render(
+      <ThermostatsList
+        thermostats={[makeThermostat({ id: "n-1" })]}
+        canManageByPropertyId={{ "prop-1": true }}
+        cieloControlEnabled
+        cieloControllableIds={["n-1"]}
+        cieloSetpointAction={action}
+      />,
+    );
+    expect(screen.queryByText(/CIELO SETPOINT/)).toBeNull();
+    expect(screen.queryByText("REAL CONTROLS")).toBeNull();
   });
 });

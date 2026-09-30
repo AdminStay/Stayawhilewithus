@@ -11,10 +11,14 @@ const {
   mockListSmartDevices,
   mockGetControl,
   mockGetNestHealth,
+  mockGetCieloControl,
   listProps,
   switchProps,
   bannerProps,
+  cieloSwitchProps,
 } = vi.hoisted(() => ({
+  mockGetCieloControl: vi.fn(),
+  cieloSwitchProps: [] as Record<string, unknown>[],
   mockHasPermission: vi.fn(),
   mockListSmartDevices: vi.fn(),
   mockGetControl: vi.fn(),
@@ -44,6 +48,26 @@ vi.mock("@/domains/smart-devices/services/smart-devices.service", () => ({
 vi.mock("@/domains/smart-devices/actions", () => ({
   refreshThermostatsAction: vi.fn(),
   setThermostatControlEnabledAction: vi.fn(),
+  setCieloControlEnabledAction: vi.fn(),
+  setCieloSetpointAction: vi.fn(),
+}));
+
+vi.mock(
+  "@/domains/smart-devices/services/cielo-control-settings.service",
+  () => ({ getCieloControlSetting: mockGetCieloControl }),
+);
+// Same allowlist rule as the real service, without its server-only import.
+vi.mock("@/domains/smart-devices/services/cielo-commands.service", () => ({
+  isCieloDeviceOnControlAllowlist: (d: {
+    provider: string;
+    externalDeviceId: string;
+  }) => d.provider === "CIELO" && d.externalDeviceId === "AA:ALLOWED",
+}));
+vi.mock("@/domains/smart-devices/components/CieloControlKillSwitch", () => ({
+  CieloControlKillSwitch: (props: Record<string, unknown>) => {
+    cieloSwitchProps.push(props);
+    return null;
+  },
 }));
 
 vi.mock("@/domains/smart-devices/components/ThermostatsList", () => ({
@@ -93,6 +117,12 @@ beforeEach(() => {
   mockGetNestHealth
     .mockReset()
     .mockResolvedValue({ lastAttempt: null, lastSucceededAt: null });
+  mockGetCieloControl.mockReset().mockResolvedValue({
+    enabled: false,
+    updatedAt: null,
+    updatedByUserId: null,
+  });
+  cieloSwitchProps.length = 0;
   listProps.length = 0;
   switchProps.length = 0;
   bannerProps.length = 0;
@@ -274,5 +304,52 @@ describe("ThermostatsPage — obsolete [nest-diag] debug log removed (2026-09-27
     );
     expect(source).not.toContain("[nest-diag]");
     expect(source).not.toContain("Aqua Palm");
+  });
+});
+
+describe("ThermostatsPage — Cielo setpoint control wiring (2026-09-30)", () => {
+  const cielo = (id: string, mac: string) => ({
+    id,
+    provider: "CIELO",
+    deviceType: "THERMOSTAT",
+    externalDeviceId: mac,
+    propertyId: "prop-1",
+    property: { name: "Island Tides" },
+    name: id,
+    status: "ONLINE",
+    metadata: {},
+    updatedAt: new Date(),
+  });
+
+  it("passes the Cielo switch state, the allowlisted ids and the setpoint action to the list", async () => {
+    mockHasPermission.mockResolvedValue(true);
+    mockGetCieloControl.mockResolvedValue({
+      enabled: true,
+      updatedAt: null,
+      updatedByUserId: null,
+    });
+    mockListSmartDevices.mockResolvedValue([
+      cielo("c-allowed", "AA:ALLOWED"),
+      cielo("c-other", "BB:NOT-MAPPED"),
+    ]);
+
+    render(await ThermostatsPage());
+
+    const props = listProps.at(-1)!;
+    expect(props.cieloControlEnabled).toBe(true);
+    expect(props.cieloControllableIds).toEqual(["c-allowed"]);
+    expect(props.cieloSetpointAction).toBeTypeOf("function");
+    expect(cieloSwitchProps.at(-1)).toMatchObject({
+      enabled: true,
+      canToggle: true,
+    });
+  });
+
+  it("defaults OFF and shows no Cielo switch when there are no Cielo thermostats", async () => {
+    mockHasPermission.mockResolvedValue(true);
+    render(await ThermostatsPage());
+    expect(listProps.at(-1)!.cieloControlEnabled).toBe(false);
+    expect(listProps.at(-1)!.cieloControllableIds).toEqual([]);
+    expect(cieloSwitchProps).toHaveLength(0);
   });
 });

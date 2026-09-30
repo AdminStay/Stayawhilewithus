@@ -26,7 +26,11 @@ const {
   mockSetHold,
   mockClearHold,
   mockRecordEvidence,
+  mockSendCieloSetpoint,
+  mockSetCieloControlEnabled,
 } = vi.hoisted(() => ({
+  mockSendCieloSetpoint: vi.fn(),
+  mockSetCieloControlEnabled: vi.fn(),
   mockRecordEvidence: vi.fn(),
   mockSetHold: vi.fn(),
   mockClearHold: vi.fn(),
@@ -79,6 +83,14 @@ vi.mock("./services/thermostat-control-settings.service", () => ({
   setThermostatControlEnabled: mockSetThermostatControlEnabled,
 }));
 
+vi.mock("./services/cielo-commands.service", () => ({
+  sendCieloSetpointCommand: mockSendCieloSetpoint,
+}));
+
+vi.mock("./services/cielo-control-settings.service", () => ({
+  setCieloControlEnabled: mockSetCieloControlEnabled,
+}));
+
 vi.mock("./services/lock-control-settings.service", () => ({
   setLockControlEnabled: mockSetLockControlEnabled,
 }));
@@ -127,6 +139,8 @@ import {
   recordLockVerificationEvidenceAction,
   setLockOperationalHoldAction,
   setThermostatControlEnabledAction,
+  setCieloControlEnabledAction,
+  setCieloSetpointAction,
 } from "./actions";
 
 const IDLE = { status: "idle" as const };
@@ -1260,5 +1274,90 @@ describe("recordLockVerificationEvidenceAction (2026-09-30)", () => {
     );
     expect(mockSendAugustLockCommand).not.toHaveBeenCalled();
     expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+  });
+});
+
+describe("setCieloSetpointAction (2026-09-30)", () => {
+  const DEVICE = "11111111-1111-4111-8111-111111111111";
+  const form = (fields: Record<string, string>) => {
+    const fd = new FormData();
+    for (const [k, v] of Object.entries(fields)) fd.set(k, v);
+    return fd;
+  };
+
+  beforeEach(() => {
+    mockSendCieloSetpoint.mockReset();
+    mockRevalidatePath.mockReset();
+  });
+
+  it("parses the form and hands off to the single enforcement point", async () => {
+    mockSendCieloSetpoint.mockResolvedValueOnce({
+      status: "succeeded",
+      confirmedTargetF: 73,
+    });
+    const result = await setCieloSetpointAction(
+      IDLE,
+      form({ smartDeviceId: DEVICE, targetTemperatureF: "73" }),
+    );
+    expect(mockSendCieloSetpoint).toHaveBeenCalledWith(
+      { userId: "user-1" },
+      { smartDeviceId: DEVICE, targetTemperatureF: 73 },
+    );
+    expect(result).toEqual({ status: "succeeded", confirmedTargetF: 73 });
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/thermostats");
+  });
+
+  it.each([
+    ["59", "below 60°F"],
+    ["86", "above 85°F"],
+    ["72.5", "not a whole number"],
+    ["", "empty"],
+  ])("rejects %s (%s) before calling the service", async (value) => {
+    const result = await setCieloSetpointAction(
+      IDLE,
+      form({ smartDeviceId: DEVICE, targetTemperatureF: value }),
+    );
+    expect(result).toMatchObject({ status: "invalid" });
+    expect(mockSendCieloSetpoint).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-uuid device id before calling the service", async () => {
+    const result = await setCieloSetpointAction(
+      IDLE,
+      form({ smartDeviceId: "7206 - Office", targetTemperatureF: "72" }),
+    );
+    expect(result).toMatchObject({ status: "invalid" });
+    expect(mockSendCieloSetpoint).not.toHaveBeenCalled();
+  });
+
+  it("returns a rejection inline and does not revalidate", async () => {
+    mockSendCieloSetpoint.mockResolvedValueOnce({
+      status: "rejected",
+      reason: "OFF",
+    });
+    const result = await setCieloSetpointAction(
+      IDLE,
+      form({ smartDeviceId: DEVICE, targetTemperatureF: "72" }),
+    );
+    expect(result).toEqual({ status: "rejected", reason: "OFF" });
+    expect(mockRevalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+describe("setCieloControlEnabledAction (2026-09-30)", () => {
+  it("passes the parsed flag to the audited service and revalidates", async () => {
+    mockSetCieloControlEnabled.mockResolvedValueOnce({
+      status: "success",
+      enabled: true,
+    });
+    const fd = new FormData();
+    fd.set("enabled", "true");
+    const result = await setCieloControlEnabledAction(IDLE, fd);
+    expect(mockSetCieloControlEnabled).toHaveBeenCalledWith(
+      { userId: "user-1" },
+      true,
+    );
+    expect(result).toEqual({ status: "success", enabled: true });
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/thermostats");
   });
 });

@@ -25,7 +25,9 @@ import {
 } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 
+import type { CieloSetpointActionState } from "../actions";
 import { formatTimestamp } from "../lib/format-timestamp";
+import { getProviderDisplayName } from "../lib/provider-display-name";
 import {
   DEFAULT_THERMOSTAT_FILTER_STATE,
   filterThermostats,
@@ -39,9 +41,9 @@ import {
   getTargetTemperature,
   getTelemetryUpdatedAt,
 } from "../lib/thermostat-metadata";
-import { getProviderDisplayName } from "../lib/provider-display-name";
 import type { SmartDevice } from "../services/smart-devices.service";
 
+import { CieloSetpointControl } from "./CieloSetpointControl";
 import { NestThermostatControls } from "./NestThermostatControls";
 
 type ThermostatWithProperty = SmartDevice & {
@@ -96,6 +98,9 @@ export function ThermostatsList({
   canManageByPropertyId,
   controlEnabled = false,
   staleReadingIds = [],
+  cieloControlEnabled = false,
+  cieloControllableIds = [],
+  cieloSetpointAction,
 }: {
   thermostats: ThermostatWithProperty[];
   /** Resolved server-side per property — see /thermostats/page.tsx. */
@@ -104,7 +109,19 @@ export function ThermostatsList({
   controlEnabled?: boolean;
   /** Rows whose provider reading is older than 24 h (or missing), computed server-side so server and client render identically. */
   staleReadingIds?: string[];
+  /** Cielo-only kill switch (2026-09-30). Defaults to OFF. */
+  cieloControlEnabled?: boolean;
+  /** Cielo rows on the temporary control allowlist (resolved server-side). */
+  cieloControllableIds?: string[];
+  cieloSetpointAction?: (
+    prevState: CieloSetpointActionState,
+    formData: FormData,
+  ) => Promise<CieloSetpointActionState>;
 }) {
+  const cieloControllable = useMemo(
+    () => new Set(cieloControllableIds),
+    [cieloControllableIds],
+  );
   const staleIds = useMemo(() => new Set(staleReadingIds), [staleReadingIds]);
   const [filters, setFilters] = useState<ThermostatFilterState>(
     DEFAULT_THERMOSTAT_FILTER_STATE,
@@ -337,7 +354,31 @@ export function ThermostatsList({
                       )}
                     </TableCell>
                     <TableCell className={CELL_CLASS}>
-                      {hasLiveControls ? (
+                      {thermostat.provider === "CIELO" ? (
+                        !cieloControllable.has(thermostat.id) ? (
+                          <span className="text-ink-faint">
+                            {canManage
+                              ? "Not on the Cielo control allowlist"
+                              : "—"}
+                          </span>
+                        ) : !canManage ? (
+                          <span className="text-ink-faint">
+                            View only — no permission to control this device
+                          </span>
+                        ) : !cieloControlEnabled || !cieloSetpointAction ? (
+                          <span className="text-ink-faint">
+                            Remote control is OFF
+                          </span>
+                        ) : (
+                          <CieloSetpointControl
+                            smartDeviceId={thermostat.id}
+                            propertyName={thermostat.property.name}
+                            deviceName={thermostat.name}
+                            currentTargetF={getTargetTemperature(thermostat)}
+                            action={cieloSetpointAction}
+                          />
+                        )
+                      ) : hasLiveControls ? (
                         <button
                           type="button"
                           onClick={() => toggleExpanded(thermostat.id)}

@@ -270,6 +270,9 @@ importers:
       '@stayw/database':
         specifier: workspace:*
         version: link:../database
+      ws:
+        specifier: 8.21.3
+        version: 8.21.3
     devDependencies:
       '@prisma/client':
         specifier: ^6.1.0
