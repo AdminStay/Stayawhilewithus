@@ -323,6 +323,22 @@ describe("fresh live read + validation (nothing sent when refused)", () => {
     expect(auditResults()).toEqual(["REJECTED"]);
   });
 
+  it("appliance lookup failed (2026-10-01) → REJECTED with the appliance reason, audited, no frame", async () => {
+    const snapshot = live("72");
+    mockGetSnapshot.mockResolvedValue({
+      ...snapshot,
+      snapshot: { ...snapshot.snapshot, applianceLookup: "failed" },
+    });
+    const result = await sendCieloSetpointCommand(ACTOR, {
+      smartDeviceId: DEVICE_ID,
+      targetTemperatureF: 73,
+    });
+    expect(result).toMatchObject({ status: "rejected" });
+    expect((result as { reason: string }).reason).toMatch(/appliance details/);
+    expect(mockSendFrame).not.toHaveBeenCalled();
+    expect(auditResults()).toEqual(["REJECTED"]);
+  });
+
   it("device not returned by Cielo → REJECTED, no frame", async () => {
     mockGetSnapshot.mockResolvedValue(null);
     const result = await sendCieloSetpointCommand(ACTOR, {

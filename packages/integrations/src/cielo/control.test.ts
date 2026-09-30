@@ -358,3 +358,38 @@ describe("sendCieloFrameAndAwaitState", () => {
     expect(outcome.sendState).toBe("not_sent");
   });
 });
+
+describe("appliance lookup rule (2026-10-01)", () => {
+  it.each(["not_found", "failed", "no_appliance_id"] as const)(
+    "applianceLookup=%s → refused with the appliance reason, even if appliance data is present",
+    (lookup) => {
+      const v = validateCieloSetpoint(
+        { ...snap(), applianceLookup: lookup },
+        73,
+      );
+      expect(v).toMatchObject({ allowed: false });
+      expect((v as { reason: string }).reason).toMatch(/appliance details/);
+    },
+  );
+
+  it("applianceLookup=ok → the existing rules decide exactly as before", () => {
+    expect(
+      validateCieloSetpoint({ ...snap(), applianceLookup: "ok" }, 74),
+    ).toMatchObject({
+      allowed: true,
+    });
+    expect(
+      validateCieloSetpoint({ ...snap(), applianceLookup: "ok" }, 78),
+    ).toMatchObject({
+      allowed: false,
+    });
+  });
+
+  it("offline is still reported before the appliance rule", () => {
+    const v = validateCieloSetpoint(
+      { ...snap({ deviceStatus: 0 }), applianceLookup: "failed" },
+      73,
+    );
+    expect((v as { reason: string }).reason).toMatch(/offline/);
+  });
+});

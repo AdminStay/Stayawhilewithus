@@ -12,7 +12,7 @@ vi.mock("../core", async (importOriginal) => {
   };
 });
 
-import { CieloClient, parseCieloDevice } from "./client";
+import { CieloClient, parseCieloDevice, validateCieloSetpoint } from "./client";
 
 const credentials = { username: "test@example.com", password: "hunter2" };
 
@@ -436,5 +436,239 @@ describe("parseCieloDevice", () => {
     expect(parseCieloDevice({ ...baseRaw, deviceStatus: "off" }).online).toBe(
       false,
     );
+  });
+});
+
+describe("getControlSnapshot — appliance lookup (2026-10-01 fix)", () => {
+  // Shapes observed live 2026-10-01 (read-only diagnostic): /web/devices has
+  // NO `appliance` key; the appliance record only comes from /web/sync/db/6.
+  const SESSION = { accessToken: "access-1" };
+  const islandTides = (o: Record<string, unknown> = {}) => ({
+    deviceName: "Island Tides - Man cave",
+    macAddress: "D8BFC0FE8756",
+    deviceStatus: 1,
+    isFaren: 1,
+    applianceId: 1663,
+    applianceType: "AC",
+    fwVersion: "1.0.0",
+    deviceTypeVersion: "BI03",
+    connectionSource: 0,
+    latEnv: { temp: 75, humidity: 50 },
+    latestAction: {
+      power: "on",
+      mode: "cool",
+      temp: "72",
+      fanspeed: "auto",
+      swing: "auto",
+    },
+    ...o,
+  });
+  const sandyNudes = {
+    ...islandTides(),
+    deviceName: "Sandy Nudes - Garage",
+    macAddress: "781C3CB9ED6C",
+    applianceId: 1675,
+  };
+  const devicesResponse = (list: unknown[]) => ({
+    status: 200,
+    message: "SUCCESS",
+    data: { listDevices: list },
+  });
+  const appliance1663 = {
+    applianceId: 1663,
+    isFaren: 1,
+    temp: "62:86",
+    tempIncrement: 1,
+    mode: "cool:dry:fan:auto:heat",
+    fan: "auto:low:medium:high",
+    swing: "auto:pos1:pos2:pos3",
+    isMultiModeTempRange: 0,
+    modesTemp: [],
+  };
+  const appliancesResponse = (list: unknown[]) => ({
+    status: 200,
+    message: "SUCCESS",
+    data: { listAppliances: list },
+  });
+
+  it("fetches the device, then ONE appliance lookup for its applianceId, with the same auth headers", async () => {
+    mockRequest.mockReset();
+    mockRequest
+      .mockResolvedValueOnce(devicesResponse([islandTides(), sandyNudes]))
+      .mockResolvedValueOnce(appliancesResponse([appliance1663]));
+    const client = new CieloClient(credentials);
+
+    const result = await client.getControlSnapshot(SESSION, "D8BFC0FE8756");
+
+    expect(mockRequest).toHaveBeenCalledTimes(2);
+    expect(mockRequest.mock.calls[0]![0]).toBe("/web/devices?limit=420");
+    expect(mockRequest.mock.calls[1]![0]).toBe(
+      "/web/sync/db/6?applianceIdList=[1663]",
+    );
+    expect(mockRequest.mock.calls[1]![1]).toEqual({
+      headers: {
+        authorization: "access-1",
+        "x-api-key": expect.any(String),
+      },
+    });
+    expect(mockRequest.mock.calls[1]![1]).not.toHaveProperty("method");
+    expect(result!.snapshot).toMatchObject({
+      applianceLookup: "ok",
+      deviceIsFahrenheit: true,
+      applianceIsFahrenheit: true,
+      applianceTempRange: "62:86",
+      applianceModes: "cool:dry:fan:auto:heat",
+      targetTemperatureF: 72,
+    });
+  });
+
+  it("with the appliance attached, the unchanged safety rules allow a small change and still refuse unsafe ones", async () => {
+    mockRequest.mockReset();
+    mockRequest
+      .mockResolvedValueOnce(devicesResponse([islandTides()]))
+      .mockResolvedValueOnce(appliancesResponse([appliance1663]));
+    const { snapshot } = (await new CieloClient(credentials).getControlSnapshot(
+      SESSION,
+      "D8BFC0FE8756",
+    ))!;
+    expect(validateCieloSetpoint(snapshot, 73)).toEqual({
+      allowed: true,
+      currentTargetF: 72,
+      bounds: { min: 62, max: 85 },
+    });
+    expect(validateCieloSetpoint(snapshot, 78)).toMatchObject({
+      allowed: false,
+    });
+    expect(validateCieloSetpoint(snapshot, 61)).toMatchObject({
+      allowed: false,
+    });
+  });
+
+  it("an appliance reporting isFaren 0 is still refused by the unchanged Fahrenheit rule", async () => {
+    mockRequest.mockReset();
+    mockRequest
+      .mockResolvedValueOnce(devicesResponse([islandTides()]))
+      .mockResolvedValueOnce(
+        appliancesResponse([{ ...appliance1663, isFaren: 0, temp: "17:30" }]),
+      );
+    const { snapshot } = (await new CieloClient(credentials).getControlSnapshot(
+      SESSION,
+      "D8BFC0FE8756",
+    ))!;
+    expect(snapshot.applianceLookup).toBe("ok");
+    const v = validateCieloSetpoint(snapshot, 73);
+    expect(v).toMatchObject({ allowed: false });
+    expect((v as { reason: string }).reason).toMatch(/Fahrenheit/);
+  });
+
+  it.each([
+    [
+      "an appliance list without this applianceId",
+      appliancesResponse([{ ...appliance1663, applianceId: 9999 }]),
+      "not_found",
+    ],
+    ["an empty appliance list", appliancesResponse([]), "not_found"],
+    [
+      "a non-200 status",
+      { status: 500, message: "Internal server error" },
+      "failed",
+    ],
+    [
+      "a response without listAppliances",
+      { status: 200, message: "SUCCESS", data: {} },
+      "failed",
+    ],
+  ])("fails closed on %s", async (_label, applianceResponse, lookup) => {
+    mockRequest.mockReset();
+    mockRequest
+      .mockResolvedValueOnce(devicesResponse([islandTides()]))
+      .mockResolvedValueOnce(applianceResponse);
+    const { snapshot } = (await new CieloClient(credentials).getControlSnapshot(
+      SESSION,
+      "D8BFC0FE8756",
+    ))!;
+    expect(snapshot.applianceLookup).toBe(lookup);
+    expect(snapshot.applianceIsFahrenheit).toBe(false);
+    expect(snapshot.applianceTempRange).toBeNull();
+    const v = validateCieloSetpoint(snapshot, 73);
+    expect(v).toMatchObject({ allowed: false });
+    expect((v as { reason: string }).reason).toMatch(/appliance details/);
+  });
+
+  it("fails closed when the lookup request throws", async () => {
+    mockRequest.mockReset();
+    mockRequest
+      .mockResolvedValueOnce(devicesResponse([islandTides()]))
+      .mockRejectedValueOnce(new Error("timeout"));
+    const { snapshot } = (await new CieloClient(credentials).getControlSnapshot(
+      SESSION,
+      "D8BFC0FE8756",
+    ))!;
+    expect(snapshot.applianceLookup).toBe("failed");
+    expect(validateCieloSetpoint(snapshot, 73)).toMatchObject({
+      allowed: false,
+    });
+  });
+
+  it("never trusts an `appliance` embedded in /web/devices — only the lookup supplies it", async () => {
+    mockRequest.mockReset();
+    mockRequest
+      .mockResolvedValueOnce(
+        devicesResponse([islandTides({ appliance: { ...appliance1663 } })]),
+      )
+      .mockResolvedValueOnce({ status: 500, message: "down" });
+    const { snapshot } = (await new CieloClient(credentials).getControlSnapshot(
+      SESSION,
+      "D8BFC0FE8756",
+    ))!;
+    expect(snapshot.applianceLookup).toBe("failed");
+    expect(snapshot.applianceIsFahrenheit).toBe(false);
+  });
+
+  it.each([0, "0", undefined, "abc"])(
+    "applianceId %s → no lookup call, refused",
+    async (applianceId) => {
+      mockRequest.mockReset();
+      mockRequest.mockResolvedValueOnce(
+        devicesResponse([islandTides({ applianceId })]),
+      );
+      const { snapshot } = (await new CieloClient(
+        credentials,
+      ).getControlSnapshot(SESSION, "D8BFC0FE8756"))!;
+      expect(mockRequest).toHaveBeenCalledTimes(1);
+      expect(snapshot.applianceLookup).toBe("no_appliance_id");
+      expect(validateCieloSetpoint(snapshot, 73)).toMatchObject({
+        allowed: false,
+      });
+    },
+  );
+
+  it("an unknown MAC → null, and no appliance lookup", async () => {
+    mockRequest.mockReset();
+    mockRequest.mockResolvedValueOnce(devicesResponse([islandTides()]));
+    const result = await new CieloClient(credentials).getControlSnapshot(
+      SESSION,
+      "7206-OFFICE",
+    );
+    expect(result).toBeNull();
+    expect(mockRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("the telemetry device is parsed from /web/devices as before", async () => {
+    mockRequest.mockReset();
+    mockRequest
+      .mockResolvedValueOnce(devicesResponse([islandTides()]))
+      .mockResolvedValueOnce(appliancesResponse([appliance1663]));
+    const { device } = (await new CieloClient(credentials).getControlSnapshot(
+      SESSION,
+      "D8BFC0FE8756",
+    ))!;
+    expect(device).toMatchObject({
+      id: "D8BFC0FE8756",
+      online: true,
+      currentTemperature: 75,
+      targetTemperature: 72,
+      mode: "cool",
+    });
   });
 });

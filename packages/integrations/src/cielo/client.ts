@@ -12,6 +12,7 @@ import type {
 
 import {
   parseCieloControlSnapshot,
+  type CieloApplianceLookup,
   type CieloControlSnapshot,
   type CieloSession,
 } from "./control";
@@ -24,6 +25,7 @@ export {
   CIELO_SETPOINT_SAFETY,
   cieloSetpointRange,
   parseCieloControlSnapshot,
+  type CieloApplianceLookup,
   sendCieloFrameAndAwaitState,
   validateCieloSetpoint,
   type CieloControlSnapshot,
@@ -288,24 +290,31 @@ export class CieloClient
 
   /**
    * Read-only: the live `/web/devices` entry for one MAC address — parsed
-   * for control (appliance range/units, firmware, latestAction, …) and as
-   * the normal telemetry `CieloDevice` — or null when the account doesn't
-   * return that device.
+   * for control and as the normal telemetry `CieloDevice` — or null when the
+   * account doesn't return that device.
+   *
+   * The appliance record (units, temperature range, modes) is NOT part of
+   * `/web/devices` (confirmed live 2026-10-01: no `appliance` key). Like the
+   * reference integration (cielohome.py async_get_thermostat_info), it comes
+   * from one more read-only GET, `/web/sync/db/6?applianceIdList=[<id>]`,
+   * whose `listAppliances` entry with the same applianceId is attached as
+   * `appliance`. Only that lookup ever supplies `appliance`; if it fails,
+   * returns nothing or no match, `appliance` stays absent and
+   * `applianceLookup` says why — validateCieloSetpoint() then refuses.
    */
   async getControlSnapshot(
     session: Pick<CieloSession, "accessToken">,
     macAddress: string,
   ): Promise<{ snapshot: CieloControlSnapshot; device: CieloDevice } | null> {
+    const headers = {
+      authorization: session.accessToken,
+      "x-api-key": WEB_X_API_KEY,
+    };
     const response = await this.http.request<{
       status: number;
       message: string;
       data?: { listDevices: Array<Record<string, unknown>> };
-    }>("/web/devices?limit=420", {
-      headers: {
-        authorization: session.accessToken,
-        "x-api-key": WEB_X_API_KEY,
-      },
-    });
+    }>("/web/devices?limit=420", { headers });
     if (response.status !== 200 || !response.data) {
       throw new Error(
         `Cielo device list failed: ${response.message || "unknown error"}`,
@@ -314,12 +323,59 @@ export class CieloClient
     const raw = response.data.listDevices.find(
       (d) => d.macAddress === macAddress,
     );
-    return raw
-      ? {
-          snapshot: parseCieloControlSnapshot(raw),
-          device: parseCieloDevice(raw as unknown as RawCieloDevice),
-        }
-      : null;
+    if (!raw) return null;
+
+    const { appliance, applianceLookup } = await this.lookupAppliance(
+      headers,
+      raw.applianceId,
+    );
+    // Never trust an `appliance` from anywhere but the lookup.
+    const merged: Record<string, unknown> = { ...raw };
+    delete merged.appliance;
+    if (appliance) merged.appliance = appliance;
+
+    return {
+      snapshot: { ...parseCieloControlSnapshot(merged), applianceLookup },
+      device: parseCieloDevice(raw as unknown as RawCieloDevice),
+    };
+  }
+
+  private async lookupAppliance(
+    headers: Record<string, string>,
+    applianceId: unknown,
+  ): Promise<{
+    appliance: Record<string, unknown> | null;
+    applianceLookup: CieloApplianceLookup;
+  }> {
+    const id =
+      typeof applianceId === "number" ||
+      (typeof applianceId === "string" && /^\d+$/.test(applianceId))
+        ? String(applianceId)
+        : null;
+    if (!id || id === "0") {
+      return { appliance: null, applianceLookup: "no_appliance_id" };
+    }
+    try {
+      const response = await this.http.request<{
+        status: number;
+        message: string;
+        data?: { listAppliances?: Array<Record<string, unknown>> };
+      }>(`/web/sync/db/6?applianceIdList=[${id}]`, { headers });
+      if (
+        response.status !== 200 ||
+        !Array.isArray(response.data?.listAppliances)
+      ) {
+        return { appliance: null, applianceLookup: "failed" };
+      }
+      const match = response.data.listAppliances.find(
+        (a) => String(a.applianceId) === id,
+      );
+      return match
+        ? { appliance: match, applianceLookup: "ok" }
+        : { appliance: null, applianceLookup: "not_found" };
+    } catch {
+      return { appliance: null, applianceLookup: "failed" };
+    }
   }
 
   async connect(): Promise<{ connected: boolean; connectedAt: Date }> {

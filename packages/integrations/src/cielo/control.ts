@@ -50,6 +50,13 @@ export interface CieloSession {
 }
 
 /** What a setpoint command needs from one live `/web/devices` entry. */
+/**
+ * Outcome of the separate appliance lookup (client.getControlSnapshot).
+ * Anything but "ok" means the appliance record is absent.
+ */
+export type CieloApplianceLookup =
+  "ok" | "not_found" | "failed" | "no_appliance_id";
+
 export interface CieloControlSnapshot {
   macAddress: string;
   deviceName: string;
@@ -80,6 +87,8 @@ export interface CieloControlSnapshot {
   };
   currentTemperatureF: number | null;
   targetTemperatureF: number | null;
+  /** Set by client.getControlSnapshot(); absent when parsed directly. */
+  applianceLookup?: CieloApplianceLookup;
 }
 
 function str(value: unknown): string | undefined {
@@ -192,6 +201,18 @@ export function validateCieloSetpoint(
     return {
       allowed: false,
       reason: "The thermostat is offline in Cielo right now.",
+    };
+  }
+  // Added 2026-10-01: a failed/unmatched appliance lookup is refused with
+  // its own reason (the Fahrenheit rule below would refuse it anyway).
+  if (
+    snapshot.applianceLookup !== undefined &&
+    snapshot.applianceLookup !== "ok"
+  ) {
+    return {
+      allowed: false,
+      reason:
+        "Cielo's appliance details (units and temperature range) couldn't be loaded for this unit, so nothing was sent.",
     };
   }
   if (!snapshot.deviceIsFahrenheit || !snapshot.applianceIsFahrenheit) {
