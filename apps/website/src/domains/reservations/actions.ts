@@ -93,6 +93,7 @@ export async function syncOwnerRezReservationsAction(
       syncedAt: new Date().toISOString(),
       created: result.created,
       updated: result.updated,
+      unchanged: result.unchanged,
       unmatchedProperty: result.unmatchedProperty,
       unrecognizedStatus: result.unrecognizedStatus,
       nonGuest: result.nonGuest,

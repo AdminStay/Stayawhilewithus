@@ -18,6 +18,7 @@ const baseSuccess = {
   syncedAt: "2026-09-28T04:00:00.000Z",
   created: 40,
   updated: 0,
+  unchanged: 0,
   unmatchedProperty: [],
   unrecognizedStatus: [],
   nonGuest: {
@@ -165,6 +166,18 @@ describe("SyncOwnerRezReservationsButton — rate-limit reporting (2026-09-28)",
     });
     expect(
       await screen.findByText(/40 new, 0 updated, 190 non-guest skipped/),
+    ).toBeTruthy();
+  });
+
+  it("reports unchanged reservations (not rewritten) when there are any (2026-09-30)", async () => {
+    await confirmWith({
+      ...baseSuccess,
+      created: 2,
+      updated: 1,
+      unchanged: 842,
+    });
+    expect(
+      await screen.findByText(/2 new, 1 updated, 842 unchanged/),
     ).toBeTruthy();
   });
 });

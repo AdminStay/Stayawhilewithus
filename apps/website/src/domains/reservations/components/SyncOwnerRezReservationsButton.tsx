@@ -12,6 +12,9 @@ function describeOutcome(
   state: Extract<SyncOwnerRezReservationsActionState, { status: "success" }>,
 ): string {
   const parts = [`${state.created} new`, `${state.updated} updated`];
+  // 2026-09-30: existing reservations already identical to OwnerRez are
+  // no longer rewritten; shown only when there are any.
+  if (state.unchanged > 0) parts.push(`${state.unchanged} unchanged`);
   if (state.unmatchedProperty.length > 0) {
     parts.push(`${state.unmatchedProperty.length} unmatched property`);
   }

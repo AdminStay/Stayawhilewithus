@@ -93,8 +93,11 @@ vi.mock("@stayw/database", () => ({
   },
 }));
 
+const { mockAssertPermission } = vi.hoisted(() => ({
+  mockAssertPermission: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("@stayw/auth", () => ({
-  assertPermission: vi.fn().mockResolvedValue(undefined),
+  assertPermission: mockAssertPermission,
 }));
 
 vi.mock("@stayw/integrations/ownerrez", async (importOriginal) => {
@@ -124,6 +127,7 @@ vi.mock("@/platform/audit/record-audit", () => ({
 
 const {
   syncOwnerRezReservations,
+  syncOwnerRezReservationsAutomatic,
   previewOwnerRezReservationSync,
   mapOwnerRezBookingStatus,
   classifyOwnerRezRecord,
@@ -1301,5 +1305,233 @@ describe("OwnerRez guest-booking eligibility — pre-first-sync safety (2026-09-
     ]) {
       expect(write).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("unchanged-row skip (2026-09-30)", () => {
+  // Exactly what Prisma returns for a row the sync wrote from booking().
+  const storedRow = {
+    id: "res-1",
+    propertyId: "prop-1",
+    primaryGuestId: "guest-1",
+    status: "CONFIRMED",
+    checkInDate: new Date("2026-10-01T00:00:00.000Z"),
+    checkOutDate: new Date("2026-10-05T00:00:00.000Z"),
+    adults: 2,
+    children: 0,
+    pets: 0,
+    totalAmount: { toString: () => "1200.50" },
+    cancelledAt: null,
+    reservationGuests: [{ guestId: "guest-1" }],
+  };
+
+  beforeEach(() => {
+    mockListBookings.mockResolvedValue([booking()]);
+    mockPropertyFindMany.mockResolvedValue([AQUA_PALM]);
+    mockGuestFindMany.mockResolvedValue([
+      { id: "guest-1", ownerRezGuestId: "9001" },
+    ]);
+  });
+
+  it("an identical existing reservation is counted unchanged and NOT written", async () => {
+    mockReservationFindUnique.mockResolvedValue(storedRow);
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(outcome).toMatchObject({
+      status: "completed",
+      created: 0,
+      updated: 0,
+      unchanged: 1,
+    });
+    expect(mockReservationUpdate).not.toHaveBeenCalled();
+    expect(mockReservationCreate).not.toHaveBeenCalled();
+    expect(mockReservationGuestUpsert).not.toHaveBeenCalled();
+    // Still a complete run: SUCCEEDED + lastSyncedAt bumped.
+    expect(mockSyncLogUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: "SUCCEEDED",
+          recordsProcessed: 0,
+        }),
+      }),
+    );
+    expect(mockConnectionUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ lastSyncedAt: expect.any(Date) }),
+      }),
+    );
+  });
+
+  it("the lookup asks for the compared fields and only this guest's link", async () => {
+    mockReservationFindUnique.mockResolvedValue(storedRow);
+    await syncOwnerRezReservations(ACTOR as never);
+    expect(mockReservationFindUnique).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          totalAmount: true,
+          cancelledAt: true,
+          reservationGuests: expect.objectContaining({
+            where: { guestId: "guest-1" },
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("an OwnerRez change (e.g. guest count) is still written as an update", async () => {
+    mockListBookings.mockResolvedValue([booking({ adults: 4 })]);
+    mockReservationFindUnique.mockResolvedValue(storedRow);
+    mockReservationUpdate.mockResolvedValue({ id: "res-1" });
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(outcome).toMatchObject({ updated: 1, unchanged: 0 });
+    expect(mockReservationUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "res-1" },
+        data: expect.objectContaining({ adults: 4 }),
+      }),
+    );
+  });
+
+  it("a cancellation in OwnerRez is written, not skipped", async () => {
+    mockListBookings.mockResolvedValue([
+      booking({ status: "canceled", updated_utc: "2026-09-30T08:00:00Z" }),
+    ]);
+    mockReservationFindUnique.mockResolvedValue(storedRow);
+    mockReservationUpdate.mockResolvedValue({ id: "res-1" });
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(outcome).toMatchObject({ updated: 1, unchanged: 0 });
+  });
+
+  it("a missing primary-guest link is repaired (update + link upsert)", async () => {
+    mockReservationFindUnique.mockResolvedValue({
+      ...storedRow,
+      reservationGuests: [],
+    });
+    mockReservationUpdate.mockResolvedValue({ id: "res-1" });
+
+    const outcome = await syncOwnerRezReservations(ACTOR as never);
+
+    expect(outcome).toMatchObject({ updated: 1, unchanged: 0 });
+    expect(mockReservationGuestUpsert).toHaveBeenCalledTimes(1);
+  });
+
+  it("the audit entry records the unchanged count", async () => {
+    mockReservationFindUnique.mockResolvedValue(storedRow);
+    await syncOwnerRezReservations(ACTOR as never);
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterState: expect.objectContaining({ unchanged: 1, updated: 0 }),
+      }),
+    );
+  });
+});
+
+describe("automatic entry point + kill switch (2026-09-30)", () => {
+  afterEach(() => {
+    delete process.env.OWNERREZ_AUTO_SYNC_ENABLED;
+  });
+
+  it.each([undefined, "false", "1", "TRUE"])(
+    "OWNERREZ_AUTO_SYNC_ENABLED=%s → disabled, with no database or OwnerRez call at all",
+    async (value) => {
+      if (value === undefined) delete process.env.OWNERREZ_AUTO_SYNC_ENABLED;
+      else process.env.OWNERREZ_AUTO_SYNC_ENABLED = value;
+
+      const outcome = await syncOwnerRezReservationsAutomatic();
+
+      expect(outcome).toEqual({ status: "disabled" });
+      expect(mockEnsureConnectionRows).not.toHaveBeenCalled();
+      expect(mockConnectionFindUniqueOrThrow).not.toHaveBeenCalled();
+      expect(mockQueryRaw).not.toHaveBeenCalled();
+      expect(mockSyncLogCreate).not.toHaveBeenCalled();
+      expect(OwnerrezClient).not.toHaveBeenCalled();
+      expect(mockListOperationalBookings).not.toHaveBeenCalled();
+      expect(mockRecordAudit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("enabled → the same guarded run, audited as SYSTEM with no user", async () => {
+    process.env.OWNERREZ_AUTO_SYNC_ENABLED = "true";
+    mockListBookings.mockResolvedValue([booking()]);
+    mockPropertyFindMany.mockResolvedValue([AQUA_PALM]);
+    mockGuestFindMany.mockResolvedValue([
+      { id: "guest-1", ownerRezGuestId: "9001" },
+    ]);
+    mockReservationFindUnique.mockResolvedValue(null);
+    mockReservationCreate.mockResolvedValue({ id: "res-new" });
+
+    const outcome = await syncOwnerRezReservationsAutomatic();
+
+    expect(outcome).toMatchObject({ status: "completed", created: 1 });
+    // Same advisory lock + RUNNING log as the manual path.
+    expect(mockQueryRaw).toHaveBeenCalledTimes(1);
+    expect(mockSyncLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          entityType: "Reservation",
+          status: "RUNNING",
+        }),
+      }),
+    );
+    expect(OwnerrezClient).toHaveBeenCalledWith(expect.anything(), {
+      requestBudget: OWNERREZ_RUN_REQUEST_BUDGET,
+    });
+    expect(mockAssertPermission).not.toHaveBeenCalled();
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: undefined,
+        actorType: "SYSTEM",
+        afterState: expect.objectContaining({ trigger: "automatic" }),
+      }),
+    );
+  });
+
+  it("enabled → shares the manual sync's cooldown after a deferred run", async () => {
+    process.env.OWNERREZ_AUTO_SYNC_ENABLED = "true";
+    const finishedAt = new Date(Date.now() - 60 * 1000);
+    mockSyncLogFindFirst
+      .mockResolvedValueOnce(null) // no RUNNING row
+      .mockResolvedValueOnce({ finishedAt }); // deferred run 1 min ago
+
+    const outcome = await syncOwnerRezReservationsAutomatic();
+
+    expect(outcome).toMatchObject({ status: "cooldown" });
+    expect(OwnerrezClient).not.toHaveBeenCalled();
+    expect(mockSyncLogCreate).not.toHaveBeenCalled();
+  });
+
+  it("enabled → yields to a run already holding the lock", async () => {
+    process.env.OWNERREZ_AUTO_SYNC_ENABLED = "true";
+    mockQueryRaw.mockResolvedValueOnce([{ locked: false }]);
+
+    const outcome = await syncOwnerRezReservationsAutomatic();
+
+    expect(outcome).toEqual({ status: "already_running" });
+    expect(OwnerrezClient).not.toHaveBeenCalled();
+  });
+
+  it("the manual Sync still checks reservations:update and is audited as USER/manual", async () => {
+    mockListBookings.mockResolvedValue([]);
+    mockPropertyFindMany.mockResolvedValue([]);
+    mockGuestFindMany.mockResolvedValue([]);
+
+    await syncOwnerRezReservations(ACTOR as never);
+
+    expect(mockAssertPermission).toHaveBeenCalledWith(
+      ACTOR,
+      "reservations:update",
+    );
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actorUserId: "user-1",
+        actorType: "USER",
+        afterState: expect.objectContaining({ trigger: "manual" }),
+      }),
+    );
   });
 });

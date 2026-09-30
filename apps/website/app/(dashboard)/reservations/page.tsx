@@ -15,9 +15,11 @@ import {
   syncOwnerRezReservationsAction,
 } from "@/domains/reservations/actions";
 import { CreateReservationForm } from "@/domains/reservations/components/CreateReservationForm";
+import { OwnerRezSyncStatusLine } from "@/domains/reservations/components/OwnerRezSyncStatusLine";
 import { PreviewOwnerRezSyncButton } from "@/domains/reservations/components/PreviewOwnerRezSyncButton";
 import { ReservationList } from "@/domains/reservations/components/ReservationList";
 import { SyncOwnerRezReservationsButton } from "@/domains/reservations/components/SyncOwnerRezReservationsButton";
+import { getOwnerRezSyncStatus } from "@/domains/reservations/services/ownerrez-sync-status.service";
 import {
   listReservations,
   type Reservation,
@@ -63,6 +65,10 @@ export default async function ReservationsPage() {
       hasPermission(actor, "reservations:update"),
     ],
   );
+  // 2026-09-30: read-only sync status (database only, no OwnerRez call).
+  const ownerRezSyncStatus = canSyncOwnerRez
+    ? await getOwnerRezSyncStatus(actor)
+    : null;
 
   const { revenue, adr } = computeRevenueMetrics(reservations);
 
@@ -88,6 +94,11 @@ export default async function ReservationsPage() {
       {canSyncOwnerRez && (
         <Card className="mb-6">
           <h2 className="mb-3 text-sm font-semibold text-ink">OwnerRez sync</h2>
+          {ownerRezSyncStatus && (
+            <div className="mb-4">
+              <OwnerRezSyncStatusLine status={ownerRezSyncStatus} />
+            </div>
+          )}
           <div className="grid gap-4 md:grid-cols-2">
             <PreviewOwnerRezSyncButton action={previewOwnerRezSyncAction} />
             <SyncOwnerRezReservationsButton

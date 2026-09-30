@@ -13,6 +13,10 @@ import {
   ensureConnectionRows,
   STALE_RUNNING_THRESHOLD_MS,
 } from "@/domains/integrations/services/integrations.service";
+import {
+  isOwnerRezAutoSyncEnabled,
+  isOwnerRezReservationUnchanged,
+} from "@/domains/reservations/lib/ownerrez-auto-sync";
 import { recordAudit } from "@/platform/audit/record-audit";
 
 /**
@@ -312,7 +316,13 @@ export async function previewOwnerRezReservationSync(
 
 export interface OwnerRezReservationSyncResult {
   created: number;
+  /** Existing reservations whose OwnerRez data actually changed (rewritten). */
   updated: number;
+  /**
+   * Existing reservations already identical to OwnerRez (2026-09-30):
+   * nothing written, so an hourly run doesn't rewrite ~845 unchanged rows.
+   */
+  unchanged: number;
   unmatchedProperty: OwnerRezReservationSyncItem[];
   unrecognizedStatus: OwnerRezReservationSyncItem[];
   /** Records skipped as not guest reservations, by kind (see classifyOwnerRezRecord). */
@@ -333,6 +343,14 @@ export type OwnerRezReservationSyncOutcome =
   | { status: "already_running" }
   | { status: "cooldown"; cooldownUntil: string }
   | { status: "failed"; reason: string };
+
+/** The automatic entry point adds one outcome: the kill switch is off. */
+export type OwnerRezAutomaticSyncOutcome =
+  OwnerRezReservationSyncOutcome | { status: "disabled" };
+
+/** Who started a run — recorded in the audit entry. */
+type OwnerRezSyncTrigger =
+  { kind: "manual"; userId: string } | { kind: "automatic" };
 
 /**
  * OwnerRez rate-limit safety (2026-09-28). OwnerRez documents 300 requests
@@ -509,7 +527,30 @@ export async function syncOwnerRezReservations(
   actor: AuthContext,
 ): Promise<OwnerRezReservationSyncOutcome> {
   await assertPermission(actor, "reservations:update");
+  return runOwnerRezReservationSync({ kind: "manual", userId: actor.userId });
+}
 
+/**
+ * Automatic counterpart (2026-09-30), called only from
+ * app/api/cron/ownerrez-reservation-sync/route.ts (itself authenticated by
+ * the CRON_SECRET bearer check — there is no signed-in user, so no
+ * assertPermission here, exactly like refreshAugustTelemetryAutomatic()).
+ * Returns "disabled" before any database or OwnerRez call unless
+ * OWNERREZ_AUTO_SYNC_ENABLED is exactly "true". Otherwise it is the very
+ * same guarded run as the manual Sync: same advisory lock, RUNNING guard,
+ * request budget, deferral and 5-minute cooldown, shared with it.
+ */
+export async function syncOwnerRezReservationsAutomatic(): Promise<OwnerRezAutomaticSyncOutcome> {
+  if (!isOwnerRezAutoSyncEnabled()) {
+    logOwnerRezReservationSync("auto_sync_disabled", {});
+    return { status: "disabled" };
+  }
+  return runOwnerRezReservationSync({ kind: "automatic" });
+}
+
+async function runOwnerRezReservationSync(
+  trigger: OwnerRezSyncTrigger,
+): Promise<OwnerRezReservationSyncOutcome> {
   const credentials = getOwnerRezCredentials();
   if (!credentials) {
     return { status: "failed", reason: "OwnerRez isn't configured." };
@@ -632,6 +673,7 @@ export async function syncOwnerRezReservations(
     const result: OwnerRezReservationSyncResult = {
       created: 0,
       updated: 0,
+      unchanged: 0,
       unmatchedProperty: [],
       unrecognizedStatus: [],
       nonGuest: countNonGuest(nonGuestKinds),
@@ -681,7 +723,24 @@ export async function syncOwnerRezReservations(
             externalReservationId: String(booking.id),
           },
         },
-        select: { id: true },
+        select: {
+          id: true,
+          propertyId: true,
+          primaryGuestId: true,
+          status: true,
+          checkInDate: true,
+          checkOutDate: true,
+          adults: true,
+          children: true,
+          pets: true,
+          totalAmount: true,
+          cancelledAt: true,
+          reservationGuests: {
+            where: { guestId },
+            select: { guestId: true },
+            take: 1,
+          },
+        },
       });
 
       const data: Prisma.ReservationUncheckedCreateInput = {
@@ -698,6 +757,35 @@ export async function syncOwnerRezReservations(
         totalAmount: booking.total_amount ?? 0,
         cancelledAt: mapped.cancelledAt,
       };
+
+      // Unchanged-row skip (2026-09-30): every field this sync owns already
+      // matches, and the primary-guest link exists — write nothing.
+      if (
+        existing &&
+        isOwnerRezReservationUnchanged(
+          {
+            ...existing,
+            hasPrimaryGuestLink:
+              Array.isArray(existing.reservationGuests) &&
+              existing.reservationGuests.length > 0,
+          },
+          {
+            propertyId: property.id,
+            primaryGuestId: guestId,
+            status: mapped.status,
+            checkInDate: new Date(booking.arrival),
+            checkOutDate: new Date(booking.departure),
+            adults: data.adults ?? 0,
+            children: data.children ?? 0,
+            pets: data.pets ?? 0,
+            totalAmount: Number(data.totalAmount),
+            cancelledAt: mapped.cancelledAt,
+          },
+        )
+      ) {
+        result.unchanged++;
+        continue;
+      }
 
       await prisma.$transaction(async (tx) => {
         const reservation = existing
@@ -749,14 +837,16 @@ export async function syncOwnerRezReservations(
     }
 
     await recordAudit({
-      actorUserId: actor.userId,
-      actorType: "USER",
+      actorUserId: trigger.kind === "manual" ? trigger.userId : undefined,
+      actorType: trigger.kind === "manual" ? "USER" : "SYSTEM",
       action: "reservation.ownerrez_synced",
       entityType: "IntegrationConnection",
       entityId: connection.id,
       afterState: {
+        trigger: trigger.kind,
         created: result.created,
         updated: result.updated,
+        unchanged: result.unchanged,
         unmatchedPropertyCount: result.unmatchedProperty.length,
         unrecognizedStatusCount: result.unrecognizedStatus.length,
         nonGuestSkipped: result.nonGuest,
@@ -767,8 +857,10 @@ export async function syncOwnerRezReservations(
     });
 
     logOwnerRezReservationSync("sync_completed", {
+      trigger: trigger.kind,
       created: result.created,
       updated: result.updated,
+      unchanged: result.unchanged,
       unmatchedProperty: result.unmatchedProperty.length,
       unrecognizedStatus: result.unrecognizedStatus.length,
       nonGuestSkipped: result.nonGuest,
@@ -792,7 +884,10 @@ export async function syncOwnerRezReservations(
       where: { id: claim.logId },
       data: { status: "FAILED", errorMessage: message, finishedAt: new Date() },
     });
-    logOwnerRezReservationSync("sync_failed", { error: message });
+    logOwnerRezReservationSync("sync_failed", {
+      trigger: trigger.kind,
+      error: message,
+    });
     return { status: "failed", reason: message };
   }
 }
