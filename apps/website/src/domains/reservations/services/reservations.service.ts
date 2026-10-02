@@ -223,6 +223,20 @@ export async function updateReservationStatus(
 ) {
   await assertPermission(actor, "reservations:update");
 
+  // OwnerRez bookings are read-only in StayWhile (Meeting #6): changes are
+  // made in OwnerRez, and the hourly sync would overwrite them anyway.
+  // Enforced here so every caller (the /reservations form and the AI tool)
+  // is covered, not just the UI.
+  const current = await prisma.reservation.findUniqueOrThrow({
+    where: { id: reservationId },
+    select: { source: true },
+  });
+  if (current.source === "OWNERREZ") {
+    throw new Error(
+      "OwnerRez bookings can't be changed in StayWhile — change them in OwnerRez.",
+    );
+  }
+
   const reservation = await prisma.reservation.update({
     where: { id: reservationId },
     data: { status: input.status },

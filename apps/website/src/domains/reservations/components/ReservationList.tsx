@@ -89,6 +89,15 @@ export function ReservationList({
               <div className="flex items-center justify-end gap-2">
                 {r.status === "CANCELLED" ? (
                   <Badge tone="error">Cancelled</Badge>
+                ) : r.source === "OWNERREZ" ? (
+                  // OwnerRez is the source of truth (Meeting #6): its
+                  // bookings are read-only here and change in OwnerRez.
+                  <span className="flex items-center gap-2">
+                    <span className="text-xs text-ink-muted">
+                      Managed in OwnerRez
+                    </span>
+                    <Badge tone={STATUS_TONE[r.status]}>{r.status}</Badge>
+                  </span>
                 ) : (
                   <form
                     action={updateReservationStatusAction}

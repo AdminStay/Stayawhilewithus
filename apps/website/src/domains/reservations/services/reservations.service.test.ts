@@ -7,7 +7,12 @@ vi.mock("@stayw/database", () => {
   };
   return {
     prisma: {
-      reservation: { findMany: vi.fn(), update: vi.fn(), count: vi.fn() },
+      reservation: {
+        findMany: vi.fn(),
+        findUniqueOrThrow: vi.fn(),
+        update: vi.fn(),
+        count: vi.fn(),
+      },
       $transaction: vi.fn((callback: (tx: unknown) => unknown) => callback(tx)),
       __tx: tx,
     },
@@ -124,8 +129,11 @@ describe("createReservation", () => {
 });
 
 describe("updateReservationStatus", () => {
-  it("updates the status and audits it", async () => {
+  it("updates a DIRECT (manual) reservation's status and audits it", async () => {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.reservation.findUniqueOrThrow).mockResolvedValueOnce({
+      source: "DIRECT",
+    } as never);
     const updated = { id: "r1", status: "CANCELLED" };
     vi.mocked(prisma.reservation.update).mockResolvedValueOnce(
       updated as never,
@@ -136,6 +144,10 @@ describe("updateReservationStatus", () => {
     });
 
     expect(assertPermission).toHaveBeenCalledWith(actor, "reservations:update");
+    expect(prisma.reservation.findUniqueOrThrow).toHaveBeenCalledWith({
+      where: { id: "r1" },
+      select: { source: true },
+    });
     expect(prisma.reservation.update).toHaveBeenCalledWith({
       where: { id: "r1" },
       data: { status: "CANCELLED" },
@@ -152,6 +164,9 @@ describe("updateReservationStatus", () => {
   });
 
   it("denies the update and performs no writes when the actor lacks reservations:update", async () => {
+    vi.mocked(prisma.reservation.findUniqueOrThrow).mockClear();
+    vi.mocked(prisma.reservation.update).mockClear();
+    vi.mocked(recordAudit).mockClear();
     vi.mocked(assertPermission).mockRejectedValueOnce(
       new Error("ForbiddenError"),
     );
@@ -159,6 +174,22 @@ describe("updateReservationStatus", () => {
     await expect(
       updateReservationStatus(actor, "r1", { status: "CANCELLED" }),
     ).rejects.toThrow();
+    expect(prisma.reservation.findUniqueOrThrow).not.toHaveBeenCalled();
+    expect(prisma.reservation.update).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("refuses an OWNERREZ reservation without writing or auditing (OwnerRez is the source of truth, 2026-10-02)", async () => {
+    vi.mocked(prisma.reservation.update).mockClear();
+    vi.mocked(recordAudit).mockClear();
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.reservation.findUniqueOrThrow).mockResolvedValueOnce({
+      source: "OWNERREZ",
+    } as never);
+
+    await expect(
+      updateReservationStatus(actor, "r-or", { status: "CANCELLED" }),
+    ).rejects.toThrow(/change them in OwnerRez/);
     expect(prisma.reservation.update).not.toHaveBeenCalled();
     expect(recordAudit).not.toHaveBeenCalled();
   });
