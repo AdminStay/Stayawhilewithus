@@ -24,6 +24,7 @@ import type { ComponentType, ReactNode } from "react";
 
 import type { getDashboardSummary } from "../services/dashboard.service";
 
+import { ownerRezPropertyLabel } from "@/domains/integrations/lib/ownerrez-property-names";
 import {
   TeamAvailability,
   type TeamAvailabilityDisplayEntry,
@@ -701,11 +702,16 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
                 {summary.ownerRezHighlights.items.slice(0, 3).map((b) => (
                   <li key={b.id} className="py-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-ink">Booking #{b.id}</span>
+                      <span className="text-ink">
+                        {ownerRezPropertyLabel(
+                          b.property_id,
+                          summary.ownerRezPropertyNames,
+                        )}
+                      </span>
                       <Badge tone="neutral">{b.status}</Badge>
                     </div>
                     <div className="mt-0.5 text-xs text-ink-muted">
-                      {b.arrival} → {b.departure}
+                      {b.arrival} → {b.departure} · Booking #{b.id}
                     </div>
                   </li>
                 ))}

@@ -12,6 +12,7 @@ import {
 } from "@/domains/cleaning/services/cleaning.service";
 import { listMessageThreads } from "@/domains/communications/services/communications.service";
 import { listGuests } from "@/domains/guests/services/guests.service";
+import { ownerRezPropertyNameMap } from "@/domains/integrations/lib/ownerrez-property-names";
 import {
   getNotionHighlights,
   getOwnerRezHighlights,
@@ -19,7 +20,13 @@ import {
 } from "@/domains/integrations/services/integrations.service";
 import { listMaintenanceRequests } from "@/domains/maintenance/services/maintenance.service";
 import { listNotifications } from "@/domains/notifications/services/notifications.service";
+import { isOperationalProperty } from "@/domains/properties/lib/operational-properties";
 import { listProperties } from "@/domains/properties/services/properties.service";
+import {
+  addCalendarDays,
+  calendarDay,
+  localDateInTimeZone,
+} from "@/domains/reservations/lib/reservation-views";
 import { listReservations } from "@/domains/reservations/services/reservations.service";
 import {
   isDemoSmartDevice,
@@ -67,12 +74,6 @@ function isSameUtcDay(a: Date, b: Date): boolean {
     a.getUTCMonth() === b.getUTCMonth() &&
     a.getUTCDate() === b.getUTCDate()
   );
-}
-
-function daysFromUtc(base: Date, n: number): Date {
-  const d = new Date(base);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d;
 }
 
 // How far ahead "upcoming" looks past today — a short, scannable window,
@@ -137,52 +138,83 @@ export async function getDashboardSummary(actor: AuthContext) {
   const today = todayUtc();
 
   const activeStatuses = new Set(["PENDING", "CONFIRMED", "CHECKED_IN"]);
-  const arrivalsToday = reservations.filter(
-    (r) =>
-      activeStatuses.has(r.status) &&
-      isSameUtcDay(new Date(r.checkInDate), today),
-  );
-  const departuresToday = reservations.filter(
-    (r) =>
-      activeStatuses.has(r.status) &&
-      isSameUtcDay(new Date(r.checkOutDate), today),
-  );
-
-  const upcomingWindowEnd = daysFromUtc(today, UPCOMING_WINDOW_DAYS);
-  const upcomingCheckIns = reservations
+  // Reservations are compared against each property's OWN local today
+  // (Property.timezone), not the server's UTC date, so "today" no longer
+  // rolls over at ~7–8 PM Eastern/Central (2026-10-02). Only operational
+  // properties (ACTIVE / ONBOARDING, not deleted) count. A property whose
+  // timezone can't be resolved is left out of these date lists, never
+  // guessed — the same rule as /reservations.
+  const now = new Date();
+  const operationalReservations = reservations
+    .filter((r) => isOperationalProperty(r.property))
+    .map((r) => ({
+      r,
+      localToday: localDateInTimeZone(now, r.property.timezone),
+    }))
     .filter(
-      (r) =>
+      (x): x is { r: (typeof reservations)[number]; localToday: string } =>
+        x.localToday !== null,
+    );
+  const arrivalsToday = operationalReservations
+    .filter(
+      ({ r, localToday }) =>
         activeStatuses.has(r.status) &&
-        new Date(r.checkInDate) > today &&
-        new Date(r.checkInDate) <= upcomingWindowEnd,
+        calendarDay(r.checkInDate) === localToday,
     )
+    .map(({ r }) => r);
+  const departuresToday = operationalReservations
+    .filter(
+      ({ r, localToday }) =>
+        activeStatuses.has(r.status) &&
+        calendarDay(r.checkOutDate) === localToday,
+    )
+    .map(({ r }) => r);
+
+  const upcomingCheckIns = operationalReservations
+    .filter(({ r, localToday }) => {
+      const day = calendarDay(r.checkInDate);
+      return (
+        activeStatuses.has(r.status) &&
+        day > localToday &&
+        day <= addCalendarDays(localToday, UPCOMING_WINDOW_DAYS)
+      );
+    })
+    .map(({ r }) => r)
     .sort(
       (a, b) =>
         new Date(a.checkInDate).getTime() - new Date(b.checkInDate).getTime(),
     );
-  const upcomingCheckOuts = reservations
-    .filter(
-      (r) =>
+  const upcomingCheckOuts = operationalReservations
+    .filter(({ r, localToday }) => {
+      const day = calendarDay(r.checkOutDate);
+      return (
         activeStatuses.has(r.status) &&
-        new Date(r.checkOutDate) > today &&
-        new Date(r.checkOutDate) <= upcomingWindowEnd,
-    )
+        day > localToday &&
+        day <= addCalendarDays(localToday, UPCOMING_WINDOW_DAYS)
+      );
+    })
+    .map(({ r }) => r)
     .sort(
       (a, b) =>
         new Date(a.checkOutDate).getTime() - new Date(b.checkOutDate).getTime(),
     );
   const occupiedPropertyIds = new Set(
-    reservations
+    operationalReservations
       .filter(
-        (r) =>
+        ({ r, localToday }) =>
           (r.status === "CONFIRMED" || r.status === "CHECKED_IN") &&
-          new Date(r.checkInDate) <= today &&
-          today <= new Date(r.checkOutDate),
+          calendarDay(r.checkInDate) <= localToday &&
+          localToday <= calendarDay(r.checkOutDate),
       )
-      .map((r) => r.propertyId),
+      .map(({ r }) => r.propertyId),
   );
+  const operationalPropertyCount = properties.filter(
+    isOperationalProperty,
+  ).length;
   const occupancyRate =
-    properties.length > 0 ? occupiedPropertyIds.size / properties.length : 0;
+    operationalPropertyCount > 0
+      ? occupiedPropertyIds.size / operationalPropertyCount
+      : 0;
 
   const tasksDueToday = tasks.filter(
     (t) =>
@@ -241,6 +273,9 @@ export async function getDashboardSummary(actor: AuthContext) {
     recentlyRescheduledCleanings,
     notionHighlights,
     ownerRezHighlights,
+    // OwnerRez property id → StayWhile property name (linked properties
+    // only), so the OwnerRez card shows names, not numbers (2026-10-02).
+    ownerRezPropertyNames: ownerRezPropertyNameMap(properties),
     teamAvailability,
     openTasks: tasks.filter(
       (t) => t.status === "TODO" || t.status === "IN_PROGRESS",

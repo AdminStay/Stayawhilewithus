@@ -49,6 +49,7 @@ function baseSummary(overrides: Partial<Summary> = {}): Summary {
     recentlyRescheduledCleanings: [],
     notionHighlights: { configured: false },
     ownerRezHighlights: { configured: false },
+    ownerRezPropertyNames: {},
     teamAvailability: EMPTY_TEAM_AVAILABILITY,
     openTasks: [],
     upcomingCleaningSchedules: [],
@@ -148,5 +149,40 @@ describe("DashboardSummary — real reservation data consumption and honest empt
     expect(importantIdx).toBeGreaterThan(-1);
     expect(rescheduledIdx).toBeGreaterThan(importantIdx);
     expect(checkInsIdx).toBeGreaterThan(rescheduledIdx);
+  });
+});
+
+describe("DashboardSummary — OwnerRez card shows property names (2026-10-02)", () => {
+  it("names each booking's property from StayWhile's linked properties; unlinked ids stay visibly numbered", () => {
+    render(
+      <DashboardSummary
+        summary={baseSummary({
+          ownerRezHighlights: {
+            configured: true,
+            ok: true,
+            items: [
+              {
+                id: 16148058,
+                property_id: 480401,
+                status: "active",
+                arrival: "2026-10-03",
+                departure: "2026-10-06",
+              },
+              {
+                id: 17031650,
+                property_id: 389173,
+                status: "active",
+                arrival: "2026-10-04",
+                departure: "2026-10-07",
+              },
+            ],
+          } as never,
+          ownerRezPropertyNames: { "480401": "Miramar Bliss" },
+        })}
+      />,
+    );
+    expect(screen.getByText("Miramar Bliss")).toBeTruthy();
+    expect(screen.getByText("Unlinked OwnerRez property #389173")).toBeTruthy();
+    expect(screen.getByText(/Booking #16148058/)).toBeTruthy();
   });
 });

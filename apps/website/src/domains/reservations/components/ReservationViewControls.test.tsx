@@ -11,21 +11,21 @@ afterEach(cleanup);
 
 const EAST = "11111111-1111-4111-8111-111111111111";
 const counts = {
-  arrivals: 2,
+  today: 3,
   "in-house": 7,
-  departures: 1,
-  upcoming: 12,
+  "this-week": 12,
+  upcoming: 410,
   all: 852,
 };
 const base = {
-  view: "arrivals" as const,
+  view: "today" as const,
   propertyId: null,
   includeCancelled: false,
   page: 1,
 };
 
 describe("ReservationViewControls (2026-09-29)", () => {
-  it("shows the five views with their counts, the current one marked — and no 'New bookings' view", () => {
+  it("shows the five Meeting #6 tabs with their counts, the current one marked — and no 'New bookings' view", () => {
     render(
       <ReservationViewControls params={base} counts={counts} properties={[]} />,
     );
@@ -35,15 +35,16 @@ describe("ReservationViewControls (2026-09-29)", () => {
         .getAllByRole("link")
         .map((a) => a.textContent),
     ).toEqual([
-      "Arrivals today (2)",
-      "In-house now (7)",
-      "Departures today (1)",
-      "Upcoming 7 days (12)",
+      "Today (3)",
+      "In-house (7)",
+      "This week (12)",
+      "Upcoming (410)",
       "All (852)",
     ]);
-    expect(
-      within(nav).getByRole("link", { name: "Arrivals today (2)" }),
-    ).toHaveProperty("ariaCurrent", "page");
+    expect(within(nav).getByRole("link", { name: "Today (3)" })).toHaveProperty(
+      "ariaCurrent",
+      "page",
+    );
     expect(screen.queryByText(/new booking/i)).toBeNull();
   });
 
@@ -56,10 +57,8 @@ describe("ReservationViewControls (2026-09-29)", () => {
       />,
     );
     expect(
-      screen
-        .getByRole("link", { name: "Upcoming 7 days (12)" })
-        .getAttribute("href"),
-    ).toBe(`/reservations?view=upcoming&property=${EAST}&cancelled=1`);
+      screen.getByRole("link", { name: "This week (12)" }).getAttribute("href"),
+    ).toBe(`/reservations?view=this-week&property=${EAST}&cancelled=1`);
   });
 
   it("the filter form submits view, property and 'Show cancelled' (off by default) with GET", () => {
@@ -75,7 +74,7 @@ describe("ReservationViewControls (2026-09-29)", () => {
     expect(form.getAttribute("action")).toBe("/reservations");
     expect(
       (form.querySelector('input[name="view"]') as HTMLInputElement).value,
-    ).toBe("arrivals");
+    ).toBe("today");
     const select = screen.getByLabelText(
       "Filter by property",
     ) as HTMLSelectElement;

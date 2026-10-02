@@ -62,3 +62,21 @@ describe("/reservations operational views wiring (2026-09-29)", () => {
     expect(source).not.toMatch(/createdAt/);
   });
 });
+
+describe("/reservations Meeting #6 tabs wiring (2026-10-02)", () => {
+  it("Today renders two sections, Check-ins and Check-outs, from the two unpaged lists", () => {
+    expect(source).toMatch(/params\.view === "today"/);
+    expect(source).toContain('"Check-ins"');
+    expect(source).toContain('"Check-outs"');
+    expect(source).toContain("view.checkIns");
+    expect(source).toContain("view.checkOuts");
+  });
+
+  it("the property filter lists operational properties only", () => {
+    expect(source).toMatch(/\.filter\(isOperationalProperty\)/);
+  });
+
+  it("still offers no OwnerRez link and no New bookings tab", () => {
+    expect(source).not.toMatch(/ownerreservations\.com|ownerrez\.com/i);
+  });
+});

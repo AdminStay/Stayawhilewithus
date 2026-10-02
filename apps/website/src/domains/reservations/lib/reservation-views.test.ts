@@ -2,17 +2,20 @@ import { describe, expect, it } from "vitest";
 
 import {
   addCalendarDays,
-  buildReservationViewWhere,
+  buildReservationListWhere,
   calendarDate,
+  calendarDay,
   groupPropertiesByLocalDay,
   localDateInTimeZone,
   pageWindow,
   parseReservationViewParams,
   RESERVATIONS_PAGE_SIZE,
+  RESERVATION_VIEWS,
+  reservationListOrderBy,
   reservationViewHref,
-  reservationViewOrderBy,
+  VIEW_LISTS,
   type PropertyDayGroup,
-  type ReservationView,
+  type ReservationListKind,
   type ReservationWhere,
 } from "./reservation-views";
 
@@ -25,6 +28,7 @@ type Row = {
   status: string;
   checkInDate: Date;
   checkOutDate: Date;
+  property: { status: string; deletedAt: Date | null };
 };
 
 function cmp(value: unknown, cond: unknown): boolean {
@@ -54,13 +58,22 @@ function cmp(value: unknown, cond: unknown): boolean {
   return v === cond;
 }
 
-function matches(row: Row, where: ReservationWhere): boolean {
+function matches(
+  row: Record<string, unknown>,
+  where: ReservationWhere,
+): boolean {
   return Object.entries(where).every(([key, cond]) => {
     if (key === "AND")
       return (cond as ReservationWhere[]).every((w) => matches(row, w));
     if (key === "OR")
       return (cond as ReservationWhere[]).some((w) => matches(row, w));
-    return cmp(row[key as keyof Row], cond);
+    // Relation filter (property: { … }) — evaluated against the nested row.
+    if (key === "property")
+      return matches(
+        row.property as Record<string, unknown>,
+        cond as ReservationWhere,
+      );
+    return cmp(row[key], cond);
   });
 }
 
@@ -73,6 +86,8 @@ function res(
   checkIn: string,
   checkOut: string,
   status = "CONFIRMED",
+  propertyStatus = "ACTIVE",
+  propertyDeletedAt: Date | null = null,
 ): Row {
   seq += 1;
   return {
@@ -81,16 +96,17 @@ function res(
     status,
     checkInDate: calendarDate(checkIn),
     checkOutDate: calendarDate(checkOut),
+    property: { status: propertyStatus, deletedAt: propertyDeletedAt },
   };
 }
 
 function ids(
   rows: Row[],
-  view: ReservationView,
+  view: ReservationListKind,
   groups: PropertyDayGroup[],
   opts: { propertyId?: string | null; includeCancelled?: boolean } = {},
 ): string[] {
-  const where = buildReservationViewWhere(view, groups, {
+  const where = buildReservationListWhere(view, groups, {
     propertyId: opts.propertyId ?? null,
     includeCancelled: opts.includeCancelled ?? false,
   });
@@ -123,15 +139,15 @@ describe("view boundaries (local today = 2026-09-29)", () => {
     arriveIn8,
   ];
 
-  it("Arrivals today: check-in exactly today — not yesterday or tomorrow", () => {
-    expect(ids(rows, "arrivals", oneDay)).toEqual([arriveToday.id]);
+  it("Today → Check-ins: check-in exactly today — not yesterday or tomorrow", () => {
+    expect(ids(rows, "check-ins", oneDay)).toEqual([arriveToday.id]);
   });
 
-  it("Departures today: check-out exactly today — not tomorrow or yesterday", () => {
-    expect(ids(rows, "departures", oneDay)).toEqual([departToday.id]);
+  it("Today → Check-outs: check-out exactly today — not tomorrow or yesterday", () => {
+    expect(ids(rows, "check-outs", oneDay)).toEqual([departToday.id]);
   });
 
-  it("In-house now: checked in on/before today and checking out after today (a same-day departure is under Departures)", () => {
+  it("In-house: checked in on/before today and checking out after today (a same-day departure is under Today → Check-outs)", () => {
     expect(ids(rows, "in-house", oneDay).sort()).toEqual(
       [arriveToday.id, arriveYesterday.id, departTomorrow.id].sort(),
     );
@@ -139,9 +155,16 @@ describe("view boundaries (local today = 2026-09-29)", () => {
     expect(ids(rows, "in-house", oneDay)).not.toContain(arriveTomorrow.id);
   });
 
-  it("Upcoming 7 days: tomorrow through today+7 — not today, not today+8", () => {
-    expect(ids(rows, "upcoming", oneDay).sort()).toEqual(
+  it("This week: tomorrow through today+7 — not today, not today+8", () => {
+    expect(ids(rows, "this-week", oneDay).sort()).toEqual(
       [arriveTomorrow.id, arriveIn7.id].sort(),
+    );
+  });
+
+  it("Upcoming: every arrival after today, however far out — not today or earlier", () => {
+    const farOut = res(EAST, "2027-03-01", "2027-03-05");
+    expect(ids([...rows, farOut], "upcoming", oneDay).sort()).toEqual(
+      [arriveTomorrow.id, arriveIn7.id, arriveIn8.id, farOut.id].sort(),
     );
   });
 
@@ -157,21 +180,21 @@ describe("cancelled and property filters", () => {
   const rows = [live, cancelled, other];
 
   it("cancelled reservations are excluded by default", () => {
-    expect(ids(rows, "arrivals", oneDay)).toEqual([live.id, other.id]);
+    expect(ids(rows, "check-ins", oneDay)).toEqual([live.id, other.id]);
     expect(ids(rows, "all", oneDay)).not.toContain(cancelled.id);
   });
 
   it("cancelled reservations are included when requested", () => {
-    expect(ids(rows, "arrivals", oneDay, { includeCancelled: true })).toContain(
-      cancelled.id,
-    );
+    expect(
+      ids(rows, "check-ins", oneDay, { includeCancelled: true }),
+    ).toContain(cancelled.id);
     expect(ids(rows, "all", oneDay, { includeCancelled: true })).toHaveLength(
       3,
     );
   });
 
   it("property filter restricts every view to that property", () => {
-    expect(ids(rows, "arrivals", oneDay, { propertyId: CENTRAL })).toEqual([
+    expect(ids(rows, "check-ins", oneDay, { propertyId: CENTRAL })).toEqual([
       other.id,
     ]);
     expect(ids(rows, "all", oneDay, { propertyId: CENTRAL })).toEqual([
@@ -179,8 +202,8 @@ describe("cancelled and property filters", () => {
     ]);
   });
 
-  it("a date view with no resolvable property matches nothing", () => {
-    expect(ids(rows, "arrivals", [])).toEqual([]);
+  it("a date list with no resolvable property matches nothing", () => {
+    expect(ids(rows, "check-ins", [])).toEqual([]);
     expect(ids(rows, "all", [])).toHaveLength(2);
   });
 });
@@ -218,11 +241,11 @@ describe("timezone / date boundaries", () => {
       centralArrival29,
       centralArrival30,
     ];
-    expect(ids(rows, "arrivals", groups).sort()).toEqual(
+    expect(ids(rows, "check-ins", groups).sort()).toEqual(
       [eastArrival30.id, centralArrival29.id].sort(),
     );
-    // Central's "tomorrow" (Sep 30) is upcoming there; East's Sep 30 is today.
-    expect(ids(rows, "upcoming", groups)).toEqual([centralArrival30.id]);
+    // Central's "tomorrow" (Sep 30) is this week there; East's Sep 30 is today.
+    expect(ids(rows, "this-week", groups)).toEqual([centralArrival30.id]);
   });
 
   it("DST change day still resolves the right calendar date", () => {
@@ -252,7 +275,7 @@ describe("timezone / date boundaries", () => {
     expect(unresolved).toEqual([{ id: CENTRAL, name: "Broken" }]);
     expect(groups).toEqual([{ today: "2026-09-29", propertyIds: [EAST] }]);
     const brokenArrival = res(CENTRAL, "2026-09-29", "2026-10-01");
-    expect(ids([brokenArrival], "arrivals", groups)).toEqual([]);
+    expect(ids([brokenArrival], "check-ins", groups)).toEqual([]);
     expect(ids([brokenArrival], "all", groups)).toEqual([brokenArrival.id]);
   });
 
@@ -266,29 +289,75 @@ describe("timezone / date boundaries", () => {
 });
 
 describe("sorting", () => {
-  it("arrivals/departures by property, in-house by soonest check-out, upcoming by soonest check-in, all by newest check-in — always ending in id for stable paging", () => {
-    expect(reservationViewOrderBy("arrivals")).toEqual([
-      { property: { name: "asc" } },
-      { id: "asc" },
-    ]);
-    expect(reservationViewOrderBy("departures")).toEqual([
-      { property: { name: "asc" } },
-      { id: "asc" },
-    ]);
-    expect(reservationViewOrderBy("in-house")).toEqual([
+  it("check-ins/check-outs by property, in-house by soonest check-out, this week/upcoming by soonest check-in, all by newest check-in — always ending in id for stable paging", () => {
+    for (const list of ["check-ins", "check-outs"] as const) {
+      expect(reservationListOrderBy(list)).toEqual([
+        { property: { name: "asc" } },
+        { id: "asc" },
+      ]);
+    }
+    expect(reservationListOrderBy("in-house")).toEqual([
       { checkOutDate: "asc" },
       { property: { name: "asc" } },
       { id: "asc" },
     ]);
-    expect(reservationViewOrderBy("upcoming")).toEqual([
-      { checkInDate: "asc" },
-      { property: { name: "asc" } },
-      { id: "asc" },
-    ]);
-    expect(reservationViewOrderBy("all")).toEqual([
+    for (const list of ["this-week", "upcoming"] as const) {
+      expect(reservationListOrderBy(list)).toEqual([
+        { checkInDate: "asc" },
+        { property: { name: "asc" } },
+        { id: "asc" },
+      ]);
+    }
+    expect(reservationListOrderBy("all")).toEqual([
       { checkInDate: "desc" },
       { id: "asc" },
     ]);
+  });
+});
+
+describe("operational properties only (ACTIVE + ONBOARDING, not deleted)", () => {
+  const active = res(EAST, TODAY, "2026-10-01", "CONFIRMED", "ACTIVE");
+  const onboarding = res(EAST, TODAY, "2026-10-01", "CONFIRMED", "ONBOARDING");
+  const inactive = res(EAST, TODAY, "2026-10-01", "CONFIRMED", "INACTIVE");
+  const offboarded = res(EAST, TODAY, "2026-10-01", "CONFIRMED", "OFFBOARDED");
+  const deleted = res(
+    EAST,
+    TODAY,
+    "2026-10-01",
+    "CONFIRMED",
+    "ACTIVE",
+    new Date("2026-09-01"),
+  );
+  const rows = [active, onboarding, inactive, offboarded, deleted];
+
+  it.each(["check-ins", "in-house", "all"] as const)(
+    "%s shows ACTIVE and ONBOARDING only",
+    (list) => {
+      expect(ids(rows, list, oneDay).sort()).toEqual(
+        [active.id, onboarding.id].sort(),
+      );
+    },
+  );
+
+  it("even an explicit property filter can't show a non-operational property", () => {
+    expect(ids([inactive], "all", oneDay, { propertyId: EAST })).toEqual([]);
+  });
+});
+
+describe("tabs", () => {
+  it("are Today, In-house, This week, Upcoming, All; Today is two lists", () => {
+    expect(RESERVATION_VIEWS).toEqual([
+      "today",
+      "in-house",
+      "this-week",
+      "upcoming",
+      "all",
+    ]);
+    expect(VIEW_LISTS.today).toEqual(["check-ins", "check-outs"]);
+  });
+
+  it("calendarDay reads a @db.Date as its calendar day", () => {
+    expect(calendarDay(calendarDate("2026-10-01"))).toBe("2026-10-01");
   });
 });
 
@@ -319,9 +388,9 @@ describe("pagination", () => {
 });
 
 describe("URL state", () => {
-  it("defaults: All, all properties, cancelled hidden, page 1", () => {
+  it("defaults: Today, all properties, cancelled hidden, page 1", () => {
     expect(parseReservationViewParams({})).toEqual({
-      view: "all",
+      view: "today",
       propertyId: null,
       includeCancelled: false,
       page: 1,
@@ -350,15 +419,22 @@ describe("URL state", () => {
         page: "-2",
       }),
     ).toEqual({
-      view: "all",
+      view: "today",
       propertyId: null,
       includeCancelled: false,
       page: 1,
     });
   });
 
-  it("there is no 'new bookings' view (import time is not booking time)", () => {
-    expect(parseReservationViewParams({ view: "new" }).view).toBe("all");
+  it("there is no 'new bookings' view yet (import time is not booking time)", () => {
+    expect(parseReservationViewParams({ view: "new" }).view).toBe("today");
+  });
+
+  it("the unreleased arrivals/departures links open Today", () => {
+    expect(parseReservationViewParams({ view: "arrivals" }).view).toBe("today");
+    expect(parseReservationViewParams({ view: "departures" }).view).toBe(
+      "today",
+    );
   });
 
   it("hrefs round-trip and omit defaults", () => {

@@ -1,8 +1,10 @@
+import { OPERATIONAL_PROPERTY_WHERE } from "@/domains/properties/lib/operational-properties";
+
 /**
- * Operational reservation views for /reservations (2026-09-29, Meeting #5
- * OwnerRez item). Pure: parses the URL state and builds the Prisma filters,
- * so all filtering, counting and paging happen in the database — the page
- * never loads every reservation.
+ * Operational reservation views for /reservations (2026-09-29, Meeting #5;
+ * reorganised for Meeting #6 on 2026-10-02). Pure: parses the URL state and
+ * builds the Prisma filters, so all filtering, counting and paging happen in
+ * the database — the page never loads every reservation.
  *
  * "Today" is per property, from Property.timezone (a required IANA zone).
  * Check-in/check-out are @db.Date calendar dates that Prisma round-trips as
@@ -11,37 +13,73 @@
  * resolve is never guessed: it's left out of the date-based views (and
  * reported), and still appears under All.
  *
- * View rules (T = the property's local today):
- *   arrivals    check-in  = T
- *   departures  check-out = T
+ * Tabs (T = the property's local today):
+ *   today       two lists: Check-ins (check-in = T) and Check-outs
+ *               (check-out = T)
  *   in-house    check-in <= T < check-out (staying tonight; guests leaving
- *               today are under Departures)
- *   upcoming    T < check-in <= T + 7 (tomorrow through 7 days out)
+ *               today are under Today → Check-outs)
+ *   this-week   T < check-in <= T + 7 (tomorrow through 7 days out)
+ *   upcoming    check-in > T (every future arrival)
  *   all         no date rule
- * Cancelled reservations are excluded unless explicitly included. There is
- * deliberately no "new bookings" view: Reservation.createdAt is when
+ * Every view shows operational properties only (ACTIVE or ONBOARDING, not
+ * deleted — see properties/lib/operational-properties.ts). Cancelled
+ * reservations are excluded unless explicitly included. There is
+ * deliberately no "new bookings" view yet: Reservation.createdAt is when
  * StayWhile imported a booking, not when it was booked in OwnerRez.
  */
 
 export const RESERVATION_VIEWS = [
-  "arrivals",
+  "today",
   "in-house",
-  "departures",
+  "this-week",
   "upcoming",
   "all",
 ] as const;
 export type ReservationView = (typeof RESERVATION_VIEWS)[number];
 
+export const DEFAULT_RESERVATION_VIEW: ReservationView = "today";
+
 export const RESERVATION_VIEW_LABELS: Record<ReservationView, string> = {
-  arrivals: "Arrivals today",
-  "in-house": "In-house now",
-  departures: "Departures today",
-  upcoming: "Upcoming 7 days",
+  today: "Today",
+  "in-house": "In-house",
+  "this-week": "This week",
+  upcoming: "Upcoming",
   all: "All",
 };
 
-export const UPCOMING_VIEW_DAYS = 7;
+/**
+ * The individual row lists behind the tabs. "today" is two lists; every
+ * other tab is one list of the same name.
+ */
+export const RESERVATION_LISTS = [
+  "check-ins",
+  "check-outs",
+  "in-house",
+  "this-week",
+  "upcoming",
+  "all",
+] as const;
+export type ReservationListKind = (typeof RESERVATION_LISTS)[number];
+
+/** Which lists make up each tab (Today's count is check-ins + check-outs). */
+export const VIEW_LISTS: Record<ReservationView, ReservationListKind[]> = {
+  today: ["check-ins", "check-outs"],
+  "in-house": ["in-house"],
+  "this-week": ["this-week"],
+  upcoming: ["upcoming"],
+  all: ["all"],
+};
+
+/** Views from the unreleased 2026-09-29 branch, kept working as links. */
+const LEGACY_VIEWS: Record<string, ReservationView> = {
+  arrivals: "today",
+  departures: "today",
+};
+
+export const THIS_WEEK_DAYS = 7;
 export const RESERVATIONS_PAGE_SIZE = 50;
+/** Today's two lists aren't paged; each shows at most this many rows. */
+export const TODAY_LIST_LIMIT = 200;
 
 export interface ReservationViewParams {
   view: ReservationView;
@@ -61,7 +99,7 @@ function first(value: string | string[] | undefined): string | undefined {
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Unknown or malformed values fall back to the defaults: All (the page's previous landing view), all properties, cancelled hidden, page 1. */
+/** Unknown or malformed values fall back to the defaults: Today, all properties, cancelled hidden, page 1. */
 export function parseReservationViewParams(
   searchParams: SearchParams,
 ): ReservationViewParams {
@@ -71,7 +109,7 @@ export function parseReservationViewParams(
   return {
     view: (RESERVATION_VIEWS as readonly string[]).includes(view ?? "")
       ? (view as ReservationView)
-      : "all",
+      : (LEGACY_VIEWS[view ?? ""] ?? DEFAULT_RESERVATION_VIEW),
     propertyId: property && UUID_RE.test(property) ? property : null,
     includeCancelled: first(searchParams.cancelled) === "1",
     page: Number.isFinite(page) && page > 0 ? page : 1,
@@ -164,58 +202,61 @@ export function groupPropertiesByLocalDay(
 export type ReservationWhere = Record<string, unknown>;
 export type ReservationOrderBy = Array<Record<string, unknown>>;
 
-function dateRule(view: ReservationView, today: string): ReservationWhere {
+function dateRule(
+  list: Exclude<ReservationListKind, "all">,
+  today: string,
+): ReservationWhere {
   const t = calendarDate(today);
-  switch (view) {
-    case "arrivals":
+  switch (list) {
+    case "check-ins":
       return { checkInDate: t };
-    case "departures":
+    case "check-outs":
       return { checkOutDate: t };
     case "in-house":
       return { checkInDate: { lte: t }, checkOutDate: { gt: t } };
-    case "upcoming":
+    case "this-week":
       return {
         checkInDate: {
           gt: t,
-          lte: calendarDate(addCalendarDays(today, UPCOMING_VIEW_DAYS)),
+          lte: calendarDate(addCalendarDays(today, THIS_WEEK_DAYS)),
         },
       };
-    case "all":
-      return {};
+    case "upcoming":
+      return { checkInDate: { gt: t } };
   }
 }
 
 /**
- * The full filter for one view. Date views apply each property group's own
- * local today; with no resolvable property they match nothing.
+ * The full filter for one list. Every list is limited to operational
+ * properties; date lists apply each property group's own local today and
+ * match nothing when no property's timezone resolves.
  */
-export function buildReservationViewWhere(
-  view: ReservationView,
+export function buildReservationListWhere(
+  list: ReservationListKind,
   groups: PropertyDayGroup[],
   options: { propertyId: string | null; includeCancelled: boolean },
 ): ReservationWhere {
-  const and: ReservationWhere[] = [];
+  const and: ReservationWhere[] = [{ property: OPERATIONAL_PROPERTY_WHERE }];
   if (!options.includeCancelled) and.push({ status: { not: "CANCELLED" } });
   if (options.propertyId) and.push({ propertyId: options.propertyId });
-  if (view !== "all") {
+  if (list !== "all") {
     and.push({
       OR: groups.map((g) => ({
         propertyId: { in: g.propertyIds },
-        ...dateRule(view, g.today),
+        ...dateRule(list, g.today),
       })),
     });
   }
-  return and.length > 0 ? { AND: and } : {};
+  return { AND: and };
 }
 
-/** Ordering per view, always ending in `id` so paging is stable. */
-export function reservationViewOrderBy(
-  view: ReservationView,
+/** Ordering per list, always ending in `id` so paging is stable. */
+export function reservationListOrderBy(
+  list: ReservationListKind,
 ): ReservationOrderBy {
-  switch (view) {
-    case "arrivals":
-      return [{ property: { name: "asc" } }, { id: "asc" }];
-    case "departures":
+  switch (list) {
+    case "check-ins":
+    case "check-outs":
       return [{ property: { name: "asc" } }, { id: "asc" }];
     case "in-house":
       return [
@@ -223,6 +264,7 @@ export function reservationViewOrderBy(
         { property: { name: "asc" } },
         { id: "asc" },
       ];
+    case "this-week":
     case "upcoming":
       return [
         { checkInDate: "asc" },
@@ -243,4 +285,9 @@ export function pageWindow(
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const page = Math.min(Math.max(1, requestedPage), pageCount);
   return { page, pageCount, skip: (page - 1) * pageSize, take: pageSize };
+}
+
+/** "YYYY-MM-DD" of a @db.Date value (Prisma returns it as UTC midnight). */
+export function calendarDay(date: Date): string {
+  return new Date(date).toISOString().slice(0, 10);
 }

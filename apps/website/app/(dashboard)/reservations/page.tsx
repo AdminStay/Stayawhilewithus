@@ -9,6 +9,7 @@ import {
 import { TrendingUp, Wallet } from "lucide-react";
 
 import { listGuests } from "@/domains/guests/services/guests.service";
+import { isOperationalProperty } from "@/domains/properties/lib/operational-properties";
 import { listProperties } from "@/domains/properties/services/properties.service";
 import {
   previewOwnerRezSyncAction,
@@ -23,12 +24,13 @@ import {
   ReservationViewControls,
 } from "@/domains/reservations/components/ReservationViewControls";
 import { SyncOwnerRezReservationsButton } from "@/domains/reservations/components/SyncOwnerRezReservationsButton";
-import { getOwnerRezSyncStatus } from "@/domains/reservations/services/ownerrez-sync-status.service";
 import {
   parseReservationViewParams,
   RESERVATION_VIEW_LABELS,
+  TODAY_LIST_LIMIT,
   type ReservationView,
 } from "@/domains/reservations/lib/reservation-views";
+import { getOwnerRezSyncStatus } from "@/domains/reservations/services/ownerrez-sync-status.service";
 import {
   listReservationRevenueRows,
   listReservationView,
@@ -71,11 +73,10 @@ function computeRevenueMetrics(reservations: RevenueRow[]) {
   return { revenue, adr: nights > 0 ? revenue / nights : 0 };
 }
 
-const EMPTY_STATE: Record<ReservationView, string> = {
-  arrivals: "No arrivals today.",
+const EMPTY_STATE: Record<Exclude<ReservationView, "today">, string> = {
   "in-house": "No guests in house right now.",
-  departures: "No departures today.",
-  upcoming: "No arrivals in the next 7 days.",
+  "this-week": "No arrivals in the next 7 days.",
+  upcoming: "No upcoming arrivals.",
   all: "No reservations match these filters.",
 };
 
@@ -157,7 +158,8 @@ export default async function ReservationsPage({
       <ReservationViewControls
         params={viewParams}
         counts={view.counts}
-        properties={[...properties]
+        properties={properties
+          .filter(isOperationalProperty)
           .sort((a, b) => a.name.localeCompare(b.name))
           .map((p) => ({ id: p.id, name: p.name }))}
       />
@@ -170,18 +172,58 @@ export default async function ReservationsPage({
             Their reservations still appear under All.
           </p>
         )}
-      <ReservationList
-        reservations={view.rows}
-        emptyTitle={RESERVATION_VIEW_LABELS[params.view]}
-        emptyDescription={EMPTY_STATE[params.view]}
-      />
-      <ReservationPagination
-        params={viewParams}
-        page={view.page}
-        pageCount={view.pageCount}
-        pageSize={view.pageSize}
-        total={view.total}
-      />
+      {params.view === "today" ? (
+        // Today = two sections (Meeting #6): who arrives, who leaves.
+        <div className="space-y-6">
+          {(
+            [
+              [
+                "Check-ins",
+                view.checkIns,
+                view.listCounts["check-ins"],
+                "No check-ins today.",
+              ],
+              [
+                "Check-outs",
+                view.checkOuts,
+                view.listCounts["check-outs"],
+                "No check-outs today.",
+              ],
+            ] as const
+          ).map(([title, rows, count, empty]) => (
+            <section key={title} aria-label={title}>
+              <h2 className="mb-2 text-sm font-semibold text-ink">
+                {title} ({count})
+              </h2>
+              <ReservationList
+                reservations={rows}
+                emptyTitle={title}
+                emptyDescription={empty}
+              />
+              {count > rows.length && (
+                <p className="mt-2 text-xs text-ink-muted">
+                  Showing the first {TODAY_LIST_LIMIT} of {count}.
+                </p>
+              )}
+            </section>
+          ))}
+        </div>
+      ) : (
+        <>
+          <ReservationList
+            reservations={view.rows}
+            emptyTitle={RESERVATION_VIEW_LABELS[params.view]}
+            emptyDescription={EMPTY_STATE[params.view]}
+          />
+          <ReservationPagination
+            params={viewParams}
+            page={view.page}
+            pageCount={view.pageCount}
+            pageSize={view.pageSize}
+            total={view.total}
+          />
+        </>
+      )}
     </div>
   );
 }

@@ -8,12 +8,16 @@ import { prisma, type Prisma, type Reservation } from "@stayw/database";
 export type { Reservation };
 
 import {
-  buildReservationViewWhere,
+  buildReservationListWhere,
   groupPropertiesByLocalDay,
   pageWindow,
+  RESERVATION_LISTS,
   RESERVATION_VIEWS,
-  reservationViewOrderBy,
+  reservationListOrderBy,
+  TODAY_LIST_LIMIT,
+  VIEW_LISTS,
   type PropertyTimeZoneInput,
+  type ReservationListKind,
   type ReservationView,
   type ReservationViewParams,
 } from "../lib/reservation-views";
@@ -22,6 +26,7 @@ import type {
   UpdateReservationStatusInput,
 } from "../schemas/reservations.schema";
 
+import { isOperationalProperty } from "@/domains/properties/lib/operational-properties";
 import { recordAudit } from "@/platform/audit/record-audit";
 
 export async function listReservations(actor: AuthContext) {
@@ -33,69 +38,116 @@ export async function listReservations(actor: AuthContext) {
 }
 
 /**
- * One page of an operational view (see lib/reservation-views.ts) plus the
- * count for every view under the same property/cancelled filters. All
- * filtering, counting and paging run in the database. `properties`
- * supplies each property's timezone (the caller's permission-checked
- * listProperties()). Read-only.
+ * One tab of the operational views (see lib/reservation-views.ts) plus the
+ * count for every tab under the same property/cancelled filters. All
+ * filtering, counting and paging run in the database. `properties` is the
+ * caller's permission-checked listProperties(); only operational ones
+ * (ACTIVE / ONBOARDING, not deleted) take part. Read-only.
+ *
+ * Today returns its two lists (`checkIns`, `checkOuts`), each capped at
+ * TODAY_LIST_LIMIT and unpaged; every other tab returns one paged `rows`.
  */
 export async function listReservationView(
   actor: AuthContext,
   params: ReservationViewParams,
-  properties: PropertyTimeZoneInput[],
+  properties: Array<
+    PropertyTimeZoneInput & { status: string; deletedAt?: Date | null }
+  >,
   now: Date = new Date(),
 ) {
   await assertPermission(actor, "reservations:read");
 
-  const { groups, unresolved } = groupPropertiesByLocalDay(properties, now);
+  const operational = properties.filter(isOperationalProperty);
+  const { groups, unresolved } = groupPropertiesByLocalDay(operational, now);
   const filters = {
     propertyId: params.propertyId,
     includeCancelled: params.includeCancelled,
   };
-  const whereFor = (view: ReservationView) =>
-    buildReservationViewWhere(
-      view,
+  const whereFor = (list: ReservationListKind) =>
+    buildReservationListWhere(
+      list,
       groups,
       filters,
     ) as Prisma.ReservationWhereInput;
+  const orderFor = (list: ReservationListKind) =>
+    reservationListOrderBy(
+      list,
+    ) as Prisma.ReservationOrderByWithRelationInput[];
+  const include = { property: true, primaryGuest: true } as const;
 
-  const countEntries = await Promise.all(
-    RESERVATION_VIEWS.map(
-      async (view) =>
+  const listCountEntries = await Promise.all(
+    RESERVATION_LISTS.map(
+      async (list) =>
         [
-          view,
-          await prisma.reservation.count({ where: whereFor(view) }),
+          list,
+          await prisma.reservation.count({ where: whereFor(list) }),
         ] as const,
     ),
   );
-  const counts = Object.fromEntries(countEntries) as Record<
-    ReservationView,
+  const listCounts = Object.fromEntries(listCountEntries) as Record<
+    ReservationListKind,
     number
   >;
+  const counts = Object.fromEntries(
+    RESERVATION_VIEWS.map((view) => [
+      view,
+      VIEW_LISTS[view].reduce((sum, list) => sum + listCounts[list], 0),
+    ]),
+  ) as Record<ReservationView, number>;
 
-  const total = counts[params.view];
-  const window = pageWindow(params.page, total);
-  const rows = await prisma.reservation.findMany({
-    where: whereFor(params.view),
-    orderBy: reservationViewOrderBy(
-      params.view,
-    ) as Prisma.ReservationOrderByWithRelationInput[],
-    skip: window.skip,
-    take: window.take,
-    include: { property: true, primaryGuest: true },
-  });
-
-  return {
-    rows,
+  const base = {
     counts,
-    total,
-    page: window.page,
-    pageCount: window.pageCount,
-    pageSize: window.take,
+    listCounts,
     /** Distinct local "today" dates in use (one per timezone group). */
     localDays: groups.map((g) => g.today),
     /** Properties left out of date-based views because their timezone couldn't be resolved. */
     unresolvedTimezoneProperties: unresolved,
+  };
+
+  if (params.view === "today") {
+    const todayList = (list: "check-ins" | "check-outs") =>
+      prisma.reservation.findMany({
+        where: whereFor(list),
+        orderBy: orderFor(list),
+        take: TODAY_LIST_LIMIT,
+        include,
+      });
+    const [checkIns, checkOuts] = await Promise.all([
+      todayList("check-ins"),
+      todayList("check-outs"),
+    ]);
+    return {
+      ...base,
+      checkIns,
+      checkOuts,
+      rows: [] as typeof checkIns,
+      total: counts.today,
+      page: 1,
+      pageCount: 1,
+      pageSize: TODAY_LIST_LIMIT,
+    };
+  }
+
+  const list = VIEW_LISTS[params.view][0]!;
+  const total = listCounts[list];
+  const window = pageWindow(params.page, total);
+  const rows = await prisma.reservation.findMany({
+    where: whereFor(list),
+    orderBy: orderFor(list),
+    skip: window.skip,
+    take: window.take,
+    include,
+  });
+
+  return {
+    ...base,
+    checkIns: [] as typeof rows,
+    checkOuts: [] as typeof rows,
+    rows,
+    total,
+    page: window.page,
+    pageCount: window.pageCount,
+    pageSize: window.take,
   };
 }
 

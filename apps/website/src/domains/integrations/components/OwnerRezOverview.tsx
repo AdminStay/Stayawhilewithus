@@ -1,3 +1,7 @@
+import type {
+  OwnerrezBooking,
+  OwnerrezProperty,
+} from "@stayw/integrations/ownerrez";
 import {
   Badge,
   EmptyState,
@@ -13,12 +17,12 @@ import {
 } from "@stayw/ui";
 import { Building2, CalendarClock } from "lucide-react";
 
-import type {
-  OwnerrezBooking,
-  OwnerrezProperty,
-} from "@stayw/integrations/ownerrez";
-
 import type { IntegrationHighlights } from "../services/integrations.service";
+
+import {
+  ownerRezPropertyLabel,
+  ownerRezPropertyNameMap,
+} from "@/domains/integrations/lib/ownerrez-property-names";
 
 /**
  * Purely presentational, read-only — no forms, no mutation actions. OwnerRez
@@ -35,6 +39,11 @@ export function OwnerRezOverview({
   const propertyItems =
     properties.configured && properties.ok ? properties.items : [];
   const bookingItems = bookings.configured && bookings.ok ? bookings.items : [];
+  // Names straight from OwnerRez's own property list (already loaded by
+  // this page), matched by exact property id (2026-10-02).
+  const propertyNames = ownerRezPropertyNameMap(
+    propertyItems.map((p) => ({ ownerRezPropertyId: p.id, name: p.name })),
+  );
   const activeProperties = propertyItems.filter((p) => p.active).length;
 
   return (
@@ -144,7 +153,11 @@ export function OwnerRezOverview({
                     #{booking.id}
                   </TableCell>
                   <TableCell className="text-ink-muted">
-                    {booking.property_id}
+                    {ownerRezPropertyLabel(
+                      booking.property_id,
+                      propertyNames,
+                      "OwnerRez property",
+                    )}
                   </TableCell>
                   <TableCell className="text-ink-muted">
                     {booking.arrival}

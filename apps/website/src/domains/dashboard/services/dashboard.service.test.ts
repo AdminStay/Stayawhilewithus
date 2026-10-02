@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // @stayw/auth's rbac.ts imports @stayw/database (server-only) for real
 // permission checks; Vitest externalizes that cross-package import so the
@@ -92,6 +92,16 @@ import { getTeamAvailabilitySnapshot } from "@/domains/team/services/schedule.se
 
 const actor = { userId: "user-1" };
 
+// Reservations are compared against each property's own local today
+// (2026-10-02). Fixtures use the test machine's own timezone so "today"
+// matches TODAY below, and an operational status.
+const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const OPERATIONAL_IN_LOCAL_TZ = {
+  timezone: LOCAL_TZ,
+  status: "ACTIVE",
+  deletedAt: null,
+} as const;
+
 const now = new Date();
 const TODAY = new Date(
   Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()),
@@ -104,8 +114,8 @@ function daysFromToday(n: number): Date {
 
 function mockAllLists() {
   vi.mocked(listProperties).mockResolvedValue([
-    { id: "p1" },
-    { id: "p2" },
+    { id: "p1", status: "ACTIVE", deletedAt: null },
+    { id: "p2", status: "ACTIVE", deletedAt: null },
   ] as never);
   vi.mocked(listGuests).mockResolvedValue([] as never);
   vi.mocked(listReservations).mockResolvedValue([
@@ -115,7 +125,7 @@ function mockAllLists() {
       status: "CONFIRMED",
       checkInDate: TODAY,
       checkOutDate: daysFromToday(4),
-      property: { name: "Cabin on the Ridge" },
+      property: { name: "Cabin on the Ridge", ...OPERATIONAL_IN_LOCAL_TZ },
       primaryGuest: { firstName: "Jordan", lastName: "Rivera" },
     },
     {
@@ -124,7 +134,7 @@ function mockAllLists() {
       status: "CHECKED_IN",
       checkInDate: daysFromToday(-3),
       checkOutDate: TODAY,
-      property: { name: "Downtown Loft" },
+      property: { name: "Downtown Loft", ...OPERATIONAL_IN_LOCAL_TZ },
       primaryGuest: { firstName: "Casey", lastName: "Nguyen" },
     },
     {
@@ -133,7 +143,7 @@ function mockAllLists() {
       status: "CANCELLED",
       checkInDate: TODAY,
       checkOutDate: daysFromToday(2),
-      property: { name: "Downtown Loft" },
+      property: { name: "Downtown Loft", ...OPERATIONAL_IN_LOCAL_TZ },
       primaryGuest: { firstName: "Skip", lastName: "Me" },
     },
   ] as never);
@@ -425,7 +435,7 @@ describe("getDashboardSummary", () => {
         status: "CONFIRMED",
         checkInDate: daysFromToday(3),
         checkOutDate: daysFromToday(7),
-        property: { name: "Cabin on the Ridge" },
+        property: { name: "Cabin on the Ridge", ...OPERATIONAL_IN_LOCAL_TZ },
         primaryGuest: { firstName: "A", lastName: "A" },
       },
       // Arrives in 1 day — within window, and earlier than the one above.
@@ -435,7 +445,7 @@ describe("getDashboardSummary", () => {
         status: "PENDING",
         checkInDate: daysFromToday(1),
         checkOutDate: daysFromToday(5),
-        property: { name: "Cabin on the Ridge" },
+        property: { name: "Cabin on the Ridge", ...OPERATIONAL_IN_LOCAL_TZ },
         primaryGuest: { firstName: "B", lastName: "B" },
       },
       // Arrives in 10 days — outside the 6-day window.
@@ -445,7 +455,7 @@ describe("getDashboardSummary", () => {
         status: "CONFIRMED",
         checkInDate: daysFromToday(10),
         checkOutDate: daysFromToday(12),
-        property: { name: "Cabin on the Ridge" },
+        property: { name: "Cabin on the Ridge", ...OPERATIONAL_IN_LOCAL_TZ },
         primaryGuest: { firstName: "C", lastName: "C" },
       },
       // Departs in 2 days — within window.
@@ -455,7 +465,7 @@ describe("getDashboardSummary", () => {
         status: "CHECKED_IN",
         checkInDate: daysFromToday(-1),
         checkOutDate: daysFromToday(2),
-        property: { name: "Downtown Loft" },
+        property: { name: "Downtown Loft", ...OPERATIONAL_IN_LOCAL_TZ },
         primaryGuest: { firstName: "D", lastName: "D" },
       },
       // Cancelled, arrives tomorrow — should never appear.
@@ -465,7 +475,7 @@ describe("getDashboardSummary", () => {
         status: "CANCELLED",
         checkInDate: daysFromToday(1),
         checkOutDate: daysFromToday(3),
-        property: { name: "Cabin on the Ridge" },
+        property: { name: "Cabin on the Ridge", ...OPERATIONAL_IN_LOCAL_TZ },
         primaryGuest: { firstName: "E", lastName: "E" },
       },
     ] as never);
@@ -485,6 +495,121 @@ describe("getDashboardSummary", () => {
       "future-departure",
       "future-arrival-far",
     ]);
+  });
+
+  describe("property-local today + operational properties (2026-10-02)", () => {
+    const chicago = (status = "ACTIVE") => ({
+      name: "Gulf House",
+      timezone: "America/Chicago",
+      status,
+      deletedAt: null,
+    });
+    const day = (ymd: string) => new Date(`${ymd}T00:00:00.000Z`);
+    const res = (
+      id: string,
+      checkIn: string,
+      checkOut: string,
+      property = chicago(),
+    ) => ({
+      id,
+      propertyId: "p1",
+      status: "CONFIRMED",
+      checkInDate: day(checkIn),
+      checkOutDate: day(checkOut),
+      property,
+      primaryGuest: { firstName: "G", lastName: "G" },
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("9:30 PM Central on Oct 1 is still Oct 1 for a Central property (UTC is already Oct 2)", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-02T02:30:00Z"));
+      mockAllLists();
+      vi.mocked(listReservations).mockResolvedValueOnce([
+        res("arrives-oct-1", "2026-10-01", "2026-10-04"),
+        res("arrives-oct-2", "2026-10-02", "2026-10-05"),
+        res("departs-oct-1", "2026-09-28", "2026-10-01"),
+      ] as never);
+
+      const summary = await getDashboardSummary(actor);
+
+      expect(summary.arrivalsToday.map((r) => r.id)).toEqual(["arrives-oct-1"]);
+      expect(summary.departuresToday.map((r) => r.id)).toEqual([
+        "departs-oct-1",
+      ]);
+      // Oct 2 is tomorrow locally, so it's upcoming, not today.
+      expect(summary.upcomingCheckIns.map((r) => r.id)).toEqual([
+        "arrives-oct-2",
+      ]);
+    });
+
+    it("ONBOARDING counts; INACTIVE, OFFBOARDED and deleted properties don't", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-01T15:00:00Z"));
+      mockAllLists();
+      vi.mocked(listReservations).mockResolvedValueOnce([
+        res("active", "2026-10-01", "2026-10-03", chicago("ACTIVE")),
+        res("onboarding", "2026-10-01", "2026-10-03", chicago("ONBOARDING")),
+        res("inactive", "2026-10-01", "2026-10-03", chicago("INACTIVE")),
+        res("offboarded", "2026-10-01", "2026-10-03", chicago("OFFBOARDED")),
+        res("deleted", "2026-10-01", "2026-10-03", {
+          ...chicago("ACTIVE"),
+          deletedAt: new Date("2026-09-01"),
+        } as never),
+      ] as never);
+
+      const summary = await getDashboardSummary(actor);
+
+      expect(summary.arrivalsToday.map((r) => r.id).sort()).toEqual([
+        "active",
+        "onboarding",
+      ]);
+    });
+
+    it("a property whose timezone can't be resolved is left out of the date lists, not guessed", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-01T15:00:00Z"));
+      mockAllLists();
+      vi.mocked(listReservations).mockResolvedValueOnce([
+        res("bad-tz", "2026-10-01", "2026-10-03", {
+          ...chicago(),
+          timezone: "Not/AZone",
+        }),
+      ] as never);
+
+      const summary = await getDashboardSummary(actor);
+
+      expect(summary.arrivalsToday).toEqual([]);
+    });
+
+    it("maps OwnerRez property ids to StayWhile property names for the OwnerRez card", async () => {
+      mockAllLists();
+      vi.mocked(listProperties).mockResolvedValueOnce([
+        {
+          id: "p1",
+          name: "Miramar Bliss",
+          ownerRezPropertyId: "480401",
+          status: "ONBOARDING",
+          deletedAt: null,
+        },
+        {
+          id: "p2",
+          name: "Manual Only",
+          ownerRezPropertyId: null,
+          status: "ACTIVE",
+          deletedAt: null,
+        },
+      ] as never);
+
+      const summary = await getDashboardSummary(actor);
+
+      expect(summary.ownerRezPropertyNames).toEqual({
+        "480401": "Miramar Bliss",
+      });
+    });
   });
 
   it("degrades a permission-denied domain to an empty list instead of failing the whole summary", async () => {
