@@ -45,8 +45,8 @@ function findOwnerRezProperty(
  *
  * Renders one row per entry in the closed, human-approved
  * APPROVED_OWNERREZ_LINKS allow-list — never per row in the live report's
- * proposedMatches. A property not in that allow-list (e.g. Miramar Bliss)
- * gets no row here at all, regardless of what the live report shows for it.
+ * proposedMatches. A property not in that allow-list gets no row here at
+ * all, regardless of what the live report shows for it.
  * This is a display-time convenience only: the actual authorization lives
  * entirely in ownerrez-link.service.ts's confirmOwnerRezLink(), which
  * re-derives everything server-side and does not trust this component's
