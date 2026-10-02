@@ -19,6 +19,11 @@ import { Building2, CalendarClock } from "lucide-react";
 
 import type { IntegrationHighlights } from "../services/integrations.service";
 
+import { OwnerRezLink } from "@/domains/integrations/components/OwnerRezLink";
+import {
+  ownerRezBookingUrl,
+  ownerRezPropertyUrl,
+} from "@/domains/integrations/lib/ownerrez-links";
 import {
   ownerRezPropertyLabel,
   ownerRezPropertyNameMap,
@@ -102,6 +107,13 @@ export function OwnerRezOverview({
                     <span className="font-medium text-ink">
                       {property.name}
                     </span>
+                    {ownerRezPropertyUrl(property.id) && (
+                      <OwnerRezLink
+                        href={ownerRezPropertyUrl(property.id)!}
+                        label="Open in OwnerRez"
+                        title={`Open ${property.name} in OwnerRez`}
+                      />
+                    )}
                   </TableCell>
                   <TableCell className="text-ink-muted">
                     {property.key}
@@ -151,12 +163,26 @@ export function OwnerRezOverview({
                 <TableRow key={booking.id}>
                   <TableCell className="font-medium text-ink">
                     #{booking.id}
+                    {ownerRezBookingUrl(booking.id) && (
+                      <OwnerRezLink
+                        href={ownerRezBookingUrl(booking.id)!}
+                        label="Open in OwnerRez"
+                        title={`Open booking #${booking.id} in OwnerRez`}
+                      />
+                    )}
                   </TableCell>
                   <TableCell className="text-ink-muted">
                     {ownerRezPropertyLabel(
                       booking.property_id,
                       propertyNames,
                       "OwnerRez property",
+                    )}
+                    {ownerRezPropertyUrl(booking.property_id) && (
+                      <OwnerRezLink
+                        href={ownerRezPropertyUrl(booking.property_id)!}
+                        label="OwnerRez"
+                        title="Open this property in OwnerRez"
+                      />
                     )}
                   </TableCell>
                   <TableCell className="text-ink-muted">

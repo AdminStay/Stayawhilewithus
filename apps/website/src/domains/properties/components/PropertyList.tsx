@@ -21,8 +21,10 @@ import {
   updatePropertyOccupancyAction,
   updatePropertyStatusAction,
 } from "../actions";
-
 import type { Property } from "../services/properties.service";
+
+import { OwnerRezLink } from "@/domains/integrations/components/OwnerRezLink";
+import { ownerRezPropertyUrl } from "@/domains/integrations/lib/ownerrez-links";
 
 const STATUSES = ["ACTIVE", "INACTIVE", "ONBOARDING", "OFFBOARDED"] as const;
 
@@ -61,6 +63,13 @@ export function PropertyList({ properties }: { properties: Property[] }) {
             <TableCell>
               <span className="font-medium text-ink">{p.name}</span>
               <span className="ml-2 text-ink-muted">({p.internalCode})</span>
+              {ownerRezPropertyUrl(p.ownerRezPropertyId) && (
+                <OwnerRezLink
+                  href={ownerRezPropertyUrl(p.ownerRezPropertyId)!}
+                  label="Open in OwnerRez"
+                  title={`Open ${p.name} in OwnerRez`}
+                />
+              )}
             </TableCell>
             <TableCell className="text-ink-muted">
               {p.city}, {p.state}

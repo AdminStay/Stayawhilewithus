@@ -186,3 +186,33 @@ describe("DashboardSummary — OwnerRez card shows property names (2026-10-02)",
     expect(screen.getByText(/Booking #16148058/)).toBeTruthy();
   });
 });
+
+describe("DashboardSummary — OwnerRez card booking link (2026-10-03)", () => {
+  it("links each booking to OwnerRez by its booking id", () => {
+    render(
+      <DashboardSummary
+        summary={baseSummary({
+          ownerRezHighlights: {
+            configured: true,
+            ok: true,
+            items: [
+              {
+                id: 19458918,
+                property_id: 386471,
+                status: "active",
+                arrival: "2026-10-03",
+                departure: "2026-10-06",
+              },
+            ],
+          } as never,
+          ownerRezPropertyNames: { "386471": "Miramar Bliss" },
+        })}
+      />,
+    );
+    expect(
+      screen
+        .getByRole("link", { name: "Open booking #19458918 in OwnerRez" })
+        .getAttribute("href"),
+    ).toBe("https://secure.ownerreservations.com/bookings/19458918");
+  });
+});

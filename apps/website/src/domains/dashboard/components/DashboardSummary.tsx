@@ -24,6 +24,8 @@ import type { ComponentType, ReactNode } from "react";
 
 import type { getDashboardSummary } from "../services/dashboard.service";
 
+import { OwnerRezLink } from "@/domains/integrations/components/OwnerRezLink";
+import { ownerRezBookingUrl } from "@/domains/integrations/lib/ownerrez-links";
 import { ownerRezPropertyLabel } from "@/domains/integrations/lib/ownerrez-property-names";
 import {
   TeamAvailability,
@@ -712,6 +714,13 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
                     </div>
                     <div className="mt-0.5 text-xs text-ink-muted">
                       {b.arrival} → {b.departure} · Booking #{b.id}
+                      {ownerRezBookingUrl(b.id) && (
+                        <OwnerRezLink
+                          href={ownerRezBookingUrl(b.id)!}
+                          label="Open in OwnerRez"
+                          title={`Open booking #${b.id} in OwnerRez`}
+                        />
+                      )}
                     </div>
                   </li>
                 ))}

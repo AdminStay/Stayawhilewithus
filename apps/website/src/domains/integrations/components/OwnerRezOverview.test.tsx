@@ -46,4 +46,38 @@ describe("OwnerRezOverview — property names, not numbers (2026-10-02)", () => 
       within(unknownRow).getByText("OwnerRez property #389173"),
     ).toBeTruthy();
   });
+
+  it("links bookings and properties to OwnerRez with the real URL patterns (2026-10-03)", () => {
+    render(
+      <OwnerRezOverview
+        properties={{
+          configured: true,
+          ok: true,
+          items: [
+            { id: 386471, name: "Miramar Bliss", key: "k", active: true },
+          ],
+        }}
+        bookings={{
+          configured: true,
+          ok: true,
+          items: [booking(19458918, 386471)],
+        }}
+      />,
+    );
+    expect(
+      screen
+        .getByRole("link", { name: "Open booking #19458918 in OwnerRez" })
+        .getAttribute("href"),
+    ).toBe("https://secure.ownerreservations.com/bookings/19458918");
+    expect(
+      screen
+        .getByRole("link", { name: "Open Miramar Bliss in OwnerRez" })
+        .getAttribute("href"),
+    ).toBe("https://app.ownerrez.com/properties/386471/info");
+    expect(
+      screen
+        .getByRole("link", { name: "Open this property in OwnerRez" })
+        .getAttribute("href"),
+    ).toBe("https://app.ownerrez.com/properties/386471/info");
+  });
 });

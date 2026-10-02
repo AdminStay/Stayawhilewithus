@@ -15,11 +15,16 @@ import {
 import { CalendarRange } from "lucide-react";
 
 import { updateReservationStatusAction } from "../actions";
-
 import type { Reservation } from "../services/reservations.service";
 
+import { OwnerRezLink } from "@/domains/integrations/components/OwnerRezLink";
+import {
+  ownerRezPropertyUrl,
+  ownerRezReservationUrl,
+} from "@/domains/integrations/lib/ownerrez-links";
+
 type ReservationWithRelations = Reservation & {
-  property: { name: string };
+  property: { name: string; ownerRezPropertyId?: string | null };
   primaryGuest: { firstName: string; lastName: string };
 };
 
@@ -78,6 +83,13 @@ export function ReservationList({
           <TableRow key={r.id}>
             <TableCell className="font-medium text-ink">
               {r.property.name}
+              {ownerRezPropertyUrl(r.property.ownerRezPropertyId) && (
+                <OwnerRezLink
+                  href={ownerRezPropertyUrl(r.property.ownerRezPropertyId)!}
+                  label="OwnerRez"
+                  title={`Open ${r.property.name} in OwnerRez`}
+                />
+              )}
             </TableCell>
             <TableCell className="text-ink-muted">
               {r.primaryGuest.firstName} {r.primaryGuest.lastName}
@@ -96,6 +108,13 @@ export function ReservationList({
                     <span className="text-xs text-ink-muted">
                       Managed in OwnerRez
                     </span>
+                    {ownerRezReservationUrl(r) && (
+                      <OwnerRezLink
+                        href={ownerRezReservationUrl(r)!}
+                        label="Open in OwnerRez"
+                        title="Open this booking in OwnerRez"
+                      />
+                    )}
                     <Badge tone={STATUS_TONE[r.status]}>{r.status}</Badge>
                   </span>
                 ) : (

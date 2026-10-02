@@ -89,4 +89,46 @@ describe("ReservationList", () => {
     expect(screen.getByText("Cancelled")).toBeTruthy();
     expect(screen.queryByText("Managed in OwnerRez")).toBeNull();
   });
+
+  describe("Open in OwnerRez links (2026-10-03)", () => {
+    const ownerRezRow = {
+      ...row("CONFIRMED", "OWNERREZ"),
+      externalReservationId: "19458918",
+      property: { name: "Miramar Bliss", ownerRezPropertyId: "386471" },
+    };
+
+    it("an OwnerRez booking links to its booking in OwnerRez, and its property to the property", () => {
+      render(<ReservationList reservations={[ownerRezRow] as never} />);
+      const booking = screen.getByRole("link", {
+        name: "Open this booking in OwnerRez",
+      });
+      expect(booking.getAttribute("href")).toBe(
+        "https://secure.ownerreservations.com/bookings/19458918",
+      );
+      expect(booking.getAttribute("target")).toBe("_blank");
+      expect(booking.getAttribute("rel")).toBe("noopener noreferrer");
+      expect(
+        screen
+          .getByRole("link", { name: "Open Miramar Bliss in OwnerRez" })
+          .getAttribute("href"),
+      ).toBe("https://app.ownerrez.com/properties/386471/info");
+    });
+
+    it("a DIRECT reservation gets no booking link; an unlinked property gets no property link", () => {
+      render(
+        <ReservationList
+          reservations={
+            [
+              {
+                ...row("CONFIRMED", "DIRECT"),
+                externalReservationId: "3f6c2b1e-8d4a-4c6e-9f2a-1b2c3d4e5f60",
+                property: { name: "Manual Place", ownerRezPropertyId: null },
+              },
+            ] as never
+          }
+        />,
+      );
+      expect(screen.queryAllByRole("link")).toHaveLength(0);
+    });
+  });
 });
