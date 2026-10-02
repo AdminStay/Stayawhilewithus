@@ -123,7 +123,9 @@ describe("OwnerRezConfirmLinkPanel", () => {
     expect(within(card).getByText("Inactive")).toBeTruthy();
   });
 
-  it("renders no confirmation control at all for Miramar Bliss, even when it appears in the live report with real OwnerRez candidates", () => {
+  // Miramar Bliss was approved for linking to OwnerRez 480401 (85dc068,
+  // Michelle's decision 2026-09-29), so it now has its own approved row.
+  it("Miramar Bliss gets exactly one Confirm control, bound only to its approved OwnerRez id 480401 — never the inactive 389173/410682 candidates", () => {
     render(
       <OwnerRezConfirmLinkPanel
         report={makeReport({
@@ -154,9 +156,33 @@ describe("OwnerRezConfirmLinkPanel", () => {
       />,
     );
 
-    expect(screen.queryByText(/Miramar/)).toBeNull();
-    expect(document.querySelectorAll("form")).toHaveLength(0);
-    expect(screen.queryByRole("button")).toBeNull();
+    const card = screen
+      .getByText("(MIRAMAR-BLISS)")
+      .closest("div.rounded-card") as HTMLElement;
+    expect(within(card).getByText(/→ OwnerRez: Miramar-Bliss/)).toBeTruthy();
+    expect(within(card).getByText(/ID 480401/)).toBeTruthy();
+    expect(within(card).getByText("Active")).toBeTruthy();
+    expect(within(card).queryByText(/389173|410682/)).toBeNull();
+
+    // The only form on the panel (the other approved properties aren't in
+    // this report), submitting exactly Miramar's StayWhile id and 480401.
+    expect(document.querySelectorAll("form")).toHaveLength(1);
+    const form = card.querySelector("form") as HTMLFormElement;
+    expect(form).not.toBeNull();
+    expect(
+      (form.querySelector('input[name="propertyId"]') as HTMLInputElement)
+        .value,
+    ).toBe("miramar-bliss-uuid");
+    expect(
+      (
+        form.querySelector(
+          'input[name="ownerRezPropertyId"]',
+        ) as HTMLInputElement
+      ).value,
+    ).toBe("480401");
+    expect(
+      within(card).getAllByRole("button", { name: "Confirm Link" }),
+    ).toHaveLength(1);
   });
 
   it("renders 'Linked' with no Confirm control for an approved property already linked", () => {
@@ -181,14 +207,14 @@ describe("OwnerRezConfirmLinkPanel", () => {
   it("renders 'Not available' with no Confirm control for an approved property the live report doesn't currently surface on either side", () => {
     render(<OwnerRezConfirmLinkPanel report={makeReport()} />);
 
-    // All six approved entries render, none linkable without live data for
-    // both sides.
-    expect(screen.getAllByText("Not available")).toHaveLength(6);
+    // All seven approved entries render, none linkable without live data
+    // for both sides.
+    expect(screen.getAllByText("Not available")).toHaveLength(7);
     expect(document.querySelectorAll("form")).toHaveLength(0);
     expect(screen.queryByRole("button")).toBeNull();
   });
 
-  it("renders one row for each of the six approved properties, and only six", () => {
+  it("renders one row for each of the seven approved properties, and only seven", () => {
     render(<OwnerRezConfirmLinkPanel report={makeReport()} />);
 
     for (const code of [
@@ -196,11 +222,12 @@ describe("OwnerRezConfirmLinkPanel", () => {
       "BAHAMAS",
       "BONJOUR-AMI",
       "ISLAND-TIDES",
+      "MIRAMAR-BLISS",
       "OCEAN-PEARL",
       "SANDY-NUDES",
     ]) {
       expect(screen.getAllByText(new RegExp(code)).length).toBeGreaterThan(0);
     }
-    expect(document.querySelectorAll("div.rounded-card")).toHaveLength(6);
+    expect(document.querySelectorAll("div.rounded-card")).toHaveLength(7);
   });
 });
