@@ -32,6 +32,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: "/tasks", label: "Tasks", icon: "checklist" },
       { href: "/cleaning", label: "Cleaning", icon: "sparkles" },
+      { href: "/cleaners", label: "Cleaners", icon: "users" },
       { href: "/maintenance", label: "Maintenance", icon: "wrench" },
       { href: "/resources", label: "Resources", icon: "link" },
     ],

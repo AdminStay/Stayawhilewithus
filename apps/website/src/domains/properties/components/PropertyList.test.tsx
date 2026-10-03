@@ -47,3 +47,28 @@ describe("PropertyList — Open in OwnerRez (2026-10-03)", () => {
     expect(screen.queryByRole("link", { name: /in OwnerRez/ })).toBeNull();
   });
 });
+
+describe("PropertyList — Cleaner column (Cleaner Assignments Phase 3)", () => {
+  it("is hidden entirely when the viewer can't read cleaners (summaries null)", () => {
+    render(<PropertyList properties={[property()] as never} />);
+    expect(screen.queryByRole("columnheader", { name: "Cleaner" })).toBeNull();
+  });
+
+  it("shows the current cleaners, linking to that property on /cleaners", () => {
+    render(
+      <PropertyList
+        properties={
+          [property(), property({ id: "p2", name: "Dune Cottage" })] as never
+        }
+        cleanerSummaries={{ p1: { primary: "Alex", teamMembers: ["Sam"] } }}
+      />,
+    );
+    expect(screen.getByRole("columnheader", { name: "Cleaner" })).toBeTruthy();
+    const link = screen.getByTitle("Manage cleaners for Miramar Bliss");
+    expect(link.getAttribute("href")).toBe("/cleaners#property-p1");
+    expect(link.textContent?.replace(/\s+/g, " ").trim()).toBe("Alex + Sam");
+    const unassigned = screen.getByTitle("Manage cleaners for Dune Cottage");
+    expect(unassigned.getAttribute("href")).toBe("/cleaners#property-p2");
+    expect(unassigned.textContent).toBe("No cleaner");
+  });
+});

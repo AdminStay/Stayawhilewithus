@@ -1,5 +1,7 @@
+import { hasPermission } from "@stayw/auth";
 import { DialogTrigger, PageHeader } from "@stayw/ui";
 
+import { listCurrentCleanerSummaries } from "@/domains/cleaners/services/cleaner-assignments.service";
 import { CreatePropertyForm } from "@/domains/properties/components/CreatePropertyForm";
 import { PropertyList } from "@/domains/properties/components/PropertyList";
 import { listProperties } from "@/domains/properties/services/properties.service";
@@ -7,7 +9,14 @@ import { getCurrentUser } from "@/platform/auth/get-current-user";
 
 export default async function PropertiesPage() {
   const actor = await getCurrentUser();
-  const properties = await listProperties(actor);
+  const [properties, canReadCleaners] = await Promise.all([
+    listProperties(actor),
+    hasPermission(actor, "cleaners:read"),
+  ]);
+  // The "Cleaner" column only exists for someone who can see cleaners.
+  const cleanerSummaries = canReadCleaners
+    ? await listCurrentCleanerSummaries(actor)
+    : null;
 
   return (
     <div>
@@ -20,7 +29,10 @@ export default async function PropertiesPage() {
           </DialogTrigger>
         }
       />
-      <PropertyList properties={properties} />
+      <PropertyList
+        properties={properties}
+        cleanerSummaries={cleanerSummaries}
+      />
     </div>
   );
 }

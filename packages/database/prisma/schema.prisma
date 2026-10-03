@@ -30,19 +30,21 @@ model User {
   createdAt   DateTime   @default(now()) @map("created_at")
   updatedAt   DateTime   @updatedAt @map("updated_at")
 
-  userRoles             UserRole[]              @relation("UserRoles")
-  roleAssignmentsMade   UserRole[]              @relation("UserRoleAssignedBy")
-  assignedTasks         Task[]                  @relation("TaskAssignee")
-  createdTasks          Task[]                  @relation("TaskCreator")
-  reportedMaintenance   MaintenanceRequest[]
-  auditLogs             AuditLog[]
-  sentMessages          Message[]
-  aiConversations       AiConversation[]
-  notifications         Notification[]
-  connectedIntegrations IntegrationConnection[]
-  aiActionsReviewed     AiAction[]              @relation("AiActionReviewer")
-  mappedProviderDevices ProviderDevice[]        @relation("ProviderDeviceMappedBy")
-  createdResourceLinks  ResourceLink[]          @relation("ResourceLinkCreator")
+  userRoles               UserRole[]                  @relation("UserRoles")
+  roleAssignmentsMade     UserRole[]                  @relation("UserRoleAssignedBy")
+  assignedTasks           Task[]                      @relation("TaskAssignee")
+  createdTasks            Task[]                      @relation("TaskCreator")
+  reportedMaintenance     MaintenanceRequest[]
+  auditLogs               AuditLog[]
+  sentMessages            Message[]
+  aiConversations         AiConversation[]
+  notifications           Notification[]
+  connectedIntegrations   IntegrationConnection[]
+  aiActionsReviewed       AiAction[]                  @relation("AiActionReviewer")
+  mappedProviderDevices   ProviderDevice[]            @relation("ProviderDeviceMappedBy")
+  createdResourceLinks    ResourceLink[]              @relation("ResourceLinkCreator")
+  cleanerAssignmentsMade  PropertyCleanerAssignment[] @relation("CleanerAssignmentAssignedBy")
+  cleanerAssignmentsEnded PropertyCleanerAssignment[] @relation("CleanerAssignmentEndedBy")
 
   @@map("users")
 }
@@ -152,6 +154,7 @@ model Property {
   aiConversations     AiConversation[]
   providerDevices     ProviderDevice[]
   resourceLinks       ResourceLink[]
+  cleanerAssignments  PropertyCleanerAssignment[]
 
   @@map("properties")
 }
@@ -288,14 +291,22 @@ model CleaningSchedule {
   scheduledEndTime      String?        @map("scheduled_end_time")
   cleaningType          CleaningType   @map("cleaning_type")
   status                CleaningStatus @default(SCHEDULED)
+  /// The cleaner for this one job (Cleaner Assignments Phase 3, schema
+  /// only). Optional: nothing sets it yet — defaulting it from the
+  /// property's PRIMARY cleaner and moving open future cleanings on a
+  /// cleaner change are Phase 4. Cleaners are deactivated, never deleted,
+  /// so SetNull is only a safety net.
+  cleanerId             String?        @map("cleaner_id") @db.Uuid
   createdAt             DateTime       @default(now()) @map("created_at")
   updatedAt             DateTime       @updatedAt @map("updated_at")
 
   property    Property     @relation(fields: [propertyId], references: [id], onDelete: Restrict)
   reservation Reservation? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
   task        Task         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  cleaner     Cleaner?     @relation(fields: [cleanerId], references: [id], onDelete: SetNull)
 
   @@index([propertyId, scheduledDate])
+  @@index([cleanerId])
   @@map("cleaning_schedules")
 }
 
@@ -353,6 +364,91 @@ model ResourceLink {
   @@index([propertyId])
   @@index([category])
   @@map("resource_links")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Cleaners
+// ─────────────────────────────────────────────────────────────────────────
+
+/// A cleaner as a CONTACT record — deliberately not a User: cleaners don't
+/// sign in to StayWhile. (The `cleaner` login role is unrelated and
+/// unchanged.) Dashboard-managed data; no roster is hard-coded anywhere.
+/// Never deleted — set INACTIVE instead, so assignment history and
+/// past cleanings keep their cleaner. `phone` is stored normalized (E.164,
+/// e.g. "+13055550123") and only ever leaves the server in full to a
+/// `cleaners:manage` holder; everyone else gets a masked form.
+model Cleaner {
+  id        String        @id @default(uuid()) @db.Uuid
+  name      String
+  phone     String
+  status    CleanerStatus @default(ACTIVE)
+  notes     String?
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  assignments       PropertyCleanerAssignment[]
+  cleaningSchedules CleaningSchedule[]
+  backupContacts    CleanerContact[]
+
+  @@index([status])
+  @@map("cleaners")
+}
+
+/// Zero or more BACKUP contact numbers for a cleaner (the cleaner's own
+/// primary number stays on Cleaner.phone). `name`/`relationship` are
+/// optional: empty means another number for the cleaner themself;
+/// filled in means someone else reachable for them (e.g. a relative).
+/// Dashboard-managed like everything else here — nothing is hard-coded.
+/// Same phone rules as Cleaner.phone: stored E.164, full number only to a
+/// `cleaners:manage` holder, last 4 digits only in audit entries. A backup
+/// contact holds no history of its own, so removing one deletes the row
+/// (the removal is audited); deleting a cleaner — which the app never
+/// does — would take its contacts with it.
+model CleanerContact {
+  id           String   @id @default(uuid()) @db.Uuid
+  cleanerId    String   @map("cleaner_id") @db.Uuid
+  phone        String
+  name         String?
+  relationship String?
+  notes        String?
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  cleaner Cleaner @relation(fields: [cleanerId], references: [id], onDelete: Cascade)
+
+  @@unique([cleanerId, phone])
+  @@map("cleaner_contacts")
+}
+
+/// Which cleaner(s) work a property, with full history. A row is CURRENT
+/// while `endedAt` is null; a change ends the current row and starts a new
+/// one — ended rows are never edited or deleted.
+///
+/// Database-enforced (partial unique indexes, added by hand in the
+/// migration because Prisma can't express them — see the migration SQL):
+///   - at most ONE current PRIMARY per property;
+///   - a cleaner holds at most one current row per property.
+/// A property may have TEAM_MEMBERs with no PRIMARY (e.g. a team whose
+/// primary contact hasn't been decided yet) — that is deliberate.
+model PropertyCleanerAssignment {
+  id               String                @id @default(uuid()) @db.Uuid
+  propertyId       String                @map("property_id") @db.Uuid
+  cleanerId        String                @map("cleaner_id") @db.Uuid
+  role             CleanerAssignmentRole
+  startedAt        DateTime              @default(now()) @map("started_at")
+  endedAt          DateTime?             @map("ended_at")
+  assignedByUserId String                @map("assigned_by_user_id") @db.Uuid
+  endedByUserId    String?               @map("ended_by_user_id") @db.Uuid
+  createdAt        DateTime              @default(now()) @map("created_at")
+
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  cleaner    Cleaner  @relation(fields: [cleanerId], references: [id], onDelete: Restrict)
+  assignedBy User     @relation("CleanerAssignmentAssignedBy", fields: [assignedByUserId], references: [id], onDelete: Restrict)
+  endedBy    User?    @relation("CleanerAssignmentEndedBy", fields: [endedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([propertyId, endedAt])
+  @@index([cleanerId, endedAt])
+  @@map("property_cleaner_assignments")
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -801,6 +897,16 @@ enum CleaningType {
   DEEP_CLEAN
   INSPECTION_CLEAN
   MAINTENANCE_CLEAN
+}
+
+enum CleanerStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum CleanerAssignmentRole {
+  PRIMARY
+  TEAM_MEMBER
 }
 
 enum CleaningStatus {

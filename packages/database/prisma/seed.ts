@@ -35,6 +35,10 @@ const RESOURCES = [
   // deliberately narrow (admin + ops_manager only) — kept OUT of
   // read_only's blanket grant below for the same reason, not an oversight.
   "resource_links",
+  // See packages/auth/src/permissions.ts — admin-only (wildcard) until
+  // Kenny/Michelle decide which other roles may view/manage cleaners;
+  // excluded from read_only's blanket grant below for the same reason.
+  "cleaners",
 ] as const;
 
 const ACTIONS: PermissionAction[] = [
@@ -127,11 +131,12 @@ const SYSTEM_ROLES: Array<{
   {
     name: "read_only",
     description: "Read-only access across ops data",
-    // Excludes "resource_links" deliberately — see its own comment in the
-    // RESOURCES list above; V1 read access is admin + ops_manager only.
-    permissionKeys: RESOURCES.filter((r) => r !== "resource_links").map(
-      (r) => `${r}:read`,
-    ),
+    // Excludes "resource_links" and "cleaners" deliberately — see their
+    // own comments in the RESOURCES list above (narrow access pending a
+    // Kenny/Michelle decision; cleaners also carry phone numbers).
+    permissionKeys: RESOURCES.filter(
+      (r) => r !== "resource_links" && r !== "cleaners",
+    ).map((r) => `${r}:read`),
   },
 ];
 

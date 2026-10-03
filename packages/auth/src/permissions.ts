@@ -63,6 +63,15 @@ export const RESOURCES = [
   // roles should see it; create/update/delete stay admin-only via the
   // wildcard grant, same as every other resource here.
   "resource_links",
+  // Cleaners (contact records, not login accounts) and their property
+  // assignments — Cleaner Assignments Phase 3 (2026-10-03). "read" sees
+  // cleaners/assignments with phone numbers MASKED; "manage" is the single
+  // write gate (create/edit/deactivate cleaners, assign/change/end
+  // assignments) and the only key that ever receives a full phone number.
+  // Granted to admin only (wildcard) until Kenny/Michelle decide which
+  // other roles may view or manage cleaners; kept out of read_only's
+  // blanket grant for the same reason as resource_links.
+  "cleaners",
 ] as const;
 
 export type Resource = (typeof RESOURCES)[number];

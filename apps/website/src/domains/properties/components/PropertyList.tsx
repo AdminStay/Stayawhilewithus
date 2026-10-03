@@ -15,6 +15,7 @@ import {
   type Tone,
 } from "@stayw/ui";
 import { Building2 } from "lucide-react";
+import Link from "next/link";
 
 import {
   deletePropertyAction,
@@ -23,6 +24,8 @@ import {
 } from "../actions";
 import type { Property } from "../services/properties.service";
 
+import { PropertyCleanerSummary } from "@/domains/cleaners/components/PropertyCleanerSummary";
+import type { PropertyCleanerSummary as CleanerSummary } from "@/domains/cleaners/services/cleaner-assignments.service";
 import { OwnerRezLink } from "@/domains/integrations/components/OwnerRezLink";
 import { ownerRezPropertyUrl } from "@/domains/integrations/lib/ownerrez-links";
 
@@ -35,7 +38,14 @@ const STATUS_TONE: Record<(typeof STATUSES)[number], Tone> = {
   OFFBOARDED: "error",
 };
 
-export function PropertyList({ properties }: { properties: Property[] }) {
+export function PropertyList({
+  properties,
+  cleanerSummaries = null,
+}: {
+  properties: Property[];
+  /** propertyId → current cleaners; null hides the Cleaner column (no cleaners:read). */
+  cleanerSummaries?: Record<string, CleanerSummary> | null;
+}) {
   if (properties.length === 0) {
     return (
       <Card noPadding>
@@ -54,6 +64,7 @@ export function PropertyList({ properties }: { properties: Property[] }) {
         <TableHeaderCell>Property</TableHeaderCell>
         <TableHeaderCell>Location</TableHeaderCell>
         <TableHeaderCell>Status</TableHeaderCell>
+        {cleanerSummaries && <TableHeaderCell>Cleaner</TableHeaderCell>}
         <TableHeaderCell>Max occupancy</TableHeaderCell>
         <TableHeaderCell className="text-right">Actions</TableHeaderCell>
       </TableHead>
@@ -77,6 +88,17 @@ export function PropertyList({ properties }: { properties: Property[] }) {
             <TableCell>
               <StatusIndicator label={p.status} tone={STATUS_TONE[p.status]} />
             </TableCell>
+            {cleanerSummaries && (
+              <TableCell>
+                <Link
+                  href={`/cleaners#property-${p.id}`}
+                  className="hover:underline"
+                  title={`Manage cleaners for ${p.name}`}
+                >
+                  <PropertyCleanerSummary summary={cleanerSummaries[p.id]} />
+                </Link>
+              </TableCell>
+            )}
             <TableCell>
               <form
                 action={updatePropertyOccupancyAction}
