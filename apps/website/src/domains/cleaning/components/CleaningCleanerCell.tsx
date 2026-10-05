@@ -5,6 +5,10 @@ import { useActionState } from "react";
 
 import { CLEAR_CLEANER_VALUE } from "../schemas/cleaning.schema";
 
+import {
+  CleanerNotifiedControl,
+  type CleanerNotificationView,
+} from "./CleanerNotifiedControl";
 import { CopyCleanerMessageButton } from "./CopyCleanerMessageButton";
 import {
   cleanerOptionGroups,
@@ -34,6 +38,7 @@ export function CleaningCleanerCell({
   canChange,
   action,
   cleanerMessage = null,
+  notification = null,
 }: {
   scheduleId: string;
   propertyName: string;
@@ -49,6 +54,15 @@ export function CleaningCleanerCell({
    * null otherwise, so no one else ever receives it.
    */
   cleanerMessage?: string | null;
+  /**
+   * Phase 5.2: "Mark cleaner notified". Passed ONLY for an admin, on an
+   * open job that has a cleaner (same rule as cleanerMessage); null
+   * otherwise. `latest` is the job's latest recorded notification, if any.
+   */
+  notification?: {
+    latest: CleanerNotificationView | null;
+    action: CleaningAction;
+  } | null;
 }) {
   const teamOnly = isTeamOnly(propertyCleaners);
 
@@ -66,6 +80,14 @@ export function CleaningCleanerCell({
       )}
       {cleaner && cleanerMessage && (
         <CopyCleanerMessageButton message={cleanerMessage} />
+      )}
+      {cleaner && notification && (
+        <CleanerNotifiedControl
+          scheduleId={scheduleId}
+          cleanerId={cleaner.id}
+          latest={notification.latest}
+          action={notification.action}
+        />
       )}
       {teamOnly && propertyCleaners && (
         <div className="text-xs text-ink-muted">

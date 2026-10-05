@@ -4,6 +4,7 @@ const m = vi.hoisted(() => ({
   getCurrentUser: vi.fn(),
   createCleaningSchedule: vi.fn(),
   assignCleaningScheduleCleaner: vi.fn(),
+  markCleanerNotified: vi.fn(),
   revalidatePath: vi.fn(),
 }));
 
@@ -18,6 +19,9 @@ vi.mock("./services/cleaning.service", () => ({
   markCleaningScheduleMissed: vi.fn(),
   rescheduleCleaningSchedule: vi.fn(),
 }));
+vi.mock("./services/cleaner-notifications.service", () => ({
+  markCleanerNotified: m.markCleanerNotified,
+}));
 vi.mock("next/cache", () => ({ revalidatePath: m.revalidatePath }));
 vi.mock("@stayw/auth", () => ({
   ForbiddenError: class ForbiddenError extends Error {},
@@ -28,6 +32,7 @@ import { ForbiddenError } from "@stayw/auth";
 import {
   assignCleaningScheduleCleanerAction,
   createCleaningScheduleAction,
+  markCleanerNotifiedAction,
   type CleaningFormState,
 } from "./actions";
 import { CleaningRuleError } from "./lib/errors";
@@ -246,5 +251,60 @@ describe("assignCleaningScheduleCleanerAction — clear (Needs cleaner)", () => 
       status: "error",
       message: "This cleaning is missed, so its cleaner can't be changed.",
     });
+  });
+});
+
+describe("markCleanerNotifiedAction (Cleaner Phase 5.2)", () => {
+  const ALEX_ID = "33333333-3333-3333-3333-333333333333";
+
+  it("records the notification and reports it", async () => {
+    m.markCleanerNotified.mockResolvedValueOnce({
+      cleanerName: "Alex",
+      notifiedAt: new Date(),
+    });
+
+    const state = await markCleanerNotifiedAction(
+      IDLE,
+      form({ scheduleId: SCHEDULE, cleanerId: ALEX_ID }),
+    );
+
+    expect(m.markCleanerNotified).toHaveBeenCalledWith(actor, {
+      scheduleId: SCHEDULE,
+      cleanerId: ALEX_ID,
+    });
+    expect(state).toEqual({
+      status: "success",
+      message: "Recorded: Alex was notified.",
+    });
+    expect(m.revalidatePath).toHaveBeenCalledWith("/cleaning");
+  });
+
+  it("validates input before calling the service", async () => {
+    const state = await markCleanerNotifiedAction(
+      IDLE,
+      form({ scheduleId: SCHEDULE, cleanerId: "" }),
+    );
+
+    expect(state.status).toBe("validation_error");
+    expect(m.markCleanerNotified).not.toHaveBeenCalled();
+  });
+
+  it("shows a refusal (e.g. not admin / cleaner changed) as-is", async () => {
+    m.markCleanerNotified.mockRejectedValueOnce(
+      new CleaningRuleError(
+        "Only an admin can record that a cleaner was notified.",
+      ),
+    );
+
+    const state = await markCleanerNotifiedAction(
+      IDLE,
+      form({ scheduleId: SCHEDULE, cleanerId: ALEX_ID }),
+    );
+
+    expect(state).toEqual({
+      status: "error",
+      message: "Only an admin can record that a cleaner was notified.",
+    });
+    expect(m.revalidatePath).not.toHaveBeenCalled();
   });
 });

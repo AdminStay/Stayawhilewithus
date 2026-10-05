@@ -14,6 +14,7 @@ const m = vi.hoisted(() => ({
   canChangeCleaningCleaner: vi.fn(),
   listCurrentPropertyCleanerOptions: vi.fn(),
   listActiveCleanerOptions: vi.fn(),
+  listLatestCleanerNotifications: vi.fn(),
 }));
 
 vi.mock("@stayw/auth", () => ({ hasPermission: m.hasPermission }));
@@ -43,6 +44,10 @@ vi.mock("@/domains/cleaning/actions", () => ({
   cancelCleaningScheduleAction: vi.fn(),
   markCleaningScheduleMissedAction: vi.fn(),
   rescheduleCleaningScheduleAction: vi.fn(),
+  markCleanerNotifiedAction: vi.fn(),
+}));
+vi.mock("@/domains/cleaning/services/cleaner-notifications.service", () => ({
+  listLatestCleanerNotifications: m.listLatestCleanerNotifications,
 }));
 
 import CleaningPage from "./page";
@@ -73,6 +78,7 @@ const schedule = (
 const ALEX = { id: "c-alex", name: "Alex", status: "ACTIVE" };
 
 beforeEach(() => {
+  m.listLatestCleanerNotifications.mockResolvedValue(new Map());
   m.listCleaningSchedules.mockResolvedValue([
     schedule("s1", "p-harbor", "Harbor House", "SCHEDULED", ALEX),
     schedule("s2", "p-sandy", "Sandy Nudes", "SCHEDULED", null),
@@ -276,5 +282,80 @@ describe("/cleaning — Copy cleaner message (Cleaner Phase 5.1)", () => {
       ].join("\n"),
     );
     expect(copied).not.toMatch(/Secret Lane|LOCKBOX|4321|9876|door/i);
+  });
+});
+
+describe("/cleaning — Mark cleaner notified (Cleaner Phase 5.2)", () => {
+  const MARK = { name: "Mark cleaner notified" };
+
+  it("admin: shown on an open job with a cleaner, with the latest record; not on an unassigned job", async () => {
+    m.hasPermission.mockResolvedValue(true);
+    m.canChangeCleaningCleaner.mockResolvedValue(true);
+    m.listCleaningSchedules.mockResolvedValue([
+      schedule("a", "p-harbor", "Harbor House", "SCHEDULED", ALEX),
+      schedule("b", "p-sandy", "Sandy Nudes", "SCHEDULED", null),
+    ]);
+    m.listLatestCleanerNotifications.mockResolvedValue(
+      new Map([
+        [
+          "a",
+          {
+            cleanerId: "c-alex",
+            cleanerName: "Alex",
+            notifiedAt: new Date("2026-10-06T15:05:00Z"),
+            notifiedByName: "Michelle",
+          },
+        ],
+      ]),
+    );
+
+    render(await CleaningPage());
+
+    expect(m.listLatestCleanerNotifications).toHaveBeenCalledWith(
+      { userId: "user-1" },
+      ["a", "b"],
+    );
+    const harbor = rowFor("Harbor House");
+    // Formatted in America/Chicago like the rest of the dashboard.
+    expect(
+      within(harbor).getByText(
+        /Notified ✓ Oct 6, 2026, 10:05 AM CDT · by Michelle/,
+      ),
+    ).toBeTruthy();
+    expect(
+      within(harbor).getByRole("button", { name: "Mark notified again" }),
+    ).toBeTruthy();
+    expect(
+      within(rowFor("Sandy Nudes")).queryByRole("button", MARK),
+    ).toBeNull();
+  });
+
+  it.each(["COMPLETED", "CANCELLED", "MISSED"])(
+    "admin: not shown on a %s job",
+    async (status) => {
+      m.hasPermission.mockResolvedValue(true);
+      m.canChangeCleaningCleaner.mockResolvedValue(true);
+      m.listCleaningSchedules.mockResolvedValue([
+        schedule("a", "p-harbor", "Harbor House", status, ALEX),
+      ]);
+
+      render(await CleaningPage());
+
+      expect(screen.queryByRole("button", MARK)).toBeNull();
+      expect(screen.queryByText("Not notified yet")).toBeNull();
+    },
+  );
+
+  it("non-admin: never shown, and the notification history is never read", async () => {
+    m.hasPermission.mockResolvedValue(true);
+    m.canChangeCleaningCleaner.mockResolvedValue(false);
+    m.listCleaningSchedules.mockResolvedValue([
+      schedule("a", "p-harbor", "Harbor House", "SCHEDULED", ALEX),
+    ]);
+
+    render(await CleaningPage());
+
+    expect(screen.queryByRole("button", MARK)).toBeNull();
+    expect(m.listLatestCleanerNotifications).not.toHaveBeenCalled();
   });
 });
