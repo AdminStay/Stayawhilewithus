@@ -58,3 +58,17 @@ export const assignCleaningScheduleCleanerSchema = z.object({
 export type AssignCleaningScheduleCleanerInput = z.infer<
   typeof assignCleaningScheduleCleanerSchema
 >;
+
+/**
+ * Cleaner Phase 5.2 — "Mark cleaner notified". `cleanerId` is the cleaner
+ * the admin saw on the page; the service refuses if the job's cleaner has
+ * changed since.
+ */
+export const markCleanerNotifiedSchema = z.object({
+  scheduleId: z.string().uuid(),
+  cleanerId: z.string().uuid(),
+});
+
+export type MarkCleanerNotifiedInput = z.infer<
+  typeof markCleanerNotifiedSchema
+>;

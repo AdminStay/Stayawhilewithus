@@ -7,8 +7,10 @@ import { CleaningRuleError } from "./lib/errors";
 import {
   assignCleaningScheduleCleanerSchema,
   createCleaningScheduleSchema,
+  markCleanerNotifiedSchema,
   rescheduleCleaningScheduleSchema,
 } from "./schemas/cleaning.schema";
+import { markCleanerNotified } from "./services/cleaner-notifications.service";
 import {
   assignCleaningScheduleCleaner,
   cancelCleaningSchedule,
@@ -156,4 +158,38 @@ export async function rescheduleCleaningScheduleAction(formData: FormData) {
   await rescheduleCleaningSchedule(actor, scheduleId, input);
   revalidatePath("/cleaning");
   revalidatePath("/");
+}
+
+/**
+ * Cleaner Phase 5.2 — records that the admin notified the job's cleaner
+ * (by hand). Writes one audit entry; sends nothing and changes no job.
+ */
+export async function markCleanerNotifiedAction(
+  _prevState: CleaningFormState,
+  formData: FormData,
+): Promise<CleaningFormState> {
+  const parsed = markCleanerNotifiedSchema.safeParse({
+    scheduleId: formData.get("scheduleId"),
+    cleanerId: formData.get("cleanerId"),
+  });
+  if (!parsed.success) {
+    return {
+      status: "validation_error",
+      message: parsed.error.issues[0]?.message ?? "Invalid input.",
+    };
+  }
+
+  let result: { cleanerName: string };
+  try {
+    const actor = await getCurrentUser();
+    result = await markCleanerNotified(actor, parsed.data);
+  } catch (err) {
+    return toErrorState(err, "markCleanerNotifiedAction");
+  }
+
+  revalidatePath("/cleaning");
+  return {
+    status: "success",
+    message: `Recorded: ${result.cleanerName} was notified.`,
+  };
 }

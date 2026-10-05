@@ -435,3 +435,107 @@ describe("Copy cleaner message (Cleaner Phase 5.1)", () => {
     expect(screen.getByText(/Property: Harbor House/)).toBeTruthy();
   });
 });
+
+describe("Mark cleaner notified (Cleaner Phase 5.2)", () => {
+  const cell = {
+    scheduleId: "s1",
+    propertyName: "Harbor House",
+    propertyCleaners: PRIMARY_PROPERTY,
+    activeCleaners: ACTIVE,
+    canChange: true,
+    action,
+  };
+  const MARK = { name: "Mark cleaner notified" };
+
+  function hidden(container: HTMLElement, name: string) {
+    return (
+      container.querySelector(
+        `input[type="hidden"][name="${name}"]`,
+      ) as HTMLInputElement | null
+    )?.value;
+  }
+
+  it('shows "Not notified yet" and posts the job and the cleaner shown', () => {
+    const { container } = render(
+      <CleaningCleanerCell
+        {...cell}
+        cleaner={{ ...ALEX, status: "ACTIVE" }}
+        notification={{ latest: null, action }}
+      />,
+    );
+
+    expect(screen.getByText("Not notified yet")).toBeTruthy();
+    expect(screen.getByRole("button", MARK)).toBeTruthy();
+    const form = screen.getByRole("button", MARK).closest("form")!;
+    expect(hidden(form, "scheduleId")).toBe("s1");
+    expect(hidden(form, "cleanerId")).toBe(ALEX.id);
+    expect(container.textContent).not.toMatch(/\d{3}.?\d{4}|•/);
+  });
+
+  it("shows when and by whom the current cleaner was notified", () => {
+    render(
+      <CleaningCleanerCell
+        {...cell}
+        cleaner={{ ...ALEX, status: "ACTIVE" }}
+        notification={{
+          latest: {
+            cleanerId: ALEX.id,
+            cleanerName: "Alex",
+            notifiedAtLabel: "Oct 6, 2026, 10:05 AM CDT",
+            notifiedByName: "Michelle",
+          },
+          action,
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText(/Notified ✓ Oct 6, 2026, 10:05 AM CDT · by Michelle/),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Mark notified again" }),
+    ).toBeTruthy();
+  });
+
+  it("does not count a notice sent to a previous cleaner", () => {
+    render(
+      <CleaningCleanerCell
+        {...cell}
+        cleaner={{ ...ALEX, status: "ACTIVE" }}
+        notification={{
+          latest: {
+            cleanerId: SAM.id,
+            cleanerName: "Sam",
+            notifiedAtLabel: "Oct 5, 2026, 9:00 AM CDT",
+            notifiedByName: null,
+          },
+          action,
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText(/Not notified yet — the last notice went to Sam/),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", MARK)).toBeTruthy();
+  });
+
+  it("is not shown without a cleaner, or when not provided (non-admin / closed job)", () => {
+    render(
+      <>
+        <CleaningCleanerCell
+          {...cell}
+          cleaner={null}
+          notification={{ latest: null, action }}
+        />
+        <CleaningCleanerCell
+          {...cell}
+          cleaner={{ ...ALEX, status: "ACTIVE" }}
+        />
+      </>,
+    );
+
+    expect(screen.queryByRole("button", MARK)).toBeNull();
+    expect(screen.queryByText("Not notified yet")).toBeNull();
+  });
+});

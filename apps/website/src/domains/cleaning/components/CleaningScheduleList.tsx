@@ -24,6 +24,7 @@ import {
 import { buildCleanerMessage } from "../lib/cleaner-message";
 import type { CleaningSchedule } from "../services/cleaning.service";
 
+import type { CleanerNotificationView } from "./CleanerNotifiedControl";
 import { CleaningCleanerCell } from "./CleaningCleanerCell";
 import type {
   CleanerOption,
@@ -52,6 +53,12 @@ export interface CleaningCleanerProps {
   propertyCleaners: Record<string, PropertyCleaners>;
   activeCleaners: CleanerOption[];
   assignCleanerAction: CleaningAction;
+  /**
+   * Phase 5.2 (admin only): latest recorded notification per job id, and
+   * the action that records a new one. Omitted for everyone else.
+   */
+  notifications?: Record<string, CleanerNotificationView>;
+  markNotifiedAction?: CleaningAction;
 }
 
 /**
@@ -107,6 +114,12 @@ export function CleaningScheduleList({
             s.status !== "COMPLETED" &&
             s.status !== "CANCELLED" &&
             s.status !== "MISSED";
+          // Phases 5.1 + 5.2: copy message / mark notified — admin only, on
+          // open jobs that have a cleaner.
+          const adminOpenWithCleaner =
+            cleaners?.canChangeCleaner === true &&
+            s.cleaner !== null &&
+            !CLEANER_LOCKED.has(s.status);
           return (
             <TableRow key={s.id}>
               <TableCell>
@@ -126,11 +139,9 @@ export function CleaningScheduleList({
                     }
                     action={cleaners.assignCleanerAction}
                     cleanerMessage={
-                      // Phase 5.1: admin only, open jobs with a cleaner. Built
-                      // here (server) from the five allowed fields only.
-                      cleaners.canChangeCleaner &&
-                      s.cleaner &&
-                      !CLEANER_LOCKED.has(s.status)
+                      // Phase 5.1: built here (server) from the five allowed
+                      // fields only.
+                      adminOpenWithCleaner && s.cleaner
                         ? buildCleanerMessage({
                             propertyName: s.property.name,
                             scheduledDate: s.scheduledDate,
@@ -139,6 +150,14 @@ export function CleaningScheduleList({
                             cleaningType: s.cleaningType,
                             cleanerName: s.cleaner.name,
                           })
+                        : null
+                    }
+                    notification={
+                      adminOpenWithCleaner && cleaners.markNotifiedAction
+                        ? {
+                            latest: cleaners.notifications?.[s.id] ?? null,
+                            action: cleaners.markNotifiedAction,
+                          }
                         : null
                     }
                   />

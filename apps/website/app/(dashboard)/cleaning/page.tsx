@@ -6,15 +6,20 @@ import { listActiveCleanerOptions } from "@/domains/cleaners/services/cleaners.s
 import {
   assignCleaningScheduleCleanerAction,
   createCleaningScheduleAction,
+  markCleanerNotifiedAction,
 } from "@/domains/cleaning/actions";
+import type { CleanerNotificationView } from "@/domains/cleaning/components/CleanerNotifiedControl";
 import { CleaningScheduleList } from "@/domains/cleaning/components/CleaningScheduleList";
 import { CreateCleaningScheduleForm } from "@/domains/cleaning/components/CreateCleaningScheduleForm";
+import type { CleanerNotificationRecord } from "@/domains/cleaning/lib/cleaner-notification";
+import { listLatestCleanerNotifications } from "@/domains/cleaning/services/cleaner-notifications.service";
 import {
   canChangeCleaningCleaner,
   listCleaningSchedules,
 } from "@/domains/cleaning/services/cleaning.service";
 import { listProperties } from "@/domains/properties/services/properties.service";
 import { listReservations } from "@/domains/reservations/services/reservations.service";
+import { formatTimestamp } from "@/domains/smart-devices/lib/format-timestamp";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
 /**
@@ -35,12 +40,29 @@ export default async function CleaningPage() {
       canChangeCleaningCleaner(actor),
     ]);
 
-  const [propertyCleaners, activeCleaners] = canSeeCleaners
+  const isAdmin = canSeeCleaners && canChange;
+  const [propertyCleaners, activeCleaners, latestNotifications] = canSeeCleaners
     ? await Promise.all([
         listCurrentPropertyCleanerOptions(actor),
         canChange ? listActiveCleanerOptions(actor) : Promise.resolve([]),
+        // Phase 5.2: admin only — read from the audit trail, never sent.
+        isAdmin
+          ? listLatestCleanerNotifications(
+              actor,
+              schedules.map((s) => s.id),
+            )
+          : Promise.resolve(new Map<string, CleanerNotificationRecord>()),
       ])
-    : [{}, []];
+    : [{}, [], new Map<string, CleanerNotificationRecord>()];
+  const notifications: Record<string, CleanerNotificationView> = {};
+  for (const [scheduleId, n] of latestNotifications) {
+    notifications[scheduleId] = {
+      cleanerId: n.cleanerId,
+      cleanerName: n.cleanerName,
+      notifiedAtLabel: formatTimestamp(n.notifiedAt),
+      notifiedByName: n.notifiedByName,
+    };
+  }
 
   return (
     <div>
@@ -66,10 +88,13 @@ export default async function CleaningPage() {
         schedules={schedules}
         cleaners={{
           canSeeCleaners,
-          canChangeCleaner: canSeeCleaners && canChange,
+          canChangeCleaner: isAdmin,
           propertyCleaners,
           activeCleaners,
           assignCleanerAction: assignCleaningScheduleCleanerAction,
+          ...(isAdmin
+            ? { notifications, markNotifiedAction: markCleanerNotifiedAction }
+            : {}),
         }}
       />
     </div>
