@@ -11,6 +11,14 @@ const { mockPrisma } = vi.hoisted(() => {
       create: vi.fn(),
       update: vi.fn(),
     },
+    // Present only so tests can prove assignment changes never touch
+    // cleanings (Cleaner Phase 4, Option A).
+    cleaningSchedule: {
+      update: vi.fn(),
+      updateMany: vi.fn(),
+      create: vi.fn(),
+      findMany: vi.fn(),
+    },
     $transaction: vi.fn(),
   };
   return { mockPrisma };
@@ -30,7 +38,9 @@ import { CleanerRuleError } from "../lib/errors";
 import {
   addTeamMember,
   endCleanerAssignment,
+  findCurrentPrimaryCleanerId,
   listCurrentCleanerSummaries,
+  listCurrentPropertyCleanerOptions,
   listPropertyCleanerAssignments,
   setPrimaryCleaner,
 } from "./cleaner-assignments.service";
@@ -176,6 +186,37 @@ describe("setPrimaryCleaner", () => {
         promotedFromTeam: false,
       },
     });
+  });
+
+  it("changing the primary does NOT change any existing cleaning's cleanerId (Option A)", async () => {
+    givenTargets(property(), cleaner(SAM));
+    mockPrisma.propertyCleanerAssignment.findMany.mockResolvedValueOnce([
+      current("old-primary", ALEX, "PRIMARY"),
+    ]);
+
+    await setPrimaryCleaner(actor, { propertyId: PROPERTY, cleanerId: SAM });
+
+    // Existing jobs keep their stored cleaner: nothing reads, moves or
+    // bulk-updates cleanings when the property's PRIMARY changes.
+    for (const fn of Object.values(mockPrisma.cleaningSchedule)) {
+      expect(fn).not.toHaveBeenCalled();
+    }
+  });
+
+  it("ending or adding an assignment does NOT touch cleanings either", async () => {
+    givenTargets(property(), cleaner(SAM));
+    mockPrisma.propertyCleanerAssignment.findFirst.mockResolvedValueOnce(null);
+    await addTeamMember(actor, { propertyId: PROPERTY, cleanerId: SAM });
+
+    mockPrisma.propertyCleanerAssignment.findUnique.mockResolvedValueOnce({
+      ...current("old-primary", ALEX, "PRIMARY"),
+      property: { id: PROPERTY, name: "Harbor House" },
+    });
+    await endCleanerAssignment(actor, { assignmentId: "old-primary" });
+
+    for (const fn of Object.values(mockPrisma.cleaningSchedule)) {
+      expect(fn).not.toHaveBeenCalled();
+    }
   });
 
   it("promoting a team member (a team with no primary yet) ends their team row and creates PRIMARY", async () => {
@@ -433,6 +474,85 @@ describe("reads", () => {
     expect(summaries).toEqual({
       p1: { primary: "Alex", teamMembers: ["Sam"] },
       p2: { primary: null, teamMembers: ["Sam"] },
+    });
+  });
+});
+
+describe("Cleaner Phase 4 lookups", () => {
+  it("findCurrentPrimaryCleanerId: current, ACTIVE PRIMARY only — via the caller's transaction client", async () => {
+    const tx = {
+      propertyCleanerAssignment: {
+        findFirst: vi.fn().mockResolvedValueOnce({ cleanerId: ALEX }),
+      },
+    };
+
+    const id = await findCurrentPrimaryCleanerId(tx as never, PROPERTY);
+
+    expect(id).toBe(ALEX);
+    expect(tx.propertyCleanerAssignment.findFirst).toHaveBeenCalledWith({
+      where: {
+        propertyId: PROPERTY,
+        endedAt: null,
+        role: "PRIMARY",
+        cleaner: { status: "ACTIVE" },
+      },
+      select: { cleanerId: true },
+    });
+    expect(
+      mockPrisma.propertyCleanerAssignment.findFirst,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("findCurrentPrimaryCleanerId: null when there is no current PRIMARY (team-only or unassigned)", async () => {
+    const tx = {
+      propertyCleanerAssignment: {
+        findFirst: vi.fn().mockResolvedValueOnce(null),
+      },
+    };
+    expect(await findCurrentPrimaryCleanerId(tx as never, PROPERTY)).toBeNull();
+  });
+
+  it("listCurrentPropertyCleanerOptions: requires cleaners:read; ids + names only, grouped by property", async () => {
+    mockPrisma.propertyCleanerAssignment.findMany.mockResolvedValueOnce([
+      {
+        propertyId: "p1",
+        role: "PRIMARY",
+        cleaner: { id: ALEX, name: "Alex" },
+      },
+      {
+        propertyId: "p2",
+        role: "TEAM_MEMBER",
+        cleaner: { id: "k", name: "Kris" },
+      },
+      {
+        propertyId: "p2",
+        role: "TEAM_MEMBER",
+        cleaner: { id: "l", name: "Lolis" },
+      },
+    ]);
+
+    const options = await listCurrentPropertyCleanerOptions(actor);
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "cleaners:read");
+    expect(mockPrisma.propertyCleanerAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { endedAt: null },
+        select: {
+          propertyId: true,
+          role: true,
+          cleaner: { select: { id: true, name: true } },
+        },
+      }),
+    );
+    expect(options).toEqual({
+      p1: { primary: { id: ALEX, name: "Alex" }, teamMembers: [] },
+      p2: {
+        primary: null,
+        teamMembers: [
+          { id: "k", name: "Kris" },
+          { id: "l", name: "Lolis" },
+        ],
+      },
     });
   });
 });

@@ -21,13 +21,41 @@ import {
   markCleaningScheduleMissedAction,
   rescheduleCleaningScheduleAction,
 } from "../actions";
-
 import type { CleaningSchedule } from "../services/cleaning.service";
+
+import { CleaningCleanerCell } from "./CleaningCleanerCell";
+import type {
+  CleanerOption,
+  CleaningAction,
+  PropertyCleaners,
+} from "./cleaner-options";
 
 type ScheduleWithRelations = CleaningSchedule & {
   property: { name: string };
   reservation: { id: string } | null;
+  cleaner: { id: string; name: string; status: string } | null;
 };
+
+/**
+ * Cleaner Phase 4 inputs. Omitted (or `canSeeCleaners: false`) for viewers
+ * without cleaners:read — the Cleaner column is then hidden entirely, the
+ * same rule as the Cleaner column on /properties.
+ */
+export interface CleaningCleanerProps {
+  canSeeCleaners: boolean;
+  /** Admin only — shows the per-job cleaner picker on open jobs. */
+  canChangeCleaner: boolean;
+  propertyCleaners: Record<string, PropertyCleaners>;
+  activeCleaners: CleanerOption[];
+  assignCleanerAction: CleaningAction;
+}
+
+/**
+ * Matches the server's CLEANER_LOCKED_STATUSES: a completed, cancelled or
+ * missed job's cleaner is fixed. Kept as a local copy so this component
+ * imports only types from the service module.
+ */
+const CLEANER_LOCKED = new Set(["COMPLETED", "CANCELLED", "MISSED"]);
 
 const STATUS_TONE: Record<string, Tone> = {
   SCHEDULED: "info",
@@ -42,9 +70,12 @@ function formatDate(date: Date): string {
 
 export function CleaningScheduleList({
   schedules,
+  cleaners,
 }: {
   schedules: ScheduleWithRelations[];
+  cleaners?: CleaningCleanerProps;
 }) {
+  const showCleaner = cleaners?.canSeeCleaners === true;
   if (schedules.length === 0) {
     return (
       <Card noPadding>
@@ -61,6 +92,7 @@ export function CleaningScheduleList({
     <Table>
       <TableHead>
         <TableHeaderCell>Property</TableHeaderCell>
+        {showCleaner && <TableHeaderCell>Cleaner</TableHeaderCell>}
         <TableHeaderCell>Scheduled</TableHeaderCell>
         <TableHeaderCell>Status</TableHeaderCell>
         <TableHeaderCell className="text-right">Actions</TableHeaderCell>
@@ -77,6 +109,21 @@ export function CleaningScheduleList({
                 <span className="font-medium text-ink">{s.property.name}</span>
                 <div className="text-xs text-ink-muted">{s.cleaningType}</div>
               </TableCell>
+              {showCleaner && cleaners && (
+                <TableCell>
+                  <CleaningCleanerCell
+                    scheduleId={s.id}
+                    propertyName={s.property.name}
+                    cleaner={s.cleaner}
+                    propertyCleaners={cleaners.propertyCleaners[s.propertyId]}
+                    activeCleaners={cleaners.activeCleaners}
+                    canChange={
+                      cleaners.canChangeCleaner && !CLEANER_LOCKED.has(s.status)
+                    }
+                    action={cleaners.assignCleanerAction}
+                  />
+                </TableCell>
+              )}
               <TableCell className="text-ink-muted">
                 {formatDate(s.scheduledDate)}
                 {s.scheduledStartTime && ` · ${s.scheduledStartTime}`}

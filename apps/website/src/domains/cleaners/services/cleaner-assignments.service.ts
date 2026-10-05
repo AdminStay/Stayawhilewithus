@@ -35,8 +35,12 @@ import { recordAudit } from "@/platform/audit/record-audit";
  * cases into readable messages. A property may have team members and no
  * PRIMARY — e.g. a team whose primary contact hasn't been decided.
  *
- * Nothing here touches cleanings (CleaningSchedule.cleanerId) or sends any
- * message — those are Phase 4 / Phase 5.
+ * Nothing here changes cleanings (CleaningSchedule.cleanerId) or sends any
+ * message. That is deliberate (Cleaner Phase 4, approved "Option A"): a new
+ * cleaning copies the property's current PRIMARY when it is created
+ * (findCurrentPrimaryCleanerId below), and existing cleanings keep their
+ * stored cleaner when the PRIMARY later changes — an operator changes one
+ * job at a time on /cleaning. Messaging is Phase 5.
  */
 
 export interface AssignmentView {
@@ -206,6 +210,75 @@ export async function listCurrentCleanerSummaries(
     else summary.teamMembers.push(a.cleaner.name);
   }
   return summaries;
+}
+
+/** A property's current cleaners as ids + names (no phones), for pickers. */
+export interface PropertyCleanerOptions {
+  primary: { id: string; name: string } | null;
+  teamMembers: Array<{ id: string; name: string }>;
+}
+
+/**
+ * propertyId → current PRIMARY and TEAM_MEMBERs, ids + names only. Used by
+ * /cleaning (Cleaner Phase 4) to show a property's default cleaner or team
+ * and to build the per-job cleaner picker. Properties with no current
+ * assignment are simply absent from the map.
+ */
+export async function listCurrentPropertyCleanerOptions(
+  actor: AuthContext,
+): Promise<Record<string, PropertyCleanerOptions>> {
+  await assertPermission(actor, "cleaners:read");
+
+  const current = await prisma.propertyCleanerAssignment.findMany({
+    where: { endedAt: null },
+    orderBy: { startedAt: "asc" },
+    select: {
+      propertyId: true,
+      role: true,
+      cleaner: { select: { id: true, name: true } },
+    },
+  });
+
+  const options: Record<string, PropertyCleanerOptions> = {};
+  for (const a of current) {
+    const entry = (options[a.propertyId] ??= {
+      primary: null,
+      teamMembers: [],
+    });
+    if (a.role === "PRIMARY") entry.primary = a.cleaner;
+    else entry.teamMembers.push(a.cleaner);
+  }
+  return options;
+}
+
+/**
+ * The property's current PRIMARY cleaner id, or null. Used as the default
+ * cleaner when a cleaning is created (Cleaner Phase 4) — the value is
+ * copied onto the cleaning and does NOT follow later assignment changes.
+ *
+ * Only a CURRENT (endedAt null) PRIMARY row counts, and only if that
+ * cleaner is ACTIVE. A TEAM_MEMBER is never returned: a team-only property
+ * has no default, and nothing here designates one. The database allows at
+ * most one current PRIMARY per property, so this is never ambiguous.
+ *
+ * No permission check — an internal lookup for callers that have already
+ * checked their own (e.g. createCleaningSchedule); pass their transaction
+ * client so the lookup and the write see the same state.
+ */
+export async function findCurrentPrimaryCleanerId(
+  client: Prisma.TransactionClient,
+  propertyId: string,
+): Promise<string | null> {
+  const primary = await client.propertyCleanerAssignment.findFirst({
+    where: {
+      propertyId,
+      endedAt: null,
+      role: "PRIMARY",
+      cleaner: { status: "ACTIVE" },
+    },
+    select: { cleanerId: true },
+  });
+  return primary?.cleanerId ?? null;
 }
 
 function isUniqueViolation(err: unknown): boolean {
