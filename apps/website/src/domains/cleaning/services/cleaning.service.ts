@@ -10,6 +10,7 @@ import {
 
 export type { CleaningSchedule };
 
+import { CLEANING_TYPE_LABELS } from "../lib/cleaner-message";
 import { CleaningRuleError } from "../lib/errors";
 import type {
   AssignCleaningScheduleCleanerInput,
@@ -20,13 +21,6 @@ import type {
 import { findCurrentPrimaryCleanerId } from "@/domains/cleaners/services/cleaner-assignments.service";
 import { recordAudit } from "@/platform/audit/record-audit";
 import { isGlobalAdmin } from "@/platform/auth/is-global-admin";
-
-const CLEANING_TYPE_LABELS: Record<string, string> = {
-  TURNOVER: "Turnover cleaning",
-  DEEP_CLEAN: "Deep clean",
-  INSPECTION_CLEAN: "Inspection clean",
-  MAINTENANCE_CLEAN: "Maintenance clean",
-};
 
 /**
  * A cleaning's cleaner can't be assigned, changed or cleared once the job is

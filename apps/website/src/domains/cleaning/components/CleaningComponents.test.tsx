@@ -329,3 +329,109 @@ describe("CreateCleaningScheduleForm", () => {
     expect(container.querySelector('[name="cleanerId"]')).toBeNull();
   });
 });
+
+describe("Copy cleaner message (Cleaner Phase 5.1)", () => {
+  const MESSAGE = "Hi Alex, cleaning scheduled:\nProperty: Harbor House";
+  const cellBase = {
+    scheduleId: "s1",
+    propertyName: "Harbor House",
+    propertyCleaners: PRIMARY_PROPERTY,
+    activeCleaners: ACTIVE,
+    canChange: true,
+    action,
+  };
+
+  function mockClipboard(writeText: ReturnType<typeof vi.fn>) {
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+  }
+
+  it("shows the action when the job has a cleaner and a message was provided", () => {
+    render(
+      <CleaningCleanerCell
+        {...cellBase}
+        cleaner={{ ...ALEX, status: "ACTIVE" }}
+        cleanerMessage={MESSAGE}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Copy cleaner message" }),
+    ).toBeTruthy();
+  });
+
+  it('shows "Needs cleaner" and no copy action when the job has no cleaner', () => {
+    render(
+      <CleaningCleanerCell
+        {...cellBase}
+        cleaner={null}
+        cleanerMessage={MESSAGE}
+      />,
+    );
+
+    expect(screen.getByText("Needs cleaner")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Copy cleaner message" }),
+    ).toBeNull();
+  });
+
+  it("shows no copy action when no message is provided (non-admin / closed job)", () => {
+    render(
+      <CleaningCleanerCell
+        {...cellBase}
+        canChange={false}
+        cleaner={{ ...ALEX, status: "ACTIVE" }}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "Copy cleaner message" }),
+    ).toBeNull();
+  });
+
+  it("copies exactly the message to the clipboard and confirms, without submitting any form", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    mockClipboard(writeText);
+    const submit = vi.fn((e: Event) => e.preventDefault());
+    document.addEventListener("submit", submit);
+
+    render(
+      <CleaningCleanerCell
+        {...cellBase}
+        cleaner={{ ...ALEX, status: "ACTIVE" }}
+        cleanerMessage={MESSAGE}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy cleaner message" }),
+    );
+
+    expect(writeText).toHaveBeenCalledWith(MESSAGE);
+    expect(
+      await screen.findByRole("button", { name: "Copied ✓" }),
+    ).toBeTruthy();
+    expect(submit).not.toHaveBeenCalled();
+    expect(action).not.toHaveBeenCalled();
+    document.removeEventListener("submit", submit);
+  });
+
+  it("falls back to showing the text when the clipboard is blocked", async () => {
+    mockClipboard(vi.fn().mockRejectedValue(new Error("denied")));
+
+    render(
+      <CleaningCleanerCell
+        {...cellBase}
+        cleaner={{ ...ALEX, status: "ACTIVE" }}
+        cleanerMessage={MESSAGE}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Copy cleaner message" }),
+    );
+
+    expect(await screen.findByText(/Couldn't copy automatically/)).toBeTruthy();
+    expect(screen.getByText(/Property: Harbor House/)).toBeTruthy();
+  });
+});

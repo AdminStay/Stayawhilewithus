@@ -21,6 +21,7 @@ import {
   markCleaningScheduleMissedAction,
   rescheduleCleaningScheduleAction,
 } from "../actions";
+import { buildCleanerMessage } from "../lib/cleaner-message";
 import type { CleaningSchedule } from "../services/cleaning.service";
 
 import { CleaningCleanerCell } from "./CleaningCleanerCell";
@@ -43,7 +44,10 @@ type ScheduleWithRelations = CleaningSchedule & {
  */
 export interface CleaningCleanerProps {
   canSeeCleaners: boolean;
-  /** Admin only — shows the per-job cleaner picker on open jobs. */
+  /**
+   * Admin only — shows the per-job cleaner picker on open jobs, and (Phase
+   * 5.1) the "Copy cleaner message" action on open jobs with a cleaner.
+   */
   canChangeCleaner: boolean;
   propertyCleaners: Record<string, PropertyCleaners>;
   activeCleaners: CleanerOption[];
@@ -121,6 +125,22 @@ export function CleaningScheduleList({
                       cleaners.canChangeCleaner && !CLEANER_LOCKED.has(s.status)
                     }
                     action={cleaners.assignCleanerAction}
+                    cleanerMessage={
+                      // Phase 5.1: admin only, open jobs with a cleaner. Built
+                      // here (server) from the five allowed fields only.
+                      cleaners.canChangeCleaner &&
+                      s.cleaner &&
+                      !CLEANER_LOCKED.has(s.status)
+                        ? buildCleanerMessage({
+                            propertyName: s.property.name,
+                            scheduledDate: s.scheduledDate,
+                            scheduledStartTime: s.scheduledStartTime,
+                            scheduledEndTime: s.scheduledEndTime,
+                            cleaningType: s.cleaningType,
+                            cleanerName: s.cleaner.name,
+                          })
+                        : null
+                    }
                   />
                 </TableCell>
               )}
