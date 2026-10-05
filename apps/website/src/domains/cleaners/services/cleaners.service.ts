@@ -141,6 +141,22 @@ export async function listCleaners(actor: AuthContext) {
   };
 }
 
+/**
+ * ACTIVE cleaners as `{ id, name }` only — for pickers outside /cleaners
+ * (e.g. choosing a cleaning's cleaner on /cleaning). Deliberately selects
+ * no phone field at all, so it is safe to hand to a client component.
+ */
+export async function listActiveCleanerOptions(
+  actor: AuthContext,
+): Promise<Array<{ id: string; name: string }>> {
+  await assertPermission(actor, "cleaners:read");
+  return prisma.cleaner.findMany({
+    where: { status: "ACTIVE" },
+    orderBy: { name: "asc" },
+    select: { id: true, name: true },
+  });
+}
+
 export async function createCleaner(
   actor: AuthContext,
   input: CreateCleanerInput,

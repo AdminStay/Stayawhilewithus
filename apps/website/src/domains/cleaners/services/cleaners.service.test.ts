@@ -35,6 +35,7 @@ import { CleanerRuleError } from "../lib/errors";
 import {
   addCleanerContact,
   createCleaner,
+  listActiveCleanerOptions,
   listCleaners,
   removeCleanerContact,
   setCleanerStatus,
@@ -430,5 +431,23 @@ describe("backup contacts", () => {
       }),
     ).rejects.toThrow(/already one of this cleaner's backup contacts/);
     expect(mockPrisma.cleaner.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("listActiveCleanerOptions (Cleaner Phase 4 picker)", () => {
+  it("requires cleaners:read and returns ACTIVE cleaners as id + name only — no phone selected", async () => {
+    mockPrisma.cleaner.findMany.mockResolvedValueOnce([
+      { id: "c1", name: "Alex" },
+    ]);
+
+    const options = await listActiveCleanerOptions(actor);
+
+    expect(assertPermission).toHaveBeenCalledWith(actor, "cleaners:read");
+    expect(mockPrisma.cleaner.findMany).toHaveBeenCalledWith({
+      where: { status: "ACTIVE" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    });
+    expect(options).toEqual([{ id: "c1", name: "Alex" }]);
   });
 });
