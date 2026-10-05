@@ -5,6 +5,7 @@ import { useActionState } from "react";
 
 import { CLEAR_CLEANER_VALUE } from "../schemas/cleaning.schema";
 
+import { CopyCleanerMessageButton } from "./CopyCleanerMessageButton";
 import {
   cleanerOptionGroups,
   INITIAL_CLEANING_FORM_STATE,
@@ -32,6 +33,7 @@ export function CleaningCleanerCell({
   activeCleaners,
   canChange,
   action,
+  cleanerMessage = null,
 }: {
   scheduleId: string;
   propertyName: string;
@@ -41,6 +43,12 @@ export function CleaningCleanerCell({
   /** Admin, and the job is still open. */
   canChange: boolean;
   action: CleaningAction;
+  /**
+   * Phase 5.1: the prepared text for "Copy cleaner message". Built on the
+   * server and passed ONLY for an admin, on an open job that has a cleaner;
+   * null otherwise, so no one else ever receives it.
+   */
+  cleanerMessage?: string | null;
 }) {
   const teamOnly = isTeamOnly(propertyCleaners);
 
@@ -55,6 +63,9 @@ export function CleaningCleanerCell({
         </div>
       ) : (
         <Badge tone="warning">Needs cleaner</Badge>
+      )}
+      {cleaner && cleanerMessage && (
+        <CopyCleanerMessageButton message={cleanerMessage} />
       )}
       {teamOnly && propertyCleaners && (
         <div className="text-xs text-ink-muted">
