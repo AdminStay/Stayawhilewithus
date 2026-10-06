@@ -65,8 +65,10 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # Serialized: website#db:generate re-runs `prisma generate` into the
+      # shared client while @stayw/database#typecheck reads it in parallel.
       - name: Typecheck
-        run: pnpm typecheck
+        run: pnpm typecheck --concurrency=1
 
       - name: Test
         run: pnpm test
