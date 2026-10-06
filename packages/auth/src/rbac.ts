@@ -85,3 +85,53 @@ export async function assertPermission(
     throw new ForbiddenError(permissionKey, opts.propertyId);
   }
 }
+
+/**
+ * Where an actor holds `permissionKey` (2026-10-07): `global` when any
+ * GLOBAL role assignment (propertyId = null) grants it — then it applies to
+ * every property — and `propertyIds` for each property whose
+ * PROPERTY-SCOPED role assignment grants it. Expired assignments never
+ * count (same rule as getEffectivePermissions).
+ *
+ * For list queries that must be narrowed to the actor's properties (e.g. a
+ * property-scoped "cleaner" sees only their properties' cleanings): global →
+ * no filter; otherwise filter to `propertyIds`; neither → no access.
+ * Single-record checks keep using assertPermission(actor, key, { propertyId }).
+ */
+export interface PermissionScope {
+  global: boolean;
+  propertyIds: string[];
+}
+
+export async function getPermissionScope(
+  actor: AuthContext,
+  permissionKey: PermissionKey,
+): Promise<PermissionScope> {
+  const userRoles = await prisma.userRole.findMany({
+    where: {
+      userId: actor.userId,
+      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      role: {
+        rolePermissions: { some: { permission: { key: permissionKey } } },
+      },
+    },
+    select: { propertyId: true },
+  });
+
+  const global = userRoles.some((r) => r.propertyId === null);
+  const propertyIds = global
+    ? []
+    : [
+        ...new Set(
+          userRoles
+            .map((r) => r.propertyId)
+            .filter((id): id is string => id !== null),
+        ),
+      ];
+  return { global, propertyIds };
+}
+
+/** True when the scope grants access to at least one property. */
+export function hasAnyScope(scope: PermissionScope): boolean {
+  return scope.global || scope.propertyIds.length > 0;
+}

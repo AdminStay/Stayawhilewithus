@@ -30,6 +30,11 @@ vi.mock("@stayw/database", () => {
 vi.mock("@stayw/auth", () => ({
   assertPermission: vi.fn(),
   hasPermission: vi.fn(),
+  // Property scope (2026-10-07). Default (beforeEach): a global grant.
+  getPermissionScope: vi.fn(),
+  hasAnyScope: (scope: { global: boolean; propertyIds: string[] }) =>
+    scope.global || scope.propertyIds.length > 0,
+  ForbiddenError: class ForbiddenError extends Error {},
 }));
 
 vi.mock("@/platform/audit/record-audit", () => ({
@@ -37,10 +42,14 @@ vi.mock("@/platform/audit/record-audit", () => ({
 }));
 
 vi.mock("@/platform/auth/is-global-admin", () => ({
-  isGlobalAdmin: vi.fn(),
+  hasGlobalRole: vi.fn(),
 }));
 
-import { assertPermission, hasPermission } from "@stayw/auth";
+import {
+  assertPermission,
+  getPermissionScope,
+  hasPermission,
+} from "@stayw/auth";
 import { prisma } from "@stayw/database";
 
 import { CleaningRuleError } from "../lib/errors";
@@ -59,14 +68,21 @@ import {
 } from "./cleaning.service";
 
 import { recordAudit } from "@/platform/audit/record-audit";
-import { isGlobalAdmin } from "@/platform/auth/is-global-admin";
+import { hasGlobalRole } from "@/platform/auth/is-global-admin";
 
 // clearMocks resets calls between tests but not queued *Once values or
 // implementations — reset the Phase 4 mocks fully so one test's leftovers
 // can't leak into the next.
 beforeEach(() => {
+  vi.mocked(getPermissionScope).mockReset();
+  vi.mocked(getPermissionScope).mockResolvedValue({
+    global: true,
+    propertyIds: [],
+  });
   vi.mocked(hasPermission).mockReset();
-  vi.mocked(isGlobalAdmin).mockReset();
+  vi.mocked(hasGlobalRole).mockReset();
+  vi.mocked(assertPermission).mockReset();
+  vi.mocked(assertPermission).mockResolvedValue(undefined);
   for (const fn of [
     tx.propertyCleanerAssignment.findFirst,
     tx.cleaner.findUnique,
@@ -107,7 +123,7 @@ describe("listCleaningSchedules", () => {
 
     const result = await listCleaningSchedules(actor);
 
-    expect(assertPermission).toHaveBeenCalledWith(
+    expect(getPermissionScope).toHaveBeenCalledWith(
       actor,
       "cleaning_schedules:read",
     );
@@ -143,9 +159,10 @@ describe("listCleaningSchedules", () => {
   });
 
   it("propagates denial when the actor lacks cleaning_schedules:read", async () => {
-    vi.mocked(assertPermission).mockRejectedValueOnce(
-      new Error("ForbiddenError"),
-    );
+    vi.mocked(getPermissionScope).mockResolvedValueOnce({
+      global: false,
+      propertyIds: [],
+    });
 
     await expect(listCleaningSchedules(actor)).rejects.toThrow();
     expect(prisma.cleaningSchedule.findMany).not.toHaveBeenCalled();
@@ -164,9 +181,11 @@ describe("createCleaningSchedule", () => {
 
     const result = await createCleaningSchedule(actor, scheduleInput);
 
+    // Checked for the property being scheduled (2026-10-07).
     expect(assertPermission).toHaveBeenCalledWith(
       actor,
       "cleaning_schedules:create",
+      { propertyId: "prop-1" },
     );
     expect(tx.task.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -218,6 +237,7 @@ const openJob = (
 ) => ({
   id: "cs1",
   taskId: "task-1",
+  propertyId: "prop-1",
   status,
   scheduledDate: new Date("2026-09-01"),
   originalScheduledDate: null,
@@ -274,6 +294,7 @@ describe.each([
       expect(assertPermission).toHaveBeenCalledWith(
         actor,
         "cleaning_schedules:update",
+        { propertyId: "prop-1" },
       );
       expect(tx.cleaningSchedule.updateMany).toHaveBeenCalledWith({
         where: { id: "cs1", status: { in: ["SCHEDULED", "IN_PROGRESS"] } },
@@ -340,10 +361,11 @@ describe.each([
     expectNoWrites();
   });
 
-  it("denies the transition and performs no writes when the actor lacks cleaning_schedules:update", async () => {
-    vi.mocked(assertPermission).mockRejectedValueOnce(
-      new Error("ForbiddenError"),
-    );
+  it("denies the transition and performs no writes when the actor lacks cleaning_schedules:update anywhere", async () => {
+    vi.mocked(getPermissionScope).mockResolvedValueOnce({
+      global: false,
+      propertyIds: [],
+    });
 
     await expect(run(actor, "cs1")).rejects.toThrow();
     expect(tx.cleaningSchedule.findUnique).not.toHaveBeenCalled();
@@ -386,6 +408,7 @@ describe("rescheduleCleaningSchedule", () => {
     expect(assertPermission).toHaveBeenCalledWith(
       actor,
       "cleaning_schedules:update",
+      { propertyId: "prop-1" },
     );
     expect(tx.cleaningSchedule.updateMany).toHaveBeenCalledWith({
       where: {
@@ -541,10 +564,11 @@ describe("rescheduleCleaningSchedule", () => {
     expect(recordAudit).not.toHaveBeenCalled();
   });
 
-  it("denies rescheduling and performs no writes when the actor lacks cleaning_schedules:update", async () => {
-    vi.mocked(assertPermission).mockRejectedValueOnce(
-      new Error("ForbiddenError"),
-    );
+  it("denies rescheduling and performs no writes when the actor lacks cleaning_schedules:update anywhere", async () => {
+    vi.mocked(getPermissionScope).mockResolvedValueOnce({
+      global: false,
+      propertyIds: [],
+    });
 
     await expect(
       rescheduleCleaningSchedule(actor, "cs1", { scheduledDate: newDate }),
@@ -563,7 +587,7 @@ describe("listRecentlyRescheduledCleanings", () => {
 
     const result = await listRecentlyRescheduledCleanings(actor);
 
-    expect(assertPermission).toHaveBeenCalledWith(
+    expect(getPermissionScope).toHaveBeenCalledWith(
       actor,
       "cleaning_schedules:read",
     );
@@ -577,9 +601,10 @@ describe("listRecentlyRescheduledCleanings", () => {
   });
 
   it("propagates denial when the actor lacks cleaning_schedules:read", async () => {
-    vi.mocked(assertPermission).mockRejectedValueOnce(
-      new Error("ForbiddenError"),
-    );
+    vi.mocked(getPermissionScope).mockResolvedValueOnce({
+      global: false,
+      propertyIds: [],
+    });
 
     await expect(listRecentlyRescheduledCleanings(actor)).rejects.toThrow();
     expect(prisma.cleaningSchedule.findMany).not.toHaveBeenCalled();
@@ -616,7 +641,7 @@ function cleanerRow(id: string, status: "ACTIVE" | "INACTIVE" = "ACTIVE") {
 
 function asAdmin() {
   vi.mocked(hasPermission).mockResolvedValue(true);
-  vi.mocked(isGlobalAdmin).mockResolvedValue(true);
+  vi.mocked(hasGlobalRole).mockResolvedValue(true);
 }
 
 function mockCreateSucceeds() {
@@ -640,7 +665,7 @@ describe("createCleaningSchedule — default cleaner (Cleaner Phase 4)", () => {
     await createCleaningSchedule(actor, phase4Input);
 
     expect(createdCleanerId()).toBe(ALEX);
-    expect(isGlobalAdmin).not.toHaveBeenCalled();
+    expect(hasGlobalRole).not.toHaveBeenCalled();
     expect(recordAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "cleaning_schedule.created",
@@ -712,7 +737,7 @@ describe("createCleaningSchedule — default cleaner (Cleaner Phase 4)", () => {
     await createCleaningSchedule(actor, { ...phase4Input, cleanerId: ALEX });
 
     expect(createdCleanerId()).toBe(ALEX);
-    expect(isGlobalAdmin).not.toHaveBeenCalled();
+    expect(hasGlobalRole).not.toHaveBeenCalled();
   });
 
   it("lets an admin's explicit cleaner selection override the default", async () => {
@@ -742,7 +767,7 @@ describe("createCleaningSchedule — default cleaner (Cleaner Phase 4)", () => {
   it("refuses a non-default cleaner from a non-admin, and writes nothing", async () => {
     primaryIs(ALEX);
     vi.mocked(hasPermission).mockResolvedValue(true);
-    vi.mocked(isGlobalAdmin).mockResolvedValue(false);
+    vi.mocked(hasGlobalRole).mockResolvedValue(false);
 
     await expect(
       createCleaningSchedule(actor, { ...phase4Input, cleanerId: SAM }),
@@ -776,7 +801,7 @@ describe("canChangeCleaningCleaner", () => {
     "cleaning_schedules:update=%s + global admin=%s → %s",
     async (perm, admin, expected) => {
       vi.mocked(hasPermission).mockResolvedValue(perm);
-      vi.mocked(isGlobalAdmin).mockResolvedValue(admin);
+      vi.mocked(hasGlobalRole).mockResolvedValue(admin);
       expect(await canChangeCleaningCleaner(actor)).toBe(expected);
     },
   );
@@ -801,7 +826,7 @@ describe("assignCleaningScheduleCleaner — per-job override (Cleaner Phase 4)",
     primary = ALEX as string | null,
   } = {}) {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
-    vi.mocked(isGlobalAdmin).mockResolvedValue(true);
+    vi.mocked(hasGlobalRole).mockResolvedValue(true);
     vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(job);
     vi.mocked(tx.cleaner.findUnique).mockResolvedValueOnce(cleaner);
     vi.mocked(tx.cleaningSchedule.updateMany).mockResolvedValueOnce({
@@ -926,7 +951,7 @@ describe("assignCleaningScheduleCleaner — per-job override (Cleaner Phase 4)",
 
   it("rejects a non-admin who holds cleaning_schedules:update (e.g. the cleaner role)", async () => {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
-    vi.mocked(isGlobalAdmin).mockResolvedValue(false);
+    vi.mocked(hasGlobalRole).mockResolvedValue(false);
 
     await expect(
       assignCleaningScheduleCleaner(actor, {
@@ -1021,7 +1046,7 @@ describe.each([
     "lets an admin assign %s (%s) to an individual cleaning",
     async (cleanerId, name) => {
       vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
-      vi.mocked(isGlobalAdmin).mockResolvedValue(true);
+      vi.mocked(hasGlobalRole).mockResolvedValue(true);
       vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce({
         id: SCHEDULE,
         propertyId: PROPERTY,
@@ -1070,7 +1095,7 @@ describe("assignCleaningScheduleCleaner with cleanerId null — clear back to Ne
 
   function arrangeClear(j = job()) {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
-    vi.mocked(isGlobalAdmin).mockResolvedValue(true);
+    vi.mocked(hasGlobalRole).mockResolvedValue(true);
     vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(j);
     vi.mocked(tx.cleaningSchedule.updateMany).mockResolvedValueOnce({
       count: 1,
@@ -1144,7 +1169,7 @@ describe("assignCleaningScheduleCleaner with cleanerId null — clear back to Ne
 
   it("refuses a non-admin (even with cleaning_schedules:update), before any read or write", async () => {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
-    vi.mocked(isGlobalAdmin).mockResolvedValue(false);
+    vi.mocked(hasGlobalRole).mockResolvedValue(false);
 
     await expect(clear()).rejects.toThrow("Only an admin");
     expect(tx.cleaningSchedule.findUnique).not.toHaveBeenCalled();
@@ -1176,7 +1201,7 @@ describe("assignCleaningScheduleCleaner with cleanerId null — clear back to Ne
 
 describe("listCleaningJobsNeedingCleaner (Cleaner Phase 5.3)", () => {
   it("requires cleaning_schedules:read and cleaners:read, and queries open jobs with no cleaner or an inactive one", async () => {
-    vi.mocked(assertPermission).mockResolvedValue(undefined);
+    vi.mocked(hasPermission).mockResolvedValue(true);
     const rows = [{ id: "cs1", status: "SCHEDULED", cleanerId: null }];
     vi.mocked(prisma.cleaningSchedule.findMany).mockResolvedValueOnce(
       rows as never,
@@ -1184,11 +1209,11 @@ describe("listCleaningJobsNeedingCleaner (Cleaner Phase 5.3)", () => {
 
     const result = await listCleaningJobsNeedingCleaner(actor);
 
-    expect(assertPermission).toHaveBeenCalledWith(
+    expect(getPermissionScope).toHaveBeenCalledWith(
       actor,
       "cleaning_schedules:read",
     );
-    expect(assertPermission).toHaveBeenCalledWith(actor, "cleaners:read");
+    expect(hasPermission).toHaveBeenCalledWith(actor, "cleaners:read");
     expect(prisma.cleaningSchedule.findMany).toHaveBeenCalledWith({
       where: {
         // Same closed set as lib/needs-cleaner.ts and the cleaner-lock rule.
@@ -1210,20 +1235,179 @@ describe("listCleaningJobsNeedingCleaner (Cleaner Phase 5.3)", () => {
   });
 
   it("refuses (no query) without cleaners:read, since a job's cleaner would be hidden", async () => {
-    vi.mocked(assertPermission)
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("ForbiddenError"));
+    vi.mocked(hasPermission).mockResolvedValueOnce(false);
 
     await expect(listCleaningJobsNeedingCleaner(actor)).rejects.toThrow();
     expect(prisma.cleaningSchedule.findMany).not.toHaveBeenCalled();
   });
 
   it("refuses (no query) without cleaning_schedules:read", async () => {
-    vi.mocked(assertPermission).mockRejectedValueOnce(
-      new Error("ForbiddenError"),
-    );
+    vi.mocked(getPermissionScope).mockResolvedValueOnce({
+      global: false,
+      propertyIds: [],
+    });
 
     await expect(listCleaningJobsNeedingCleaner(actor)).rejects.toThrow();
     expect(prisma.cleaningSchedule.findMany).not.toHaveBeenCalled();
+  });
+});
+
+// Role decisions (Kenny/Michelle, 2026-10-07): a property-scoped "cleaner"
+// only sees/changes cleanings at their properties — enforced here, in the
+// service; changing a cleaning's cleaner stays Admin (+ future Staff).
+describe("property scope — cleaner role (2026-10-07)", () => {
+  const scoped = (...propertyIds: string[]) =>
+    vi
+      .mocked(getPermissionScope)
+      .mockResolvedValue({ global: false, propertyIds });
+
+  it("lists only the cleanings at the actor's scoped properties (filter is in the query)", async () => {
+    scoped("p-harbor", "p-sandy");
+    vi.mocked(hasPermission).mockResolvedValue(false);
+    vi.mocked(prisma.cleaningSchedule.findMany).mockResolvedValueOnce([]);
+
+    await listCleaningSchedules(actor);
+
+    expect(prisma.cleaningSchedule.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { propertyId: { in: ["p-harbor", "p-sandy"] } },
+      }),
+    );
+  });
+
+  it("a global grant (admin / ops_manager) lists every property's cleanings — no filter", async () => {
+    vi.mocked(hasPermission).mockResolvedValue(true);
+    vi.mocked(prisma.cleaningSchedule.findMany).mockResolvedValueOnce([]);
+
+    await listCleaningSchedules(actor);
+
+    expect(prisma.cleaningSchedule.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: {} }),
+    );
+  });
+
+  it("scopes the dashboard's rescheduled and needs-cleaner lists the same way", async () => {
+    scoped("p-harbor");
+    vi.mocked(hasPermission).mockResolvedValue(true);
+    vi.mocked(prisma.cleaningSchedule.findMany).mockResolvedValue([]);
+
+    await listRecentlyRescheduledCleanings(actor);
+    await listCleaningJobsNeedingCleaner(actor);
+
+    const [rescheduled, needing] = vi.mocked(prisma.cleaningSchedule.findMany)
+      .mock.calls;
+    expect(rescheduled![0]!.where).toMatchObject({
+      propertyId: { in: ["p-harbor"] },
+    });
+    expect(needing![0]!.where).toMatchObject({
+      propertyId: { in: ["p-harbor"] },
+    });
+  });
+
+  it.each([
+    ["completeCleaningSchedule", completeCleaningSchedule],
+    ["cancelCleaningSchedule", cancelCleaningSchedule],
+    ["markCleaningScheduleMissed", markCleaningScheduleMissed],
+  ] as const)(
+    "%s on ANOTHER property's cleaning is refused — no write, no audit",
+    async (_name, run) => {
+      scoped("p-harbor");
+      vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(
+        openJob("SCHEDULED", { propertyId: "p-other" }) as never,
+      );
+      vi.mocked(assertPermission).mockImplementation(
+        async (_a, _k, opts?: { propertyId?: string }) => {
+          if (opts?.propertyId !== "p-harbor") throw new Error("Forbidden");
+        },
+      );
+
+      await expect(run(actor, "cs1")).rejects.toThrow("Forbidden");
+      expect(assertPermission).toHaveBeenCalledWith(
+        actor,
+        "cleaning_schedules:update",
+        { propertyId: "p-other" },
+      );
+      expect(tx.cleaningSchedule.updateMany).not.toHaveBeenCalled();
+      expect(tx.task.update).not.toHaveBeenCalled();
+      expect(recordAudit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("completing a cleaning at their OWN property goes through", async () => {
+    scoped("p-harbor");
+    vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(
+      openJob("SCHEDULED", { propertyId: "p-harbor" }) as never,
+    );
+    vi.mocked(tx.cleaningSchedule.updateMany).mockResolvedValueOnce({
+      count: 1,
+    } as never);
+
+    await completeCleaningSchedule(actor, "cs1");
+
+    expect(assertPermission).toHaveBeenCalledWith(
+      actor,
+      "cleaning_schedules:update",
+      { propertyId: "p-harbor" },
+    );
+    expect(tx.cleaningSchedule.updateMany).toHaveBeenCalled();
+  });
+
+  it("rescheduling another property's cleaning is refused — no write", async () => {
+    scoped("p-harbor");
+    vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(
+      openJob("SCHEDULED", { propertyId: "p-other" }) as never,
+    );
+    vi.mocked(assertPermission).mockRejectedValueOnce(new Error("Forbidden"));
+
+    await expect(
+      rescheduleCleaningSchedule(actor, "cs1", {
+        scheduledDate: new Date("2026-09-05"),
+      }),
+    ).rejects.toThrow("Forbidden");
+    expect(tx.cleaningSchedule.updateMany).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("creating a cleaning is checked against the property being scheduled", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(new Error("Forbidden"));
+
+    await expect(createCleaningSchedule(actor, scheduleInput)).rejects.toThrow(
+      "Forbidden",
+    );
+    expect(assertPermission).toHaveBeenCalledWith(
+      actor,
+      "cleaning_schedules:create",
+      { propertyId: "prop-1" },
+    );
+    expect(tx.task.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("changing a cleaning's cleaner — Admin (+ Staff later) only (2026-10-07)", () => {
+  it("checks the shared role list (today: admin) on top of cleaning_schedules:update", async () => {
+    vi.mocked(hasGlobalRole).mockResolvedValueOnce(false);
+
+    await expect(
+      assignCleaningScheduleCleaner(actor, {
+        scheduleId: "cs1",
+        cleanerId: null,
+      }),
+    ).rejects.toThrow(CleaningRuleError);
+    expect(hasGlobalRole).toHaveBeenCalledWith(actor, ["admin"]);
+    expect(tx.cleaningSchedule.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("ops_manager / cleaner (hold cleaning_schedules:update, not the role) can't choose a non-default cleaner when creating", async () => {
+    vi.mocked(hasPermission).mockResolvedValue(true);
+    vi.mocked(hasGlobalRole).mockResolvedValue(false);
+    vi.mocked(tx.propertyCleanerAssignment.findFirst).mockResolvedValueOnce({
+      cleanerId: "c-alex",
+      cleaner: { status: "ACTIVE" },
+    } as never);
+
+    await expect(
+      createCleaningSchedule(actor, { ...scheduleInput, cleanerId: "" }),
+    ).rejects.toThrow(CleaningRuleError);
+    expect(tx.task.create).not.toHaveBeenCalled();
   });
 });

@@ -11,10 +11,11 @@ import {
 import { CleaningRuleError } from "../lib/errors";
 import type { MarkCleanerNotifiedInput } from "../schemas/cleaning.schema";
 
+import { CLEANER_CHANGE_ROLE_NAMES } from "./cleaning-access";
 import { CLEANER_LOCKED_STATUSES } from "./cleaning.service";
 
 import { recordAudit } from "@/platform/audit/record-audit";
-import { isGlobalAdmin } from "@/platform/auth/is-global-admin";
+import { hasGlobalRole } from "@/platform/auth/is-global-admin";
 
 /**
  * Cleaner Phase 5.2 — "Mark cleaner notified". Records, as an append-only
@@ -38,9 +39,10 @@ function displayName(
   return name || null;
 }
 
+/** Admin (+ Staff once that role exists) — the same roles that may change a cleaning's cleaner. */
 async function assertAdmin(actor: AuthContext) {
   await assertPermission(actor, "cleaning_schedules:update");
-  if (!(await isGlobalAdmin(actor))) {
+  if (!(await hasGlobalRole(actor, CLEANER_CHANGE_ROLE_NAMES))) {
     throw new CleaningRuleError(ADMIN_ONLY_MESSAGE);
   }
 }

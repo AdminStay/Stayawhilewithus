@@ -1,6 +1,11 @@
 import "server-only";
 
-import { assertPermission, hasPermission, type AuthContext } from "@stayw/auth";
+import {
+  assertPermission,
+  ForbiddenError,
+  hasPermission,
+  type AuthContext,
+} from "@stayw/auth";
 import {
   prisma,
   type CleaningSchedule,
@@ -18,9 +23,19 @@ import type {
   RescheduleCleaningScheduleInput,
 } from "../schemas/cleaning.schema";
 
+import {
+  assertCleaningPropertyPermission,
+  canChangeCleaningCleaner,
+  CLEANER_CHANGE_ROLE_NAMES,
+  cleaningScopeWhere,
+} from "./cleaning-access";
+
 import { findCurrentPrimaryCleanerId } from "@/domains/cleaners/services/cleaner-assignments.service";
 import { recordAudit } from "@/platform/audit/record-audit";
-import { isGlobalAdmin } from "@/platform/auth/is-global-admin";
+import { hasGlobalRole } from "@/platform/auth/is-global-admin";
+
+// Re-exported: /cleaning and the actions import it from here.
+export { canChangeCleaningCleaner };
 
 /**
  * A cleaning's cleaner can't be assigned, changed or cleared once the job is
@@ -45,11 +60,15 @@ const ADMIN_ONLY_MESSAGE =
  * phone). The cleaner is shown only to viewers with cleaners:read, the same
  * gate as the Cleaner column on /properties; for everyone else `cleaner` is
  * null, so this also holds for the cleaning.list AI tool.
+ *
+ * Property scope (2026-10-07): a property-scoped reader (the "cleaner"
+ * role) gets only their properties' cleanings — filtered in the query.
  */
 export async function listCleaningSchedules(actor: AuthContext) {
-  await assertPermission(actor, "cleaning_schedules:read");
+  const scopeWhere = await cleaningScopeWhere(actor, "cleaning_schedules:read");
   const canSeeCleaners = await hasPermission(actor, "cleaners:read");
   const schedules = await prisma.cleaningSchedule.findMany({
+    where: scopeWhere,
     orderBy: { scheduledDate: "asc" },
     include: {
       property: true,
@@ -61,22 +80,6 @@ export async function listCleaningSchedules(actor: AuthContext) {
   return canSeeCleaners
     ? schedules
     : schedules.map((s) => ({ ...s, cleanerId: null, cleaner: null }));
-}
-
-/**
- * Changing which cleaner a cleaning goes to is admin-only for this phase
- * (Cleaner Phase 4): cleaning_schedules:update AND the global admin role —
- * the permission alone isn't enough, because the "cleaner" role holds it
- * too. Used both to enforce the rule and to decide whether /cleaning shows
- * the control.
- */
-export async function canChangeCleaningCleaner(
-  actor: AuthContext,
-): Promise<boolean> {
-  return (
-    (await hasPermission(actor, "cleaning_schedules:update")) &&
-    (await isGlobalAdmin(actor))
-  );
 }
 
 async function assertActiveCleaner(
@@ -109,10 +112,13 @@ async function assertActiveCleaner(
  * dashboard's safeList() turns into "nothing to show".
  */
 export async function listCleaningJobsNeedingCleaner(actor: AuthContext) {
-  await assertPermission(actor, "cleaning_schedules:read");
-  await assertPermission(actor, "cleaners:read");
+  const scopeWhere = await cleaningScopeWhere(actor, "cleaning_schedules:read");
+  if (!(await hasPermission(actor, "cleaners:read"))) {
+    throw new ForbiddenError("cleaners:read");
+  }
   return prisma.cleaningSchedule.findMany({
     where: {
+      ...scopeWhere,
       status: { notIn: [...CLEANER_LOCKED_STATUSES] },
       OR: [{ cleanerId: null }, { cleaner: { status: { not: "ACTIVE" } } }],
     },
@@ -130,9 +136,9 @@ export async function listCleaningJobsNeedingCleaner(actor: AuthContext) {
 
 /** Schedules that have been moved at least once since creation — for dashboard visibility into what changed. */
 export async function listRecentlyRescheduledCleanings(actor: AuthContext) {
-  await assertPermission(actor, "cleaning_schedules:read");
+  const scopeWhere = await cleaningScopeWhere(actor, "cleaning_schedules:read");
   return prisma.cleaningSchedule.findMany({
-    where: { originalScheduledDate: { not: null } },
+    where: { ...scopeWhere, originalScheduledDate: { not: null } },
     orderBy: { updatedAt: "desc" },
     take: 10,
     include: { property: true },
@@ -156,7 +162,12 @@ export async function createCleaningSchedule(
   actor: AuthContext,
   input: CreateCleaningScheduleInput,
 ) {
-  await assertPermission(actor, "cleaning_schedules:create");
+  // Scoped to the property being scheduled (a global grant covers all).
+  await assertCleaningPropertyPermission(
+    actor,
+    "cleaning_schedules:create",
+    input.propertyId,
+  );
 
   const { schedule, cleanerSource } = await prisma.$transaction(async (tx) => {
     const defaultCleanerId = await findCurrentPrimaryCleanerId(
@@ -240,7 +251,7 @@ export async function assignCleaningScheduleCleaner(
   input: AssignCleaningScheduleCleanerInput,
 ) {
   await assertPermission(actor, "cleaning_schedules:update");
-  if (!(await isGlobalAdmin(actor))) {
+  if (!(await hasGlobalRole(actor, CLEANER_CHANGE_ROLE_NAMES))) {
     throw new CleaningRuleError(ADMIN_ONLY_MESSAGE);
   }
 
@@ -389,10 +400,15 @@ export async function rescheduleCleaningSchedule(
   scheduleId: string,
   input: RescheduleCleaningScheduleInput,
 ) {
-  await assertPermission(actor, "cleaning_schedules:update");
+  await cleaningScopeWhere(actor, "cleaning_schedules:update");
 
   return prisma.$transaction(async (tx) => {
     const existing = await findScheduleOrThrow(tx, scheduleId);
+    await assertCleaningPropertyPermission(
+      actor,
+      "cleaning_schedules:update",
+      existing.propertyId,
+    );
     if (!CLEANING_RESCHEDULABLE_STATUSES.includes(existing.status)) {
       throw new CleaningRuleError(
         `This cleaning is ${STATUS_WORDS[existing.status]}, so it can't be rescheduled.`,
@@ -460,10 +476,15 @@ async function closeCleaningSchedule(
   action: string,
   taskData: Prisma.TaskUpdateInput | null,
 ) {
-  await assertPermission(actor, "cleaning_schedules:update");
+  await cleaningScopeWhere(actor, "cleaning_schedules:update");
 
   return prisma.$transaction(async (tx) => {
     const existing = await findScheduleOrThrow(tx, scheduleId);
+    await assertCleaningPropertyPermission(
+      actor,
+      "cleaning_schedules:update",
+      existing.propertyId,
+    );
     if (!CLEANING_OPEN_STATUSES.includes(existing.status)) {
       throw new CleaningRuleError(
         `This cleaning is already ${STATUS_WORDS[existing.status]}, so it can't be ${STATUS_WORDS[to]}.`,

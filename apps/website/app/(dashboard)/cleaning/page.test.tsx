@@ -15,9 +15,18 @@ const m = vi.hoisted(() => ({
   listCurrentPropertyCleanerOptions: vi.fn(),
   listActiveCleanerOptions: vi.fn(),
   listLatestCleanerNotifications: vi.fn(),
+  hasCleaningPermissionAnywhere: vi.fn(),
+  listProperties: vi.fn(),
+  listReservations: vi.fn(),
 }));
 
-vi.mock("@stayw/auth", () => ({ hasPermission: m.hasPermission }));
+vi.mock("@stayw/auth", () => ({
+  hasPermission: m.hasPermission,
+  ForbiddenError: class ForbiddenError extends Error {},
+}));
+vi.mock("@/domains/cleaning/services/cleaning-access", () => ({
+  hasCleaningPermissionAnywhere: m.hasCleaningPermissionAnywhere,
+}));
 vi.mock("@/platform/auth/get-current-user", () => ({
   getCurrentUser: vi.fn().mockResolvedValue({ userId: "user-1" }),
 }));
@@ -32,10 +41,10 @@ vi.mock("@/domains/cleaners/services/cleaners.service", () => ({
   listActiveCleanerOptions: m.listActiveCleanerOptions,
 }));
 vi.mock("@/domains/properties/services/properties.service", () => ({
-  listProperties: vi.fn().mockResolvedValue([]),
+  listProperties: m.listProperties,
 }));
 vi.mock("@/domains/reservations/services/reservations.service", () => ({
-  listReservations: vi.fn().mockResolvedValue([]),
+  listReservations: m.listReservations,
 }));
 vi.mock("@/domains/cleaning/actions", () => ({
   assignCleaningScheduleCleanerAction: vi.fn(),
@@ -49,6 +58,8 @@ vi.mock("@/domains/cleaning/actions", () => ({
 vi.mock("@/domains/cleaning/services/cleaner-notifications.service", () => ({
   listLatestCleanerNotifications: m.listLatestCleanerNotifications,
 }));
+
+import { ForbiddenError } from "@stayw/auth";
 
 import CleaningPage from "./page";
 
@@ -81,6 +92,10 @@ const ALEX = { id: "c-alex", name: "Alex", status: "ACTIVE" };
 const ALL_VIEW = { searchParams: Promise.resolve({}) };
 
 beforeEach(() => {
+  // Defaults: create/update held somewhere, properties/reservations readable.
+  m.hasCleaningPermissionAnywhere.mockResolvedValue(true);
+  m.listProperties.mockResolvedValue([]);
+  m.listReservations.mockResolvedValue([]);
   m.listLatestCleanerNotifications.mockResolvedValue(new Map());
   m.listCleaningSchedules.mockResolvedValue([
     schedule("s1", "p-harbor", "Harbor House", "SCHEDULED", ALEX),
@@ -470,5 +485,73 @@ describe("/cleaning — jobs needing attention (Cleaner Phase 5.3)", () => {
     const actions = await import("@/domains/cleaning/actions");
     expect(actions.assignCleaningScheduleCleanerAction).not.toHaveBeenCalled();
     expect(actions.markCleanerNotifiedAction).not.toHaveBeenCalled();
+  });
+});
+
+describe("/cleaning — role access (2026-10-07)", () => {
+  it("a property-scoped cleaner (no properties/reservations read, no create) still gets the page — their scoped list, no Schedule cleaning", async () => {
+    m.hasPermission.mockResolvedValue(false);
+    m.canChangeCleaningCleaner.mockResolvedValue(false);
+    m.listProperties.mockRejectedValue(new ForbiddenError("properties:read"));
+    m.listReservations.mockRejectedValue(
+      new ForbiddenError("reservations:read"),
+    );
+    m.hasCleaningPermissionAnywhere.mockImplementation(
+      async (_actor: unknown, key: string) =>
+        key === "cleaning_schedules:update",
+    );
+    // The service has already narrowed the list to their property.
+    m.listCleaningSchedules.mockResolvedValue([
+      schedule("s1", "p-harbor", "Harbor House", "SCHEDULED", null),
+    ]);
+
+    render(await CleaningPage(ALL_VIEW));
+
+    expect(screen.getByText("Harbor House")).toBeTruthy();
+    expect(screen.queryByText("Sandy Nudes")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Schedule cleaning" }),
+    ).toBeNull();
+    // They can still act on their own job (the server re-checks the property).
+    expect(screen.getByRole("button", { name: "Complete" })).toBeTruthy();
+    // No cleaner column / picker — that's cleaners:read + Admin (+ Staff).
+    expect(screen.queryByRole("columnheader", { name: "Cleaner" })).toBeNull();
+  });
+
+  it("ops_manager (create/update, no cleaners:read, not admin): can schedule and act on jobs, but can't change a cleaner", async () => {
+    m.hasPermission.mockResolvedValue(false);
+    m.canChangeCleaningCleaner.mockResolvedValue(false);
+
+    render(await CleaningPage(ALL_VIEW));
+
+    expect(
+      screen.getByRole("button", { name: "Schedule cleaning" }),
+    ).toBeTruthy();
+    expect(screen.getAllByRole("button", { name: "Complete" }).length).toBe(2);
+    expect(screen.queryByRole("button", { name: "Change" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Assign" })).toBeNull();
+  });
+
+  it("a viewer without update anywhere (e.g. read_only) sees no lifecycle buttons", async () => {
+    m.hasPermission.mockResolvedValue(false);
+    m.canChangeCleaningCleaner.mockResolvedValue(false);
+    m.hasCleaningPermissionAnywhere.mockResolvedValue(false);
+
+    render(await CleaningPage(ALL_VIEW));
+
+    for (const name of ["Complete", "Missed", "Cancel", "Reschedule"]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+    expect(
+      screen.queryByRole("button", { name: "Schedule cleaning" }),
+    ).toBeNull();
+  });
+
+  it("any other error loading properties still fails the page (only a permission refusal is tolerated)", async () => {
+    m.hasPermission.mockResolvedValue(false);
+    m.canChangeCleaningCleaner.mockResolvedValue(false);
+    m.listProperties.mockRejectedValue(new Error("db down"));
+
+    await expect(CleaningPage(ALL_VIEW)).rejects.toThrow("db down");
   });
 });
