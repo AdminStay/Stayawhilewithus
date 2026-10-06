@@ -49,17 +49,31 @@ jobs:
       - name: Generate Prisma client
         run: pnpm db:generate
 
+      # Plain postgres:16 lacks the Supabase roles that the RLS/grant
+      # hardening migrations reference; create no-login placeholders.
+      - name: Create Supabase placeholder roles
+        env:
+          PGPASSWORD: postgres
+        run: >-
+          psql -h localhost -U postgres -d staywhile_ci -v ON_ERROR_STOP=1
+          -c "CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN;
+          CREATE ROLE service_role NOLOGIN; CREATE ROLE supabase_admin NOLOGIN;"
+
       - name: Apply migrations
         run: pnpm --filter @stayw/database db:migrate:deploy
 
       - name: Lint
         run: pnpm lint
 
+      # Serialized: website#db:generate re-runs `prisma generate` into the
+      # shared client while @stayw/database#typecheck reads it in parallel.
       - name: Typecheck
-        run: pnpm typecheck
+        run: pnpm typecheck --concurrency=1
 
+      # Loose env mode: turbo's strict mode strips DATABASE_URL from the test
+      # task, and august-command-locks.db.test.ts requires it in CI.
       - name: Test
-        run: pnpm test
+        run: pnpm run test --env-mode=loose
 
       - name: Build
         run: pnpm build
