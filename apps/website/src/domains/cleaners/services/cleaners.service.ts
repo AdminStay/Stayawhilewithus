@@ -235,8 +235,9 @@ export async function updateCleaner(
 /**
  * Deactivate / reactivate — cleaners are never deleted, so their history
  * and past cleanings keep their name. Deactivation is refused while the
- * cleaner still holds any CURRENT assignment: reassign those properties
- * first, so no property silently ends up pointing at an inactive cleaner.
+ * cleaner still holds any CURRENT assignment or is the stored cleaner on
+ * any OPEN cleaning: reassign those first, so no property or open job
+ * silently ends up pointing at an inactive cleaner.
  */
 export async function setCleanerStatus(
   actor: AuthContext,
@@ -260,6 +261,22 @@ export async function setCleanerStatus(
       if (currentAssignments > 0) {
         throw new CleanerRuleError(
           `${before.name} is still assigned to ${currentAssignments} ${currentAssignments === 1 ? "property" : "properties"}. Reassign or remove those first, then deactivate.`,
+        );
+      }
+      // 2026-10-07: also refused while they're the stored cleaner on an
+      // open cleaning, so no open job silently ends up with an inactive
+      // cleaner. Open = SCHEDULED / IN_PROGRESS (the cleaning domain's
+      // CLEANING_OPEN_STATUSES; listed here rather than imported because
+      // the cleaning service already imports from this domain).
+      const openCleanings = await tx.cleaningSchedule.count({
+        where: {
+          cleanerId: input.id,
+          status: { in: ["SCHEDULED", "IN_PROGRESS"] },
+        },
+      });
+      if (openCleanings > 0) {
+        throw new CleanerRuleError(
+          `${before.name} is still the cleaner on ${openCleanings} open ${openCleanings === 1 ? "cleaning" : "cleanings"}. Reassign or clear ${openCleanings === 1 ? "it" : "them"} on the Cleaning page first, then deactivate.`,
         );
       }
     }

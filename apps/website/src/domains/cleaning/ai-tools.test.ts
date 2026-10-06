@@ -32,6 +32,7 @@ vi.mock("./services/cleaning.service", () => ({
 import { executeTool } from "@stayw/ai";
 
 import { registerCleaningAiTools } from "./ai-tools";
+import { CleaningRuleError } from "./lib/errors";
 import {
   completeCleaningSchedule,
   listCleaningSchedules,
@@ -60,6 +61,22 @@ describe("cleaning.list AI tool", () => {
 });
 
 describe("cleaning.complete AI tool", () => {
+  it("surfaces the service's lifecycle refusal (e.g. completing a cancelled job) instead of succeeding (2026-10-07)", async () => {
+    vi.mocked(completeCleaningSchedule).mockRejectedValueOnce(
+      new CleaningRuleError(
+        "This cleaning is already cancelled, so it can't be completed.",
+      ),
+    );
+
+    await expect(
+      executeTool(
+        "cleaning.complete",
+        { scheduleId: "c1" },
+        { userId: "user-1" },
+      ),
+    ).rejects.toThrow(/already cancelled/);
+  });
+
   it("delegates to completeCleaningSchedule with the given scheduleId", async () => {
     vi.mocked(completeCleaningSchedule).mockResolvedValueOnce({
       id: "c1",

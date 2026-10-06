@@ -209,126 +209,135 @@ describe("createCleaningSchedule", () => {
   });
 });
 
-describe("completeCleaningSchedule", () => {
-  it("marks the schedule COMPLETED and the linked Task DONE, and audits it", async () => {
+// Lifecycle (2026-10-07): every transition reads the job in the
+// transaction, refuses a disallowed status with no write and no audit, and
+// guards the UPDATE with the allowed statuses.
+const openJob = (
+  status = "SCHEDULED",
+  extra: Record<string, unknown> = {},
+) => ({
+  id: "cs1",
+  taskId: "task-1",
+  status,
+  scheduledDate: new Date("2026-09-01"),
+  originalScheduledDate: null,
+  ...extra,
+});
+
+function expectNoWrites() {
+  expect(tx.cleaningSchedule.updateMany).not.toHaveBeenCalled();
+  expect(tx.task.update).not.toHaveBeenCalled();
+  expect(recordAudit).not.toHaveBeenCalled();
+}
+
+describe.each([
+  {
+    name: "completeCleaningSchedule",
+    run: completeCleaningSchedule,
+    to: "COMPLETED",
+    action: "cleaning_schedule.completed",
+    task: { status: "DONE", completedAt: expect.any(Date) },
+    refusal: /can't be completed/,
+  },
+  {
+    name: "cancelCleaningSchedule",
+    run: cancelCleaningSchedule,
+    to: "CANCELLED",
+    action: "cleaning_schedule.cancelled",
+    task: { status: "CANCELLED" },
+    refusal: /can't be cancelled/,
+  },
+  {
+    name: "markCleaningScheduleMissed",
+    run: markCleaningScheduleMissed,
+    to: "MISSED",
+    action: "cleaning_schedule.missed",
+    // A missed cleaning still needs doing: the backing Task stays open.
+    task: null,
+    refusal: /can't be marked missed/,
+  },
+])("$name", ({ run, to, action, task, refusal }) => {
+  it.each(["SCHEDULED", "IN_PROGRESS"])(
+    `moves an open (%s) job to ${to} with a status-guarded UPDATE, and audits before + after`,
+    async (from) => {
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      const existing = openJob(from);
+      vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(
+        existing as never,
+      );
+      vi.mocked(tx.cleaningSchedule.updateMany).mockResolvedValueOnce({
+        count: 1,
+      } as never);
+
+      const result = await run(actor, "cs1");
+
+      expect(assertPermission).toHaveBeenCalledWith(
+        actor,
+        "cleaning_schedules:update",
+      );
+      expect(tx.cleaningSchedule.updateMany).toHaveBeenCalledWith({
+        where: { id: "cs1", status: { in: ["SCHEDULED", "IN_PROGRESS"] } },
+        data: { status: to },
+      });
+      if (task) {
+        expect(tx.task.update).toHaveBeenCalledWith({
+          where: { id: "task-1" },
+          data: task,
+        });
+      } else {
+        expect(tx.task.update).not.toHaveBeenCalled();
+      }
+      expect(recordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorUserId: actor.userId,
+          action,
+          entityType: "CleaningSchedule",
+          entityId: "cs1",
+          beforeState: existing,
+          afterState: { ...existing, status: to },
+        }),
+        tx,
+      );
+      expect(result).toEqual({ ...existing, status: to });
+    },
+  );
+
+  it.each(["COMPLETED", "CANCELLED", "MISSED"])(
+    "refuses a %s job — no write, no audit",
+    async (from) => {
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(
+        openJob(from) as never,
+      );
+
+      const err = await run(actor, "cs1").catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(CleaningRuleError);
+      expect((err as Error).message).toMatch(refusal);
+      expectNoWrites();
+    },
+  );
+
+  it("refuses when the job was closed between the read and the write (guarded UPDATE matched nothing)", async () => {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
-    const updated = { id: "cs1", taskId: "task-1", status: "COMPLETED" };
-    vi.mocked(tx.cleaningSchedule.update).mockResolvedValueOnce(
-      updated as never,
+    vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(
+      openJob() as never,
     );
-    vi.mocked(tx.task.update).mockResolvedValueOnce({} as never);
+    vi.mocked(tx.cleaningSchedule.updateMany).mockResolvedValueOnce({
+      count: 0,
+    } as never);
 
-    const result = await completeCleaningSchedule(actor, "cs1");
-
-    expect(assertPermission).toHaveBeenCalledWith(
-      actor,
-      "cleaning_schedules:update",
-    );
-    expect(tx.cleaningSchedule.update).toHaveBeenCalledWith({
-      where: { id: "cs1" },
-      data: { status: "COMPLETED" },
-    });
-    expect(tx.task.update).toHaveBeenCalledWith({
-      where: { id: "task-1" },
-      data: { status: "DONE", completedAt: expect.any(Date) },
-    });
-    expect(recordAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actorUserId: actor.userId,
-        action: "cleaning_schedule.completed",
-        entityType: "CleaningSchedule",
-        entityId: "cs1",
-      }),
-    );
-    expect(result).toEqual(updated);
-  });
-
-  it("denies completion and performs no writes when the actor lacks cleaning_schedules:update", async () => {
-    vi.mocked(assertPermission).mockRejectedValueOnce(
-      new Error("ForbiddenError"),
-    );
-
-    await expect(completeCleaningSchedule(actor, "cs1")).rejects.toThrow();
-    expect(tx.cleaningSchedule.update).not.toHaveBeenCalled();
+    await expect(run(actor, "cs1")).rejects.toThrow(/just changed/);
     expect(tx.task.update).not.toHaveBeenCalled();
     expect(recordAudit).not.toHaveBeenCalled();
   });
-});
 
-describe("cancelCleaningSchedule", () => {
-  it("marks the schedule and linked Task CANCELLED, and audits it", async () => {
+  it("refuses a job that no longer exists", async () => {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
-    const updated = { id: "cs1", taskId: "task-1", status: "CANCELLED" };
-    vi.mocked(tx.cleaningSchedule.update).mockResolvedValueOnce(
-      updated as never,
-    );
-    vi.mocked(tx.task.update).mockResolvedValueOnce({} as never);
+    vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(null);
 
-    const result = await cancelCleaningSchedule(actor, "cs1");
-
-    expect(assertPermission).toHaveBeenCalledWith(
-      actor,
-      "cleaning_schedules:update",
-    );
-    expect(tx.cleaningSchedule.update).toHaveBeenCalledWith({
-      where: { id: "cs1" },
-      data: { status: "CANCELLED" },
-    });
-    expect(tx.task.update).toHaveBeenCalledWith({
-      where: { id: "task-1" },
-      data: { status: "CANCELLED" },
-    });
-    expect(recordAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actorUserId: actor.userId,
-        action: "cleaning_schedule.cancelled",
-        entityType: "CleaningSchedule",
-        entityId: "cs1",
-      }),
-    );
-    expect(result).toEqual(updated);
-  });
-
-  it("denies cancellation and performs no writes when the actor lacks cleaning_schedules:update", async () => {
-    vi.mocked(assertPermission).mockRejectedValueOnce(
-      new Error("ForbiddenError"),
-    );
-
-    await expect(cancelCleaningSchedule(actor, "cs1")).rejects.toThrow();
-    expect(tx.cleaningSchedule.update).not.toHaveBeenCalled();
-    expect(tx.task.update).not.toHaveBeenCalled();
-    expect(recordAudit).not.toHaveBeenCalled();
-  });
-});
-
-describe("markCleaningScheduleMissed", () => {
-  it("marks the schedule MISSED without touching the backing Task, and audits it", async () => {
-    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
-    const updated = { id: "cs1", taskId: "task-1", status: "MISSED" };
-    vi.mocked(prisma.cleaningSchedule.update).mockResolvedValueOnce(
-      updated as never,
-    );
-
-    const result = await markCleaningScheduleMissed(actor, "cs1");
-
-    expect(assertPermission).toHaveBeenCalledWith(
-      actor,
-      "cleaning_schedules:update",
-    );
-    expect(prisma.cleaningSchedule.update).toHaveBeenCalledWith({
-      where: { id: "cs1" },
-      data: { status: "MISSED" },
-    });
-    expect(tx.task.update).not.toHaveBeenCalled();
-    expect(recordAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actorUserId: actor.userId,
-        action: "cleaning_schedule.missed",
-        entityType: "CleaningSchedule",
-        entityId: "cs1",
-      }),
-    );
-    expect(result).toEqual(updated);
+    await expect(run(actor, "cs1")).rejects.toThrow(/no longer exists/);
+    expectNoWrites();
   });
 
   it("denies the transition and performs no writes when the actor lacks cleaning_schedules:update", async () => {
@@ -336,9 +345,9 @@ describe("markCleaningScheduleMissed", () => {
       new Error("ForbiddenError"),
     );
 
-    await expect(markCleaningScheduleMissed(actor, "cs1")).rejects.toThrow();
-    expect(prisma.cleaningSchedule.update).not.toHaveBeenCalled();
-    expect(recordAudit).not.toHaveBeenCalled();
+    await expect(run(actor, "cs1")).rejects.toThrow();
+    expect(tx.cleaningSchedule.findUnique).not.toHaveBeenCalled();
+    expectNoWrites();
   });
 });
 
@@ -347,13 +356,8 @@ describe("rescheduleCleaningSchedule", () => {
 
   it("is a no-op — no writes, no audit — when the submitted date matches the current date", async () => {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
-    const existing = {
-      id: "cs1",
-      taskId: "task-1",
-      scheduledDate: new Date("2026-09-01"),
-      originalScheduledDate: null,
-    };
-    vi.mocked(prisma.cleaningSchedule.findUniqueOrThrow).mockResolvedValueOnce(
+    const existing = openJob();
+    vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(
       existing as never,
     );
 
@@ -361,30 +365,19 @@ describe("rescheduleCleaningSchedule", () => {
       scheduledDate: new Date("2026-09-01"),
     });
 
-    expect(tx.cleaningSchedule.update).not.toHaveBeenCalled();
-    expect(tx.task.update).not.toHaveBeenCalled();
-    expect(recordAudit).not.toHaveBeenCalled();
+    expectNoWrites();
     expect(result).toEqual(existing);
   });
 
   it("sets originalScheduledDate to the current date on a first reschedule, moves the backing Task's dueAt, and audits it", async () => {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
-    vi.mocked(prisma.cleaningSchedule.findUniqueOrThrow).mockResolvedValueOnce({
-      id: "cs1",
-      taskId: "task-1",
-      scheduledDate: new Date("2026-09-01"),
-      originalScheduledDate: null,
-    } as never);
-    const updated = {
-      id: "cs1",
-      taskId: "task-1",
-      scheduledDate: newDate,
-      originalScheduledDate: new Date("2026-09-01"),
-    };
-    vi.mocked(tx.cleaningSchedule.update).mockResolvedValueOnce(
-      updated as never,
+    const existing = openJob();
+    vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(
+      existing as never,
     );
-    vi.mocked(tx.task.update).mockResolvedValueOnce({} as never);
+    vi.mocked(tx.cleaningSchedule.updateMany).mockResolvedValueOnce({
+      count: 1,
+    } as never);
 
     const result = await rescheduleCleaningSchedule(actor, "cs1", {
       scheduledDate: newDate,
@@ -394,8 +387,11 @@ describe("rescheduleCleaningSchedule", () => {
       actor,
       "cleaning_schedules:update",
     );
-    expect(tx.cleaningSchedule.update).toHaveBeenCalledWith({
-      where: { id: "cs1" },
+    expect(tx.cleaningSchedule.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "cs1",
+        status: { in: ["SCHEDULED", "IN_PROGRESS", "MISSED"] },
+      },
       data: {
         scheduledDate: newDate,
         originalScheduledDate: new Date("2026-09-01"),
@@ -405,39 +401,144 @@ describe("rescheduleCleaningSchedule", () => {
       where: { id: "task-1" },
       data: { dueAt: newDate },
     });
+    const after = {
+      ...existing,
+      scheduledDate: newDate,
+      originalScheduledDate: new Date("2026-09-01"),
+    };
     expect(recordAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         actorUserId: actor.userId,
         action: "cleaning_schedule.rescheduled",
         entityType: "CleaningSchedule",
         entityId: "cs1",
+        beforeState: existing,
+        afterState: after,
       }),
+      tx,
     );
-    expect(result).toEqual(updated);
+    expect(result).toEqual(after);
   });
 
   it("keeps the true original date on a second reschedule instead of overwriting it", async () => {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
-    vi.mocked(prisma.cleaningSchedule.findUniqueOrThrow).mockResolvedValueOnce({
-      id: "cs1",
-      taskId: "task-1",
-      scheduledDate: new Date("2026-09-05"),
-      originalScheduledDate: new Date("2026-09-01"),
+    vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(
+      openJob("SCHEDULED", {
+        scheduledDate: new Date("2026-09-05"),
+        originalScheduledDate: new Date("2026-09-01"),
+      }) as never,
+    );
+    vi.mocked(tx.cleaningSchedule.updateMany).mockResolvedValueOnce({
+      count: 1,
     } as never);
-    vi.mocked(tx.cleaningSchedule.update).mockResolvedValueOnce({} as never);
-    vi.mocked(tx.task.update).mockResolvedValueOnce({} as never);
 
     await rescheduleCleaningSchedule(actor, "cs1", {
       scheduledDate: new Date("2026-09-10"),
     });
 
-    expect(tx.cleaningSchedule.update).toHaveBeenCalledWith({
-      where: { id: "cs1" },
+    expect(tx.cleaningSchedule.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: {
+          scheduledDate: new Date("2026-09-10"),
+          originalScheduledDate: new Date("2026-09-01"),
+        },
+      }),
+    );
+  });
+
+  it.each(["COMPLETED", "CANCELLED"])(
+    "refuses to reschedule a %s job — no write, no audit",
+    async (status) => {
+      vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+      vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(
+        openJob(status) as never,
+      );
+
+      const err = await rescheduleCleaningSchedule(actor, "cs1", {
+        scheduledDate: newDate,
+      }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(CleaningRuleError);
+      expect((err as Error).message).toMatch(/can't be rescheduled/);
+      expectNoWrites();
+    },
+  );
+
+  it("reopens a MISSED job as SCHEDULED on a new date, and records that it was reopened", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    const existing = openJob("MISSED");
+    vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(
+      existing as never,
+    );
+    vi.mocked(tx.cleaningSchedule.updateMany).mockResolvedValueOnce({
+      count: 1,
+    } as never);
+
+    const result = await rescheduleCleaningSchedule(actor, "cs1", {
+      scheduledDate: newDate,
+    });
+
+    expect(tx.cleaningSchedule.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "cs1",
+        status: { in: ["SCHEDULED", "IN_PROGRESS", "MISSED"] },
+      },
       data: {
-        scheduledDate: new Date("2026-09-10"),
+        scheduledDate: newDate,
         originalScheduledDate: new Date("2026-09-01"),
+        status: "SCHEDULED",
       },
     });
+    expect(tx.task.update).toHaveBeenCalledWith({
+      where: { id: "task-1" },
+      data: { dueAt: newDate },
+    });
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "cleaning_schedule.rescheduled",
+        beforeState: existing,
+        afterState: expect.objectContaining({ status: "SCHEDULED" }),
+        metadata: { reopenedFromMissed: true },
+      }),
+      tx,
+    );
+    expect(result.status).toBe("SCHEDULED");
+  });
+
+  it("reopens a MISSED job on its SAME date too (status only; the date and Task are untouched)", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(
+      openJob("MISSED") as never,
+    );
+    vi.mocked(tx.cleaningSchedule.updateMany).mockResolvedValueOnce({
+      count: 1,
+    } as never);
+
+    await rescheduleCleaningSchedule(actor, "cs1", {
+      scheduledDate: new Date("2026-09-01"),
+    });
+
+    expect(tx.cleaningSchedule.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { status: "SCHEDULED" } }),
+    );
+    expect(tx.task.update).not.toHaveBeenCalled();
+    expect(recordAudit).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses when the job was completed/cancelled between the read and the write", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(tx.cleaningSchedule.findUnique).mockResolvedValueOnce(
+      openJob() as never,
+    );
+    vi.mocked(tx.cleaningSchedule.updateMany).mockResolvedValueOnce({
+      count: 0,
+    } as never);
+
+    await expect(
+      rescheduleCleaningSchedule(actor, "cs1", { scheduledDate: newDate }),
+    ).rejects.toThrow(/just changed/);
+    expect(tx.task.update).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
   });
 
   it("denies rescheduling and performs no writes when the actor lacks cleaning_schedules:update", async () => {
@@ -448,9 +549,8 @@ describe("rescheduleCleaningSchedule", () => {
     await expect(
       rescheduleCleaningSchedule(actor, "cs1", { scheduledDate: newDate }),
     ).rejects.toThrow();
-    expect(prisma.cleaningSchedule.findUniqueOrThrow).not.toHaveBeenCalled();
-    expect(tx.cleaningSchedule.update).not.toHaveBeenCalled();
-    expect(recordAudit).not.toHaveBeenCalled();
+    expect(tx.cleaningSchedule.findUnique).not.toHaveBeenCalled();
+    expectNoWrites();
   });
 });
 
@@ -1075,7 +1175,7 @@ describe("assignCleaningScheduleCleaner with cleanerId null — clear back to Ne
 });
 
 describe("listCleaningJobsNeedingCleaner (Cleaner Phase 5.3)", () => {
-  it("requires cleaning_schedules:read and cleaners:read, and queries open jobs with no cleaner", async () => {
+  it("requires cleaning_schedules:read and cleaners:read, and queries open jobs with no cleaner or an inactive one", async () => {
     vi.mocked(assertPermission).mockResolvedValue(undefined);
     const rows = [{ id: "cs1", status: "SCHEDULED", cleanerId: null }];
     vi.mocked(prisma.cleaningSchedule.findMany).mockResolvedValueOnce(
@@ -1091,9 +1191,10 @@ describe("listCleaningJobsNeedingCleaner (Cleaner Phase 5.3)", () => {
     expect(assertPermission).toHaveBeenCalledWith(actor, "cleaners:read");
     expect(prisma.cleaningSchedule.findMany).toHaveBeenCalledWith({
       where: {
-        cleanerId: null,
         // Same closed set as lib/needs-cleaner.ts and the cleaner-lock rule.
         status: { notIn: ["COMPLETED", "CANCELLED", "MISSED"] },
+        // No cleaner, or (2026-10-07) a stored cleaner who is no longer ACTIVE.
+        OR: [{ cleanerId: null }, { cleaner: { status: { not: "ACTIVE" } } }],
       },
       orderBy: { scheduledDate: "asc" },
       select: {
@@ -1102,6 +1203,7 @@ describe("listCleaningJobsNeedingCleaner (Cleaner Phase 5.3)", () => {
         cleanerId: true,
         scheduledDate: true,
         property: { select: { name: true } },
+        cleaner: { select: { status: true } },
       },
     });
     expect(result).toEqual(rows);

@@ -114,11 +114,16 @@ export function CleaningScheduleList({
             s.status !== "COMPLETED" &&
             s.status !== "CANCELLED" &&
             s.status !== "MISSED";
+          // A missed job can still be rescheduled, which reopens it
+          // (2026-10-07); completed and cancelled jobs can't.
+          const isMissed = s.status === "MISSED";
           // Phases 5.1 + 5.2: copy message / mark notified — admin only, on
-          // open jobs that have a cleaner.
+          // open jobs whose cleaner is ACTIVE (an inactive cleaner needs
+          // replacing, not notifying — the server refuses it too).
           const adminOpenWithCleaner =
             cleaners?.canChangeCleaner === true &&
             s.cleaner !== null &&
+            s.cleaner.status === "ACTIVE" &&
             !CLEANER_LOCKED.has(s.status);
           return (
             <TableRow key={s.id}>
@@ -183,7 +188,7 @@ export function CleaningScheduleList({
                 />
               </TableCell>
               <TableCell>
-                {isOpen && (
+                {(isOpen || isMissed) && (
                   <div className="flex items-center justify-end gap-2">
                     <form
                       action={rescheduleCleaningScheduleAction}
@@ -193,6 +198,9 @@ export function CleaningScheduleList({
                       <Input
                         name="scheduledDate"
                         type="date"
+                        aria-label={
+                          isMissed ? "Reopen on date" : "Reschedule to date"
+                        }
                         defaultValue={new Date(s.scheduledDate)
                           .toISOString()
                           .slice(0, 10)}
@@ -200,27 +208,31 @@ export function CleaningScheduleList({
                         className="py-1.5 text-xs"
                       />
                       <Button type="submit" variant="secondary" size="sm">
-                        Reschedule
+                        {isMissed ? "Reopen" : "Reschedule"}
                       </Button>
                     </form>
-                    <form action={completeCleaningScheduleAction}>
-                      <input type="hidden" name="scheduleId" value={s.id} />
-                      <Button type="submit" variant="primary" size="sm">
-                        Complete
-                      </Button>
-                    </form>
-                    <form action={markCleaningScheduleMissedAction}>
-                      <input type="hidden" name="scheduleId" value={s.id} />
-                      <Button type="submit" variant="secondary" size="sm">
-                        Missed
-                      </Button>
-                    </form>
-                    <form action={cancelCleaningScheduleAction}>
-                      <input type="hidden" name="scheduleId" value={s.id} />
-                      <Button type="submit" variant="danger" size="sm">
-                        Cancel
-                      </Button>
-                    </form>
+                    {isOpen && (
+                      <>
+                        <form action={completeCleaningScheduleAction}>
+                          <input type="hidden" name="scheduleId" value={s.id} />
+                          <Button type="submit" variant="primary" size="sm">
+                            Complete
+                          </Button>
+                        </form>
+                        <form action={markCleaningScheduleMissedAction}>
+                          <input type="hidden" name="scheduleId" value={s.id} />
+                          <Button type="submit" variant="secondary" size="sm">
+                            Missed
+                          </Button>
+                        </form>
+                        <form action={cancelCleaningScheduleAction}>
+                          <input type="hidden" name="scheduleId" value={s.id} />
+                          <Button type="submit" variant="danger" size="sm">
+                            Cancel
+                          </Button>
+                        </form>
+                      </>
+                    )}
                   </div>
                 )}
               </TableCell>

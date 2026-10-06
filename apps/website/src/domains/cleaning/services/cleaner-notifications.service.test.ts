@@ -51,7 +51,7 @@ function job(overrides: Record<string, unknown> = {}) {
     id: SCHEDULE,
     status: "SCHEDULED",
     scheduledDate: new Date("2026-10-10T00:00:00Z"),
-    cleaner: { id: ALEX, name: "Alex" },
+    cleaner: { id: ALEX, name: "Alex", status: "ACTIVE" },
     property: { id: "p-harbor", name: "Harbor House" },
     ...overrides,
   };
@@ -123,7 +123,9 @@ describe("markCleanerNotified (Cleaner Phase 5.2)", () => {
     await markCleanerNotified(actor, { scheduleId: SCHEDULE, cleanerId: ALEX });
 
     const select = tx.cleaningSchedule.findUnique.mock.calls[0]![0].select;
-    expect(select.cleaner).toEqual({ select: { id: true, name: true } });
+    expect(select.cleaner).toEqual({
+      select: { id: true, name: true, status: true },
+    });
     expect(JSON.stringify(vi.mocked(recordAudit).mock.calls)).not.toMatch(
       /phone/i,
     );
@@ -176,12 +178,27 @@ describe("markCleanerNotified (Cleaner Phase 5.2)", () => {
 
   it("refuses when the job's cleaner changed since the page was loaded", async () => {
     tx.cleaningSchedule.findUnique.mockResolvedValueOnce(
-      job({ cleaner: { id: SAM, name: "Sam" } }),
+      job({ cleaner: { id: SAM, name: "Sam", status: "ACTIVE" } }),
     );
 
     await expect(
       markCleanerNotified(actor, { scheduleId: SCHEDULE, cleanerId: ALEX }),
     ).rejects.toThrow("cleaner was just changed");
+    expectNoWrites();
+  });
+
+  it("refuses an inactive cleaner — the job needs a new cleaner, not a notification (2026-10-07)", async () => {
+    tx.cleaningSchedule.findUnique.mockResolvedValueOnce(
+      job({ cleaner: { id: ALEX, name: "Alex", status: "INACTIVE" } }),
+    );
+
+    const err = await markCleanerNotified(actor, {
+      scheduleId: SCHEDULE,
+      cleanerId: ALEX,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(CleaningRuleError);
+    expect((err as Error).message).toMatch(/Alex is inactive/);
     expectNoWrites();
   });
 

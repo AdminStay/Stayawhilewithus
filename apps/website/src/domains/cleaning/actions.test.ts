@@ -5,6 +5,10 @@ const m = vi.hoisted(() => ({
   createCleaningSchedule: vi.fn(),
   assignCleaningScheduleCleaner: vi.fn(),
   markCleanerNotified: vi.fn(),
+  completeCleaningSchedule: vi.fn(),
+  cancelCleaningSchedule: vi.fn(),
+  markCleaningScheduleMissed: vi.fn(),
+  rescheduleCleaningSchedule: vi.fn(),
   revalidatePath: vi.fn(),
 }));
 
@@ -14,10 +18,10 @@ vi.mock("@/platform/auth/get-current-user", () => ({
 vi.mock("./services/cleaning.service", () => ({
   createCleaningSchedule: m.createCleaningSchedule,
   assignCleaningScheduleCleaner: m.assignCleaningScheduleCleaner,
-  completeCleaningSchedule: vi.fn(),
-  cancelCleaningSchedule: vi.fn(),
-  markCleaningScheduleMissed: vi.fn(),
-  rescheduleCleaningSchedule: vi.fn(),
+  completeCleaningSchedule: m.completeCleaningSchedule,
+  cancelCleaningSchedule: m.cancelCleaningSchedule,
+  markCleaningScheduleMissed: m.markCleaningScheduleMissed,
+  rescheduleCleaningSchedule: m.rescheduleCleaningSchedule,
 }));
 vi.mock("./services/cleaner-notifications.service", () => ({
   markCleanerNotified: m.markCleanerNotified,
@@ -31,8 +35,12 @@ import { ForbiddenError } from "@stayw/auth";
 
 import {
   assignCleaningScheduleCleanerAction,
+  cancelCleaningScheduleAction,
+  completeCleaningScheduleAction,
   createCleaningScheduleAction,
   markCleanerNotifiedAction,
+  markCleaningScheduleMissedAction,
+  rescheduleCleaningScheduleAction,
   type CleaningFormState,
 } from "./actions";
 import { CleaningRuleError } from "./lib/errors";
@@ -307,4 +315,82 @@ describe("markCleanerNotifiedAction (Cleaner Phase 5.2)", () => {
     });
     expect(m.revalidatePath).not.toHaveBeenCalled();
   });
+});
+
+describe("lifecycle actions (2026-10-07)", () => {
+  const cases: Array<{
+    name: string;
+    action: (formData: FormData) => Promise<void>;
+    service: ReturnType<typeof vi.fn>;
+    fields: Record<string, string>;
+  }> = [
+    {
+      name: "completeCleaningScheduleAction",
+      action: completeCleaningScheduleAction,
+      service: m.completeCleaningSchedule,
+      fields: { scheduleId: SCHEDULE },
+    },
+    {
+      name: "cancelCleaningScheduleAction",
+      action: cancelCleaningScheduleAction,
+      service: m.cancelCleaningSchedule,
+      fields: { scheduleId: SCHEDULE },
+    },
+    {
+      name: "markCleaningScheduleMissedAction",
+      action: markCleaningScheduleMissedAction,
+      service: m.markCleaningScheduleMissed,
+      fields: { scheduleId: SCHEDULE },
+    },
+    {
+      name: "rescheduleCleaningScheduleAction",
+      action: rescheduleCleaningScheduleAction,
+      service: m.rescheduleCleaningSchedule,
+      fields: { scheduleId: SCHEDULE, scheduledDate: "2026-10-12" },
+    },
+  ];
+
+  it.each(cases)(
+    "$name runs the service and refreshes /cleaning and /",
+    async ({ action, service, fields }) => {
+      service.mockResolvedValueOnce({});
+
+      await action(form(fields));
+
+      expect(service).toHaveBeenCalledWith(
+        actor,
+        SCHEDULE,
+        ...(fields.scheduledDate
+          ? [{ scheduledDate: new Date("2026-10-12") }]
+          : []),
+      );
+      expect(m.revalidatePath).toHaveBeenCalledWith("/cleaning");
+      expect(m.revalidatePath).toHaveBeenCalledWith("/");
+    },
+  );
+
+  it.each(cases)(
+    "$name: a rule refusal (stale page) doesn't throw — it refreshes so the real status shows",
+    async ({ action, service, fields }) => {
+      service.mockRejectedValueOnce(
+        new CleaningRuleError("This cleaning is already completed."),
+      );
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await expect(action(form(fields))).resolves.toBeUndefined();
+
+      expect(m.revalidatePath).toHaveBeenCalledWith("/cleaning");
+      warn.mockRestore();
+    },
+  );
+
+  it.each(cases)(
+    "$name: any other error still throws",
+    async ({ action, service, fields }) => {
+      service.mockRejectedValueOnce(new ForbiddenError("nope"));
+
+      await expect(action(form(fields))).rejects.toThrow();
+      expect(m.revalidatePath).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -123,28 +123,53 @@ export async function assignCleaningScheduleCleanerAction(
   };
 }
 
+/**
+ * Complete / cancel / missed / reschedule are plain forms that only appear
+ * on rows where they're allowed. The service still enforces the lifecycle
+ * rules (2026-10-07), so a refusal here means the page was stale — e.g.
+ * someone else closed the job meanwhile. Nothing was written; refresh the
+ * page so it shows the job's real status, instead of an error screen. Any
+ * other error (permission, database) still throws as before.
+ */
+async function runLifecycleAction(
+  label: string,
+  run: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await run();
+  } catch (err) {
+    if (!(err instanceof CleaningRuleError)) throw err;
+    console.warn(`${label} refused:`, err.message);
+  }
+  revalidatePath("/cleaning");
+  revalidatePath("/");
+}
+
 export async function completeCleaningScheduleAction(formData: FormData) {
   const actor = await getCurrentUser();
   const scheduleId = formData.get("scheduleId") as string;
 
-  await completeCleaningSchedule(actor, scheduleId);
-  revalidatePath("/cleaning");
+  await runLifecycleAction("completeCleaningScheduleAction", () =>
+    completeCleaningSchedule(actor, scheduleId),
+  );
 }
 
 export async function cancelCleaningScheduleAction(formData: FormData) {
   const actor = await getCurrentUser();
   const scheduleId = formData.get("scheduleId") as string;
 
-  await cancelCleaningSchedule(actor, scheduleId);
-  revalidatePath("/cleaning");
+  await runLifecycleAction("cancelCleaningScheduleAction", () =>
+    cancelCleaningSchedule(actor, scheduleId),
+  );
 }
 
 export async function markCleaningScheduleMissedAction(formData: FormData) {
   const actor = await getCurrentUser();
   const scheduleId = formData.get("scheduleId") as string;
 
-  await markCleaningScheduleMissed(actor, scheduleId);
-  revalidatePath("/cleaning");
+  await runLifecycleAction("markCleaningScheduleMissedAction", () =>
+    markCleaningScheduleMissed(actor, scheduleId),
+  );
 }
 
 export async function rescheduleCleaningScheduleAction(formData: FormData) {
@@ -155,9 +180,9 @@ export async function rescheduleCleaningScheduleAction(formData: FormData) {
     scheduledDate: formData.get("scheduledDate"),
   });
 
-  await rescheduleCleaningSchedule(actor, scheduleId, input);
-  revalidatePath("/cleaning");
-  revalidatePath("/");
+  await runLifecycleAction("rescheduleCleaningScheduleAction", () =>
+    rescheduleCleaningSchedule(actor, scheduleId, input),
+  );
 }
 
 /**
