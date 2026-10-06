@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { DashboardSummary } from "./DashboardSummary";
@@ -268,5 +268,93 @@ describe("DashboardSummary — cleaning jobs needing attention (Cleaner Phase 5.
 
     expect(screen.queryByText(/cleaning jobs? needs? attention/)).toBeNull();
     expect(screen.queryByText("Needs cleaner")).toBeNull();
+  });
+});
+
+describe("DashboardSummary — reservation summary (Phase 6)", () => {
+  const ownerRez = (overrides: Record<string, unknown> = {}) =>
+    reservation({
+      status: "CONFIRMED",
+      source: "OWNERREZ",
+      externalReservationId: "777",
+      ...overrides,
+    });
+
+  it("each arrival/departure row shows property, guest, nights, status and the OwnerRez link", () => {
+    render(
+      <DashboardSummary
+        summary={baseSummary({
+          arrivalsToday: [ownerRez({ id: "arr-1" })] as never,
+          departuresToday: [
+            ownerRez({
+              id: "dep-1",
+              status: "CHECKED_IN",
+              externalReservationId: "888",
+              primaryGuest: { firstName: "Sam", lastName: "Lee" },
+              property: { name: "Bonjour AMI" },
+              checkInDate: new Date("2026-10-01T00:00:00.000Z"),
+              checkOutDate: new Date("2026-10-06T00:00:00.000Z"),
+            }),
+          ] as never,
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Jane Doe")).toBeTruthy();
+    expect(screen.getByText("Aqua Palm")).toBeTruthy();
+    expect(screen.getByText("3 nights")).toBeTruthy();
+    expect(screen.getByText("CONFIRMED")).toBeTruthy();
+    expect(screen.getByText("Sam Lee")).toBeTruthy();
+    expect(screen.getByText("Bonjour AMI")).toBeTruthy();
+    expect(screen.getByText("5 nights")).toBeTruthy();
+    expect(screen.getByText("CHECKED_IN")).toBeTruthy();
+    const links = screen
+      .getAllByRole("link", { name: "Open this booking in OwnerRez" })
+      .map((a) => a.getAttribute("href"));
+    expect(links).toEqual([
+      "https://secure.ownerreservations.com/bookings/777",
+      "https://secure.ownerreservations.com/bookings/888",
+    ]);
+  });
+
+  it('has a "View all" link to /reservations?view=today', () => {
+    render(<DashboardSummary summary={baseSummary()} />);
+
+    const section = screen
+      .getByText("Today's Check-ins & Check-outs")
+      .closest("div")!.parentElement!;
+    const viewAll = within(section).getByRole("link", { name: "View all" });
+    expect(viewAll.getAttribute("href")).toBe("/reservations?view=today");
+  });
+
+  it("keeps the honest empty states (and View all) when there are no reservations today", () => {
+    render(<DashboardSummary summary={baseSummary()} />);
+
+    expect(screen.getByText("No arrivals today.")).toBeTruthy();
+    expect(screen.getByText("No check-outs today.")).toBeTruthy();
+    expect(
+      screen.queryByRole("link", { name: "Open this booking in OwnerRez" }),
+    ).toBeNull();
+    expect(
+      document.querySelector('a[href="/reservations?view=today"]'),
+    ).toBeTruthy();
+  });
+
+  it("offers no reservation status control on the dashboard", () => {
+    const { container } = render(
+      <DashboardSummary
+        summary={baseSummary({
+          arrivalsToday: [
+            reservation({
+              status: "PENDING",
+              source: "DIRECT",
+              externalReservationId: "x",
+            }),
+          ] as never,
+        })}
+      />,
+    );
+
+    expect(container.querySelector('select[name="status"]')).toBeNull();
   });
 });

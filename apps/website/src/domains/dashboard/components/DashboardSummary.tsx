@@ -32,6 +32,8 @@ import {
 import { OwnerRezLink } from "@/domains/integrations/components/OwnerRezLink";
 import { ownerRezBookingUrl } from "@/domains/integrations/lib/ownerrez-links";
 import { ownerRezPropertyLabel } from "@/domains/integrations/lib/ownerrez-property-names";
+import { ReservationSummaryItem } from "@/domains/reservations/components/ReservationSummaryItem";
+import { TODAY_RESERVATIONS_HREF } from "@/domains/reservations/lib/reservation-summary";
 import {
   TeamAvailability,
   type TeamAvailabilityDisplayEntry,
@@ -506,7 +508,20 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
           </div>
 
           <div>
-            <SectionHeader title="Today's Check-ins & Check-outs" />
+            {/* Phase 6: each row shows guest, status, property, nights and
+                (OwnerRez bookings) an Open-in-OwnerRez link; "View all" goes
+                to /reservations' Today view. Same data and rules as before. */}
+            <SectionHeader
+              title="Today's Check-ins & Check-outs"
+              action={
+                <Link
+                  href={TODAY_RESERVATIONS_HREF}
+                  className="text-xs font-medium text-forest-600 hover:underline"
+                >
+                  View all
+                </Link>
+              }
+            />
             <div className="grid divide-y divide-border rounded-card border border-border sm:grid-cols-2 sm:divide-x sm:divide-y-0">
               <div className="p-5">
                 <h3 className="text-xs font-medium uppercase tracking-wide text-ink-muted">
@@ -517,17 +532,9 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
                     No arrivals today.
                   </p>
                 ) : (
-                  <ul className="mt-3 space-y-2 text-sm text-ink">
+                  <ul className="mt-3 space-y-3 text-sm text-ink">
                     {summary.arrivalsToday.map((r) => (
-                      <li
-                        key={r.id}
-                        className="flex items-center justify-between"
-                      >
-                        <span>{guestName(r.primaryGuest)}</span>
-                        <span className="text-ink-muted">
-                          {r.property?.name ?? "Property"}
-                        </span>
-                      </li>
+                      <ReservationSummaryItem key={r.id} reservation={r} />
                     ))}
                   </ul>
                 )}
@@ -541,17 +548,9 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
                     No check-outs today.
                   </p>
                 ) : (
-                  <ul className="mt-3 space-y-2 text-sm text-ink">
+                  <ul className="mt-3 space-y-3 text-sm text-ink">
                     {summary.departuresToday.map((r) => (
-                      <li
-                        key={r.id}
-                        className="flex items-center justify-between"
-                      >
-                        <span>{guestName(r.primaryGuest)}</span>
-                        <span className="text-ink-muted">
-                          {r.property?.name ?? "Property"}
-                        </span>
-                      </li>
+                      <ReservationSummaryItem key={r.id} reservation={r} />
                     ))}
                   </ul>
                 )}
