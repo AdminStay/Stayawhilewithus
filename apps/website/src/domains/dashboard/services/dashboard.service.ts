@@ -36,6 +36,7 @@ import {
   listSmartDevices,
 } from "@/domains/smart-devices/services/smart-devices.service";
 import { listTasks } from "@/domains/tasks/services/tasks.service";
+import { SCHEDULE_TIMEZONE } from "@/domains/team/services/chicago-date";
 import { getTeamAvailabilitySnapshot } from "@/domains/team/services/schedule.service";
 
 /**
@@ -63,18 +64,33 @@ async function safeResult<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
   }
 }
 
-/** "Today" as a UTC calendar day, matching how packages/database/prisma/seed.ts constructs its demo dates — @db.Date columns round-trip through Prisma via their UTC Y/M/D, so comparing on local server time directly would misalign by a day whenever the server isn't running in UTC. */
-function todayUtc(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+/**
+ * Whether a date-only value (a @db.Date, or Task.dueAt, which is entered
+ * as a date and stored as UTC midnight) falls on "today" in `timeZone`.
+ * The value's own calendar day is read in UTC (calendarDay) and compared
+ * with the local today — never with the server's UTC date, which rolled
+ * "today" over at ~7–8 PM Eastern/Central. False when the zone can't be
+ * resolved.
+ */
+function isLocalToday(value: Date, timeZone: string, now: Date): boolean {
+  const localToday = localDateInTimeZone(now, timeZone);
+  return localToday !== null && calendarDay(value) === localToday;
 }
 
-function isSameUtcDay(a: Date, b: Date): boolean {
-  return (
-    a.getUTCFullYear() === b.getUTCFullYear() &&
-    a.getUTCMonth() === b.getUTCMonth() &&
-    a.getUTCDate() === b.getUTCDate()
-  );
+/**
+ * A task's "today" zone: its property's timezone when that resolves,
+ * otherwise StayWhile's single operating timezone (SCHEDULE_TIMEZONE) — a
+ * task may have no property, and the operating zone is the established
+ * dashboard-wide rule, not a guess.
+ */
+function taskTimeZone(
+  property: { timezone: string } | null | undefined,
+  now: Date,
+): string {
+  const zone = property?.timezone;
+  return zone && localDateInTimeZone(now, zone) !== null
+    ? zone
+    : SCHEDULE_TIMEZONE;
 }
 
 // How far ahead "upcoming" looks past today — a short, scannable window,
@@ -139,8 +155,6 @@ export async function getDashboardSummary(actor: AuthContext) {
     // row) for anyone without cleaning_schedules:read + cleaners:read.
     safeList(() => listCleaningJobsNeedingCleaner(actor)),
   ]);
-
-  const today = todayUtc();
 
   const activeStatuses = new Set(["PENDING", "CONFIRMED", "CHECKED_IN"]);
   // Reservations are compared against each property's OWN local today
@@ -221,15 +235,18 @@ export async function getDashboardSummary(actor: AuthContext) {
       ? occupiedPropertyIds.size / operationalPropertyCount
       : 0;
 
+  // Tasks and cleanings use the same local-today rule as reservations
+  // (2026-10-07). A cleaning uses its property's timezone (unresolvable →
+  // left out, as above); a task uses taskTimeZone().
   const tasksDueToday = tasks.filter(
     (t) =>
       t.dueAt &&
       t.status !== "DONE" &&
       t.status !== "CANCELLED" &&
-      isSameUtcDay(new Date(t.dueAt), today),
+      isLocalToday(new Date(t.dueAt), taskTimeZone(t.property, now), now),
   );
   const cleaningToday = cleaningSchedules.filter((c) =>
-    isSameUtcDay(new Date(c.scheduledDate), today),
+    isLocalToday(new Date(c.scheduledDate), c.property.timezone, now),
   );
 
   const locks = smartDevices.filter((d) => d.deviceType === "LOCK");
@@ -302,6 +319,8 @@ export async function getDashboardSummary(actor: AuthContext) {
     upcomingCheckOuts,
     occupancyRate,
     occupiedPropertyCount: occupiedPropertyIds.size,
+    // ACTIVE + ONBOARDING, not deleted — the "Properties" tile's count.
+    operationalPropertyCount,
     tasksDueToday,
     cleaningToday,
   };

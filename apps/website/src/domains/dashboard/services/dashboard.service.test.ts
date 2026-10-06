@@ -151,13 +151,33 @@ function mockAllLists() {
     },
   ] as never);
   vi.mocked(listTasks).mockResolvedValue([
-    { id: "t1", status: "TODO", dueAt: null },
-    { id: "t2", status: "DONE", dueAt: TODAY },
-    { id: "t3", status: "TODO", dueAt: TODAY },
+    { id: "t1", status: "TODO", dueAt: null, property: null },
+    {
+      id: "t2",
+      status: "DONE",
+      dueAt: TODAY,
+      property: OPERATIONAL_IN_LOCAL_TZ,
+    },
+    {
+      id: "t3",
+      status: "TODO",
+      dueAt: TODAY,
+      property: OPERATIONAL_IN_LOCAL_TZ,
+    },
   ] as never);
   vi.mocked(listCleaningSchedules).mockResolvedValue([
-    { id: "c1", status: "SCHEDULED", scheduledDate: TODAY },
-    { id: "c2", status: "COMPLETED", scheduledDate: daysFromToday(-1) },
+    {
+      id: "c1",
+      status: "SCHEDULED",
+      scheduledDate: TODAY,
+      property: OPERATIONAL_IN_LOCAL_TZ,
+    },
+    {
+      id: "c2",
+      status: "COMPLETED",
+      scheduledDate: daysFromToday(-1),
+      property: OPERATIONAL_IN_LOCAL_TZ,
+    },
   ] as never);
   vi.mocked(listMaintenanceRequests).mockResolvedValue([
     { id: "m1", status: "OPEN" },
@@ -547,6 +567,112 @@ describe("getDashboardSummary", () => {
       expect(summary.upcomingCheckIns.map((r) => r.id)).toEqual([
         "arrives-oct-2",
       ]);
+    });
+
+    it("tasks due today and cleaning today use the local date too, not UTC (2026-10-07)", async () => {
+      // 9:30 PM Central on Oct 1 — UTC is already Oct 2.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-02T02:30:00Z"));
+      mockAllLists();
+      vi.mocked(listTasks).mockResolvedValueOnce([
+        {
+          id: "oct-1",
+          status: "TODO",
+          dueAt: day("2026-10-01"),
+          property: chicago(),
+        },
+        {
+          id: "oct-2",
+          status: "TODO",
+          dueAt: day("2026-10-02"),
+          property: chicago(),
+        },
+        // No property → StayWhile's operating timezone (America/Chicago).
+        {
+          id: "no-property",
+          status: "TODO",
+          dueAt: day("2026-10-01"),
+          property: null,
+        },
+        // Unresolvable property zone → also the operating timezone.
+        {
+          id: "bad-tz",
+          status: "IN_PROGRESS",
+          dueAt: day("2026-10-01"),
+          property: { ...chicago(), timezone: "Not/AZone" },
+        },
+      ] as never);
+      vi.mocked(listCleaningSchedules).mockResolvedValueOnce([
+        {
+          id: "clean-oct-1",
+          status: "SCHEDULED",
+          scheduledDate: day("2026-10-01"),
+          property: chicago(),
+        },
+        {
+          id: "clean-oct-2",
+          status: "SCHEDULED",
+          scheduledDate: day("2026-10-02"),
+          property: chicago(),
+        },
+        // A cleaning's zone is never guessed: unresolvable → left out.
+        {
+          id: "clean-bad-tz",
+          status: "SCHEDULED",
+          scheduledDate: day("2026-10-01"),
+          property: { ...chicago(), timezone: "Not/AZone" },
+        },
+      ] as never);
+
+      const summary = await getDashboardSummary(actor);
+
+      expect(summary.tasksDueToday.map((t) => t.id)).toEqual([
+        "oct-1",
+        "no-property",
+        "bad-tz",
+      ]);
+      expect(summary.cleaningToday.map((c) => c.id)).toEqual(["clean-oct-1"]);
+    });
+
+    it("an Eastern property's cleaning rolls over at Eastern midnight, not UTC", async () => {
+      // 11:30 PM Eastern Oct 1 = 03:30 UTC Oct 2.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-10-02T03:30:00Z"));
+      mockAllLists();
+      const eastern = { ...chicago(), timezone: "America/New_York" };
+      vi.mocked(listCleaningSchedules).mockResolvedValueOnce([
+        {
+          id: "e-oct-1",
+          status: "SCHEDULED",
+          scheduledDate: day("2026-10-01"),
+          property: eastern,
+        },
+        {
+          id: "e-oct-2",
+          status: "SCHEDULED",
+          scheduledDate: day("2026-10-02"),
+          property: eastern,
+        },
+      ] as never);
+
+      const summary = await getDashboardSummary(actor);
+
+      expect(summary.cleaningToday.map((c) => c.id)).toEqual(["e-oct-1"]);
+    });
+
+    it("operationalPropertyCount counts ACTIVE + ONBOARDING only (the Properties tile)", async () => {
+      mockAllLists();
+      vi.mocked(listProperties).mockResolvedValueOnce([
+        { id: "a", status: "ACTIVE", deletedAt: null },
+        { id: "o", status: "ONBOARDING", deletedAt: null },
+        { id: "i", status: "INACTIVE", deletedAt: null },
+        { id: "x", status: "OFFBOARDED", deletedAt: null },
+      ] as never);
+
+      const summary = await getDashboardSummary(actor);
+
+      expect(summary.operationalPropertyCount).toBe(2);
+      expect(summary.properties).toHaveLength(4);
     });
 
     it("ONBOARDING counts; INACTIVE, OFFBOARDED and deleted properties don't", async () => {

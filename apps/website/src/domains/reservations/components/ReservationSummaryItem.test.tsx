@@ -31,7 +31,7 @@ describe("ReservationSummaryItem (Phase 6)", () => {
     expect(screen.getByText("Harbor House")).toBeTruthy();
     expect(screen.getByText("Jane Doe")).toBeTruthy();
     expect(screen.getByText("3 nights")).toBeTruthy();
-    expect(screen.getByText("CONFIRMED")).toBeTruthy();
+    expect(screen.getByText("Confirmed")).toBeTruthy();
   });
 
   it("links an OwnerRez booking to OwnerRez, in a new tab", () => {
@@ -61,9 +61,12 @@ describe("ReservationSummaryItem (Phase 6)", () => {
     expect(container.querySelector("button")).toBeNull();
   });
 
-  it.each(["CHECKED_IN", "PENDING"])("shows status %s", (status) => {
+  it.each([
+    ["CHECKED_IN", "Checked in"],
+    ["PENDING", "Pending"],
+  ])("shows status %s as %s", (status, label) => {
     renderItem({ status });
-    expect(screen.getByText(status)).toBeTruthy();
+    expect(screen.getByText(label)).toBeTruthy();
   });
 
   it("falls back gracefully when guest or property is missing", () => {

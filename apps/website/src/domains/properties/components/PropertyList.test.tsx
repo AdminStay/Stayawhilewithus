@@ -48,6 +48,38 @@ describe("PropertyList — Open in OwnerRez (2026-10-03)", () => {
   });
 });
 
+describe("PropertyList — display (2026-10-07)", () => {
+  it("shows a readable status label; the status dropdown still submits the enum", () => {
+    const { container } = render(
+      <PropertyList properties={[property()] as never} />,
+    );
+    expect(
+      screen.getAllByText("Onboarding").filter((el) => el.tagName !== "OPTION"),
+    ).toHaveLength(1);
+    expect(screen.queryByText("ONBOARDING")).toBeNull();
+    const options = [
+      ...container.querySelectorAll('select[name="status"] option'),
+    ].map((o) => [(o as HTMLOptionElement).value, o.textContent]);
+    expect(options).toEqual([
+      ["ACTIVE", "Active"],
+      ["INACTIVE", "Inactive"],
+      ["ONBOARDING", "Onboarding"],
+      ["OFFBOARDED", "Offboarded"],
+    ]);
+  });
+
+  it("uses the filter-specific empty state it's given", () => {
+    render(
+      <PropertyList
+        properties={[]}
+        emptyTitle="No inactive properties"
+        emptyDescription="Inactive and offboarded properties appear here."
+      />,
+    );
+    expect(screen.getByText("No inactive properties")).toBeTruthy();
+  });
+});
+
 describe("PropertyList — Cleaner column (Cleaner Assignments Phase 3)", () => {
   it("is hidden entirely when the viewer can't read cleaners (summaries null)", () => {
     render(<PropertyList properties={[property()] as never} />);

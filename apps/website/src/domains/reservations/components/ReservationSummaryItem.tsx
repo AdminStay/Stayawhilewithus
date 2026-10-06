@@ -4,6 +4,7 @@ import {
   nightsLabel,
   RESERVATION_STATUS_TONE,
   reservationNights,
+  reservationStatusLabel,
 } from "../lib/reservation-summary";
 
 import { OwnerRezLink } from "@/domains/integrations/components/OwnerRezLink";
@@ -39,7 +40,7 @@ export function ReservationSummaryItem({
       <div className="flex items-center justify-between gap-3">
         <span className="min-w-0 truncate font-medium">{guest}</span>
         <Badge tone={RESERVATION_STATUS_TONE[r.status] ?? "neutral"}>
-          {r.status}
+          {reservationStatusLabel(r.status)}
         </Badge>
       </div>
       <div className="text-xs text-ink-muted">

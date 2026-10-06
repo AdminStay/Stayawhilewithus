@@ -12,7 +12,6 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
-  type Tone,
 } from "@stayw/ui";
 import { Building2 } from "lucide-react";
 import Link from "next/link";
@@ -22,6 +21,10 @@ import {
   updatePropertyOccupancyAction,
   updatePropertyStatusAction,
 } from "../actions";
+import {
+  PROPERTY_STATUS_TONE,
+  propertyStatusLabel,
+} from "../lib/property-status-filter";
 import type { Property } from "../services/properties.service";
 
 import { PropertyCleanerSummary } from "@/domains/cleaners/components/PropertyCleanerSummary";
@@ -31,28 +34,26 @@ import { ownerRezPropertyUrl } from "@/domains/integrations/lib/ownerrez-links";
 
 const STATUSES = ["ACTIVE", "INACTIVE", "ONBOARDING", "OFFBOARDED"] as const;
 
-const STATUS_TONE: Record<(typeof STATUSES)[number], Tone> = {
-  ACTIVE: "success",
-  ONBOARDING: "info",
-  INACTIVE: "neutral",
-  OFFBOARDED: "error",
-};
-
 export function PropertyList({
   properties,
   cleanerSummaries = null,
+  emptyTitle = "No properties yet",
+  emptyDescription = "Add your first property to get started.",
 }: {
   properties: Property[];
   /** propertyId → current cleaners; null hides the Cleaner column (no cleaners:read). */
   cleanerSummaries?: Record<string, CleanerSummary> | null;
+  /** Empty-state copy — /properties passes status-filter-specific text (2026-10-07). */
+  emptyTitle?: string;
+  emptyDescription?: string;
 }) {
   if (properties.length === 0) {
     return (
       <Card noPadding>
         <EmptyState
           icon={Building2}
-          title="No properties yet"
-          description="Add your first property to get started."
+          title={emptyTitle}
+          description={emptyDescription}
         />
       </Card>
     );
@@ -86,7 +87,10 @@ export function PropertyList({
               {p.city}, {p.state}
             </TableCell>
             <TableCell>
-              <StatusIndicator label={p.status} tone={STATUS_TONE[p.status]} />
+              <StatusIndicator
+                label={propertyStatusLabel(p.status)}
+                tone={PROPERTY_STATUS_TONE[p.status] ?? "neutral"}
+              />
             </TableCell>
             {cleanerSummaries && (
               <TableCell>
@@ -131,7 +135,7 @@ export function PropertyList({
                   >
                     {STATUSES.map((s) => (
                       <option key={s} value={s}>
-                        {s}
+                        {propertyStatusLabel(s)}
                       </option>
                     ))}
                   </Select>

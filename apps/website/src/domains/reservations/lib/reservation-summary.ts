@@ -20,6 +20,32 @@ export const RESERVATION_STATUS_TONE: Record<string, Tone> = {
   CANCELLED: "error",
 };
 
+/** Human labels for Reservation.status (values themselves are unchanged). */
+export const RESERVATION_STATUS_LABELS: Record<string, string> = {
+  PENDING: "Pending",
+  CONFIRMED: "Confirmed",
+  CHECKED_IN: "Checked in",
+  CHECKED_OUT: "Checked out",
+  CANCELLED: "Cancelled",
+};
+
+export function reservationStatusLabel(status: string): string {
+  return RESERVATION_STATUS_LABELS[status] ?? status;
+}
+
+/**
+ * A check-in/check-out date (@db.Date, midnight UTC) as "Oct 6, 2026",
+ * read in UTC so it never shows the day before in a zone behind UTC.
+ */
+export function formatReservationDate(date: Date): string {
+  return new Date(date).toLocaleDateString("en-US", {
+    timeZone: "UTC",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**

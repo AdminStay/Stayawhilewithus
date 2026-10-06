@@ -303,11 +303,11 @@ describe("DashboardSummary — reservation summary (Phase 6)", () => {
     expect(screen.getByText("Jane Doe")).toBeTruthy();
     expect(screen.getByText("Aqua Palm")).toBeTruthy();
     expect(screen.getByText("3 nights")).toBeTruthy();
-    expect(screen.getByText("CONFIRMED")).toBeTruthy();
+    expect(screen.getByText("Confirmed")).toBeTruthy();
     expect(screen.getByText("Sam Lee")).toBeTruthy();
     expect(screen.getByText("Bonjour AMI")).toBeTruthy();
     expect(screen.getByText("5 nights")).toBeTruthy();
-    expect(screen.getByText("CHECKED_IN")).toBeTruthy();
+    expect(screen.getByText("Checked in")).toBeTruthy();
     const links = screen
       .getAllByRole("link", { name: "Open this booking in OwnerRez" })
       .map((a) => a.getAttribute("href"));
