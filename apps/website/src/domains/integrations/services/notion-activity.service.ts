@@ -1,58 +1,48 @@
 import "server-only";
 
-import { assertPermission, type AuthContext } from "@stayw/auth";
+import { assertPermission, hasPermission, type AuthContext } from "@stayw/auth";
 import { prisma } from "@stayw/database";
+
+import {
+  toNotionActivityView,
+  type NotionActivityView,
+} from "./notion-activity-view";
 
 const DEFAULT_LIMIT = 20;
 
-/**
- * The dashboard-facing shape of a stored NotionPageEvent — deliberately
- * exposes only a changed-field COUNT, never the field ids/names themselves
- * (Notion property ids aren't human-readable labels anyway, and per the
- * client's explicit requirement, no changed value — sensitive or
- * otherwise — is ever surfaced here).
- */
-export interface NotionActivityItem {
-  id: string;
-  entityId: string;
-  entityType: string;
-  eventType: string;
-  changedFieldCount: number;
-  occurredAt: Date;
-}
+export type { NotionActivityView };
 
 /**
- * Backs the "Recent Notion Activity" dashboard section. Gated by
- * `notion:read` (granted to ops_manager today, matching the visibility
- * design in notion-field-visibility.ts) rather than the broader
- * `integrations:read` the older listing/search reads still use — this is
- * new functionality, not a change to those already-Production-verified
- * paths.
+ * Backs "Recent Notion Activity" (updated 2026-09-30). Gated by
+ * `notion:read`. Each stored event becomes one readable line for THIS
+ * viewer (see notion-activity-view.ts): who (only names Notion supplied),
+ * what action, where (breadcrumb + title), which fields changed (names,
+ * never values), when. Sensitive events are redacted for viewers without
+ * `notion:manage`. Nothing here returns Notion ids — the entity id is not
+ * even selected.
  *
- * Reads only from NotionPageEvent, which today is never populated by a
- * real Notion subscription (see notion-webhook-event.service.ts) — so this
- * correctly returns an empty list until that's wired up, rather than
- * fabricating activity.
+ * Reads only stored events; returns an empty list until the webhook
+ * subscription is registered, rather than fabricating activity.
  */
 export async function listRecentNotionActivity(
   actor: AuthContext,
   limit: number = DEFAULT_LIMIT,
-): Promise<NotionActivityItem[]> {
+): Promise<NotionActivityView[]> {
   await assertPermission(actor, "notion:read");
+  const canReadSensitive = await hasPermission(actor, "notion:manage");
 
   const rows = await prisma.notionPageEvent.findMany({
     orderBy: { occurredAt: "desc" },
     take: limit,
+    select: {
+      id: true,
+      entityType: true,
+      eventType: true,
+      changedFieldNames: true,
+      occurredAt: true,
+      details: true,
+    },
   });
 
-  return rows.map((row) => ({
-    id: row.id,
-    entityId: row.entityId,
-    entityType: row.entityType,
-    eventType: row.eventType,
-    changedFieldCount: Array.isArray(row.changedFieldNames)
-      ? row.changedFieldNames.length
-      : 0,
-    occurredAt: row.occurredAt,
-  }));
+  return rows.map((row) => toNotionActivityView(row, { canReadSensitive }));
 }

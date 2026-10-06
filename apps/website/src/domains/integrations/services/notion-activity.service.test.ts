@@ -1,29 +1,51 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockAssertPermission, mockFindMany } = vi.hoisted(() => ({
-  mockAssertPermission: vi.fn(),
-  mockFindMany: vi.fn(),
-}));
+const { mockAssertPermission, mockHasPermission, mockFindMany } = vi.hoisted(
+  () => ({
+    mockAssertPermission: vi.fn(),
+    mockHasPermission: vi.fn(),
+    mockFindMany: vi.fn(),
+  }),
+);
 
 vi.mock("@stayw/auth", () => ({
   assertPermission: mockAssertPermission,
+  hasPermission: mockHasPermission,
 }));
-
 vi.mock("@stayw/database", () => ({
-  prisma: {
-    notionPageEvent: {
-      findMany: mockFindMany,
-    },
-  },
+  prisma: { notionPageEvent: { findMany: mockFindMany } },
 }));
 
 import { listRecentNotionActivity } from "./notion-activity.service";
 
 const ACTOR = { userId: "user-1" };
+const details = (overrides: Record<string, unknown> = {}) => ({
+  version: 1,
+  action: "updated_properties",
+  title: "Router and Thermostat Location",
+  breadcrumb: ["Library", "Property Directory", "Palm Haven"],
+  visibility: "standard",
+  libraryEntryId: "b3bb913f-4b06-44bf-b87c-a692c00f4790",
+  actors: [{ type: "person", name: "Michelle" }],
+  changedProperties: ["Router location"],
+  changedCount: 1,
+  inTrash: false,
+  ...overrides,
+});
+const row = (overrides: Record<string, unknown> = {}) => ({
+  id: "row-1",
+  entityType: "page",
+  eventType: "page.properties_updated",
+  changedFieldNames: ["abc"],
+  occurredAt: new Date("2026-09-30T12:00:00.000Z"),
+  details: details(),
+  ...overrides,
+});
 
-describe("listRecentNotionActivity", () => {
+describe("listRecentNotionActivity (2026-09-30)", () => {
   beforeEach(() => {
     mockAssertPermission.mockReset().mockResolvedValue(undefined);
+    mockHasPermission.mockReset().mockResolvedValue(false);
     mockFindMany.mockReset().mockResolvedValue([]);
   });
 
@@ -40,61 +62,68 @@ describe("listRecentNotionActivity", () => {
     expect(mockFindMany).not.toHaveBeenCalled();
   });
 
-  it("orders by most recent first and defaults to a 20-row limit", async () => {
+  it("never selects the Notion entity id", async () => {
     await listRecentNotionActivity(ACTOR);
-    expect(mockFindMany).toHaveBeenCalledWith({
-      orderBy: { occurredAt: "desc" },
-      take: 20,
+    const select = mockFindMany.mock.calls[0]![0].select;
+    expect(select).not.toHaveProperty("entityId");
+    expect(select).toHaveProperty("details", true);
+  });
+
+  it("builds who / did what / where / what changed", async () => {
+    mockFindMany.mockResolvedValueOnce([row()]);
+    const [item] = await listRecentNotionActivity(ACTOR);
+    expect(item).toMatchObject({
+      who: "Michelle",
+      verb: "updated",
+      actionLabel: "Updated",
+      where:
+        "Library › Property Directory › Palm Haven › Router and Thermostat Location",
+      change: "Changed: Router location",
+      restricted: false,
+    });
+    expect(JSON.stringify(item)).not.toContain("b3bb913f");
+  });
+
+  it("redacts sensitive events for viewers without notion:manage; shows them to admins", async () => {
+    const sensitive = row({
+      details: details({
+        visibility: "sensitive",
+        title: "Palm Haven codes",
+        breadcrumb: ["Library", "Property Lockboxes Code"],
+      }),
+    });
+    mockFindMany.mockResolvedValueOnce([sensitive]);
+    const [redacted] = await listRecentNotionActivity(ACTOR);
+    expect(redacted).toMatchObject({
+      where: "a restricted Notion page",
+      change: null,
+      restricted: true,
+    });
+    expect(JSON.stringify(redacted)).not.toMatch(/Palm Haven codes|Lockboxes/);
+
+    mockHasPermission.mockResolvedValueOnce(true);
+    mockFindMany.mockResolvedValueOnce([sensitive]);
+    const [full] = await listRecentNotionActivity(ACTOR);
+    expect(full).toMatchObject({
+      restricted: false,
+      where: "Library › Property Lockboxes Code › Palm Haven codes",
     });
   });
 
-  it("respects an explicit limit override", async () => {
-    await listRecentNotionActivity(ACTOR, 5);
-    expect(mockFindMany).toHaveBeenCalledWith({
-      orderBy: { occurredAt: "desc" },
-      take: 5,
-    });
-  });
-
-  it("reduces changedFieldNames to a count, never exposing the raw ids/values to the caller", async () => {
+  it("an un-enriched row is shown generically, never with an invented actor or place", async () => {
     mockFindMany.mockResolvedValueOnce([
-      {
-        id: "row-1",
-        entityId: "page-1",
-        entityType: "page",
-        eventType: "page.properties_updated",
-        changedFieldNames: ["prop-a", "prop-b", "prop-c"],
-        occurredAt: new Date("2026-09-16T12:00:00.000Z"),
-      },
-    ]);
-
-    const result = await listRecentNotionActivity(ACTOR);
-
-    expect(result).toEqual([
-      {
-        id: "row-1",
-        entityId: "page-1",
-        entityType: "page",
-        eventType: "page.properties_updated",
-        changedFieldCount: 3,
-        occurredAt: new Date("2026-09-16T12:00:00.000Z"),
-      },
-    ]);
-  });
-
-  it("defaults changedFieldCount to 0 when changedFieldNames isn't an array", async () => {
-    mockFindMany.mockResolvedValueOnce([
-      {
-        id: "row-1",
-        entityId: "page-1",
-        entityType: "page",
-        eventType: "page.deleted",
+      row({
+        details: null,
         changedFieldNames: null,
-        occurredAt: new Date("2026-09-16T12:00:00.000Z"),
-      },
+        eventType: "page.deleted",
+      }),
     ]);
-
-    const result = await listRecentNotionActivity(ACTOR);
-    expect(result[0]?.changedFieldCount).toBe(0);
+    const [item] = await listRecentNotionActivity(ACTOR);
+    expect(item).toMatchObject({
+      who: "Someone",
+      verb: "moved to trash",
+      where: "a Notion page",
+      change: null,
+    });
   });
 });

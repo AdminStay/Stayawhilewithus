@@ -1,6 +1,6 @@
 import type { SyncDirection } from "@stayw/database/enums";
 
-import { HttpClient } from "../core";
+import { HttpClient, HttpRequestError } from "../core";
 import type {
   BaseIntegrationClient,
   IntegrationCapability,
@@ -29,6 +29,7 @@ import type {
   NotionTableRow,
   NotionTextContentBlock,
   NotionUser,
+  NotionPageMetadata,
   NotionParentRef,
 } from "./types";
 
@@ -44,6 +45,7 @@ export type {
   NotionLibraryEntry,
   NotionListingRecord,
   NotionPageContent,
+  NotionPageMetadata,
   NotionParentRef,
   NotionRichTextRun,
   NotionSearchResultItem,
@@ -1060,6 +1062,74 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
     );
     const parent = normalizeNotionParent(raw.parent);
     return parent.type === "database" ? parent.id : null;
+  }
+
+  /**
+   * Read-only page metadata for activity enrichment (2026-09-30): title,
+   * parent, trash flag and property id → name. Property VALUES are never
+   * read from the response.
+   */
+  async getPageMetadata(pageId: string): Promise<NotionPageMetadata> {
+    const raw = await this.http.request<Record<string, unknown>>(
+      `/pages/${pageId}`,
+    );
+    const propertyNamesById: Record<string, string> = {};
+    const properties = isPlainObject(raw.properties) ? raw.properties : {};
+    for (const [name, prop] of Object.entries(properties)) {
+      if (isPlainObject(prop) && typeof prop.id === "string") {
+        propertyNamesById[prop.id] = name;
+      }
+    }
+    return {
+      id: typeof raw.id === "string" ? raw.id : pageId,
+      title: extractTitle(raw as never),
+      parent: normalizeNotionParent(raw.parent),
+      inTrash: raw.in_trash === true || raw.archived === true,
+      propertyNamesById,
+    };
+  }
+
+  /** Read-only: a database's title (2026-09-30, activity breadcrumb). Null when untitled. */
+  async getDatabaseTitle(databaseId: string): Promise<string | null> {
+    const raw = await this.http.request<{ title?: unknown }>(
+      `/databases/${databaseId}`,
+    );
+    const title = Array.isArray(raw.title)
+      ? raw.title
+          .map((t) =>
+            isPlainObject(t) && typeof t.plain_text === "string"
+              ? t.plain_text
+              : "",
+          )
+          .join("")
+          .trim()
+      : "";
+    return title || null;
+  }
+
+  /**
+   * Read-only: a Notion user's display name (2026-09-30, activity "who").
+   * Requires the integration's user-information capability; returns null
+   * (never a guessed name) when Notion refuses (403), the user is unknown
+   * (404), or no name is set. Emails are never read.
+   */
+  async getUserDisplayName(userId: string): Promise<string | null> {
+    try {
+      const raw = await this.http.request<{ name?: unknown }>(
+        `/users/${userId}`,
+      );
+      return typeof raw.name === "string" && raw.name.trim()
+        ? raw.name.trim()
+        : null;
+    } catch (err) {
+      if (
+        err instanceof HttpRequestError &&
+        (err.status === 403 || err.status === 404)
+      ) {
+        return null;
+      }
+      throw err;
+    }
   }
 }
 

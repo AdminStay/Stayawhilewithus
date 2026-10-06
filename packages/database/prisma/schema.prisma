@@ -682,6 +682,13 @@ model NotionPageEvent {
   changedFieldNames Json     @default("[]") @map("changed_field_names") // property/block ids only, never values
   occurredAt        DateTime @map("occurred_at")
   receivedAt        DateTime @default(now()) @map("received_at")
+  // 2026-09-30 activity monitoring — ids/types only, never values.
+  authors           Json      @default("[]") // [{ id, type: person|bot|agent }]
+  parentType        String?   @map("parent_type")
+  parentId          String?   @map("parent_id")
+  attemptNumber     Int?      @map("attempt_number")
+  details           Json? // sanitized enrichment (NotionEventDetails): titles, breadcrumb, names, field NAMES, counts
+  enrichedAt        DateTime? @map("enriched_at")
 
   @@index([entityId, occurredAt])
   @@index([occurredAt])

@@ -2,9 +2,23 @@ import { createHmac } from "node:crypto";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockFindUnique, mockCreate } = vi.hoisted(() => ({
-  mockFindUnique: vi.fn(),
-  mockCreate: vi.fn(),
+const { mockFindUnique, mockCreate, mockEnrich, mockCreateNotification } =
+  vi.hoisted(() => ({
+    mockFindUnique: vi.fn(),
+    mockCreate: vi.fn(),
+    mockEnrich: vi.fn(),
+    mockCreateNotification: vi.fn(),
+  }));
+
+// Enrichment is a separate, best-effort step after storage (its own tests
+// cover it); here only the wiring. N2 sends no notifications — the platform
+// notification writer is mocked only to prove it is never called.
+vi.mock("./notion-event-enrichment.service", () => ({
+  enrichStoredNotionEvent: mockEnrich,
+}));
+vi.mock("@/platform/notifications/create-notification", () => ({
+  createNotification: mockCreateNotification,
+  createNotificationsForGlobalRole: mockCreateNotification,
 }));
 
 vi.mock("@stayw/database", () => ({
@@ -43,6 +57,8 @@ describe("processNotionWebhookEvent", () => {
 
   beforeEach(() => {
     process.env.NOTION_WEBHOOK_VERIFICATION_TOKEN = TOKEN;
+    mockEnrich.mockReset().mockResolvedValue(null);
+    mockCreateNotification.mockReset();
     mockFindUnique.mockReset().mockResolvedValue(null);
     mockCreate.mockReset().mockResolvedValue({ id: "row-1" });
   });
@@ -90,8 +106,67 @@ describe("processNotionWebhookEvent", () => {
         eventType: "page.properties_updated",
         changedFieldNames: ["prop-1"],
         occurredAt: new Date("2026-09-16T12:00:00.000Z"),
+        authors: [],
+        parentType: null,
+        parentId: null,
+        attemptNumber: null,
       },
     });
+  });
+
+  it("stores who (author ids/types) and where (parent) from the payload — never values (2026-09-30)", async () => {
+    const body = eventBody({
+      authors: [{ id: "user-9", type: "person" }],
+      attempt_number: 2,
+      data: {
+        updated_properties: ["prop-1"],
+        parent: { id: "parent-page", type: "page" },
+      },
+    });
+    await processNotionWebhookEvent(body, sign(body));
+    expect(mockCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        authors: [{ id: "user-9", type: "person" }],
+        parentType: "page",
+        parentId: "parent-page",
+        attemptNumber: 2,
+      }),
+    });
+  });
+
+  it("enriches after storing, and still processes the event when enrichment produced nothing", async () => {
+    const body = eventBody();
+    mockEnrich.mockResolvedValueOnce({ version: 1 });
+    await expect(processNotionWebhookEvent(body, sign(body))).resolves.toEqual({
+      status: "processed",
+      eventId: "row-1",
+    });
+    expect(mockEnrich).toHaveBeenCalledWith(
+      "row-1",
+      expect.objectContaining({ notionEventId: "evt-1" }),
+    );
+    expect(mockCreate.mock.invocationCallOrder[0]).toBeLessThan(
+      mockEnrich.mock.invocationCallOrder[0]!,
+    );
+
+    mockEnrich.mockResolvedValueOnce(null);
+    const body2 = eventBody({ id: "evt-2" });
+    await expect(
+      processNotionWebhookEvent(body2, sign(body2)),
+    ).resolves.toMatchObject({ status: "processed" });
+  });
+
+  it("sends no notification for any event (notifications are not part of N2)", async () => {
+    for (const [id, type] of [
+      ["evt-n1", "page.properties_updated"],
+      ["evt-n2", "page.deleted"],
+      ["evt-n3", "page.moved"],
+    ] as const) {
+      mockEnrich.mockResolvedValueOnce({ version: 1, action: "deleted" });
+      const body = eventBody({ id, type });
+      await processNotionWebhookEvent(body, sign(body));
+    }
+    expect(mockCreateNotification).not.toHaveBeenCalled();
   });
 
   it("never stores a value alongside changedFieldNames — only the property ids Notion itself sent", async () => {
