@@ -7,6 +7,7 @@ import {
   listPendingAiActions,
 } from "@/domains/ai/services/ai.service";
 import {
+  listCleaningJobsNeedingCleaner,
   listCleaningSchedules,
   listRecentlyRescheduledCleanings,
 } from "@/domains/cleaning/services/cleaning.service";
@@ -104,6 +105,7 @@ export async function getDashboardSummary(actor: AuthContext) {
     notionHighlights,
     ownerRezHighlights,
     teamAvailability,
+    cleaningJobsNeedingCleaner,
   ] = await Promise.all([
     safeList(() => listProperties(actor)),
     safeList(() => listGuests(actor)),
@@ -133,6 +135,9 @@ export async function getDashboardSummary(actor: AuthContext) {
       off: [],
       unmappedCount: 0,
     }),
+    // Cleaner Phase 5.3: open jobs with no cleaner. Empty (no attention
+    // row) for anyone without cleaning_schedules:read + cleaners:read.
+    safeList(() => listCleaningJobsNeedingCleaner(actor)),
   ]);
 
   const today = todayUtc();
@@ -271,6 +276,7 @@ export async function getDashboardSummary(actor: AuthContext) {
     lowBatteryDeviceCount: smartDevices.filter((d) => isLowBattery(d)).length,
     hasLiveDeviceData,
     recentlyRescheduledCleanings,
+    cleaningJobsNeedingCleaner,
     notionHighlights,
     ownerRezHighlights,
     // OwnerRez property id → StayWhile property name (linked properties

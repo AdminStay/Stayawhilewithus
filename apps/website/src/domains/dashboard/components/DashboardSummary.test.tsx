@@ -47,6 +47,7 @@ function baseSummary(overrides: Partial<Summary> = {}): Summary {
     lowBatteryDeviceCount: 0,
     hasLiveDeviceData: false,
     recentlyRescheduledCleanings: [],
+    cleaningJobsNeedingCleaner: [],
     notionHighlights: { configured: false },
     ownerRezHighlights: { configured: false },
     ownerRezPropertyNames: {},
@@ -214,5 +215,58 @@ describe("DashboardSummary — OwnerRez card booking link (2026-10-03)", () => {
         .getByRole("link", { name: "Open booking #19458918 in OwnerRez" })
         .getAttribute("href"),
     ).toBe("https://secure.ownerreservations.com/bookings/19458918");
+  });
+});
+
+describe("DashboardSummary — cleaning jobs needing attention (Cleaner Phase 5.3)", () => {
+  const unassigned = (id: string) =>
+    ({
+      id,
+      status: "SCHEDULED",
+      cleanerId: null,
+      scheduledDate: new Date("2026-10-10T00:00:00Z"),
+      property: { name: "Harbor House" },
+    }) as Summary["cleaningJobsNeedingCleaner"][number];
+
+  it("shows ONE aggregated Needs Attention row with the count, reason and Needs cleaner badge", () => {
+    render(
+      <DashboardSummary
+        summary={baseSummary({
+          cleaningJobsNeedingCleaner: [
+            unassigned("a"),
+            unassigned("b"),
+            unassigned("c"),
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getAllByText("3 cleaning jobs need attention")).toHaveLength(
+      1,
+    );
+    expect(
+      screen.getByText("These jobs don't have a cleaner assigned."),
+    ).toBeTruthy();
+    expect(screen.getByText("Needs cleaner")).toBeTruthy();
+  });
+
+  it("links to the filtered cleaning list", () => {
+    render(
+      <DashboardSummary
+        summary={baseSummary({ cleaningJobsNeedingCleaner: [unassigned("a")] })}
+      />,
+    );
+
+    const link = screen
+      .getByText("1 cleaning job needs attention")
+      .closest("a");
+    expect(link?.getAttribute("href")).toBe("/cleaning?view=needs-cleaner");
+  });
+
+  it("shows no cleaning attention row when no job needs a cleaner (or the viewer can't see cleaners)", () => {
+    render(<DashboardSummary summary={baseSummary()} />);
+
+    expect(screen.queryByText(/cleaning jobs? needs? attention/)).toBeNull();
+    expect(screen.queryByText("Needs cleaner")).toBeNull();
   });
 });

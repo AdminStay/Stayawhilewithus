@@ -96,6 +96,36 @@ async function assertActiveCleaner(
   return cleaner;
 }
 
+/**
+ * Cleaner Phase 5.3 — OPEN cleaning jobs with no assigned cleaner (the
+ * dashboard's "needs attention" count). Same definition as
+ * lib/needs-cleaner.ts's needsCleaner(): cleanerId is null and the status
+ * isn't COMPLETED/CANCELLED/MISSED. Read-only; assigns nothing.
+ *
+ * Requires cleaning_schedules:read AND cleaners:read — without the latter,
+ * a job's cleaner is hidden, so "has no cleaner" can't be shown (same rule
+ * as the Cleaner column). Throws ForbiddenError otherwise, which the
+ * dashboard's safeList() turns into "nothing to show".
+ */
+export async function listCleaningJobsNeedingCleaner(actor: AuthContext) {
+  await assertPermission(actor, "cleaning_schedules:read");
+  await assertPermission(actor, "cleaners:read");
+  return prisma.cleaningSchedule.findMany({
+    where: {
+      cleanerId: null,
+      status: { notIn: [...CLEANER_LOCKED_STATUSES] },
+    },
+    orderBy: { scheduledDate: "asc" },
+    select: {
+      id: true,
+      status: true,
+      cleanerId: true,
+      scheduledDate: true,
+      property: { select: { name: true } },
+    },
+  });
+}
+
 /** Schedules that have been moved at least once since creation — for dashboard visibility into what changed. */
 export async function listRecentlyRescheduledCleanings(actor: AuthContext) {
   await assertPermission(actor, "cleaning_schedules:read");
