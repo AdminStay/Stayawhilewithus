@@ -3,6 +3,7 @@ import "server-only";
 import { assertPermission, type AuthContext } from "@stayw/auth";
 import { NotionClient } from "@stayw/integrations/notion";
 
+import { isNotionDashboardEditingEnabled } from "../config/notion-dashboard-editing";
 import { findEditAllowlistEntry } from "../config/notion-edit-allowlist";
 import {
   fieldValueSchemaFor,
@@ -49,6 +50,9 @@ export async function updateNotionField(
   actor: AuthContext,
   rawInput: unknown,
 ): Promise<NotionEditResult> {
+  // Meeting #5: dashboard editing is off — refuse before anything else.
+  if (!isNotionDashboardEditingEnabled()) return { status: "not_editable" };
+
   await assertPermission(actor, "notion:update");
 
   const input = updateNotionFieldRequestSchema.parse(rawInput);

@@ -35,11 +35,22 @@ import {
 } from "../config/notion-field-visibility";
 import { NOTION_LIBRARY_DATA_SOURCE_ID } from "../config/notion-library";
 import { UNKNOWN_REGION } from "../config/notion-region-reference";
+import {
+  isForcedSensitivePage,
+  libraryEntryVisibility,
+} from "../config/notion-visibility";
 import type { DisconnectIntegrationInput } from "../schemas/integrations.schema";
 
+import {
+  assertNotionContentAccess,
+  createNotionVisibilityResolver,
+  filterVisibleNotionItems,
+  getNotionAccess,
+} from "./notion-access.service";
 import { matchesListingQuery } from "./notion-listing-match";
 import { resolveRegion } from "./notion-region-matching";
 import { isExcludedFromVaSearch } from "./notion-search-exclusions";
+import { canViewNotionVisibility } from "./notion-visibility";
 
 import { recordAudit } from "@/platform/audit/record-audit";
 
@@ -371,8 +382,25 @@ export async function getNotionHighlights(
 
   try {
     const client = new NotionClient({ token });
-    const items = await client.listRecentlyEdited(5);
-    return { configured: true, ok: true, items };
+    // Visibility layer (2026-09-30): only titles this actor may see.
+    const access = await getNotionAccess(actor);
+    if (!access.canReadStandard && !access.canReadSensitive) {
+      return { configured: true, ok: true, items: [] };
+    }
+    const recent = await client.listRecentlyEdited(
+      access.canReadSensitive ? 5 : 15,
+    );
+    const resolve = await createNotionVisibilityResolver(client, 20);
+    const visible = await filterVisibleNotionItems(
+      recent,
+      access,
+      resolve,
+      (item) => ({
+        kind: item.object === "database" ? "database" : "page",
+        id: item.id,
+      }),
+    );
+    return { configured: true, ok: true, items: visible.slice(0, 5) };
   } catch (err) {
     return {
       configured: true,
@@ -548,7 +576,8 @@ export function buildNotionListingClientDto(
 export async function listNotionListings(
   actor: AuthContext,
 ): Promise<IntegrationHighlights<NotionListingWithRegion>> {
-  await assertPermission(actor, "integrations:read");
+  // Listings are standard content (field-level sensitive split still applies).
+  await assertNotionContentAccess(actor);
 
   const token = process.env.NOTION_API_KEY;
   const dataSourceId = process.env.NOTION_LISTINGS_DATA_SOURCE_ID;
@@ -741,7 +770,7 @@ export async function searchNotionContent(
   actor: AuthContext,
   rawQuery: string,
 ): Promise<NotionSearchState> {
-  await assertPermission(actor, "integrations:read");
+  const access = await assertNotionContentAccess(actor);
 
   const token = process.env.NOTION_API_KEY;
   if (!token) return { configured: false };
@@ -775,15 +804,28 @@ export async function searchNotionContent(
       query,
       maxPages: LIVE_SEARCH_MAX_PAGES,
     });
-    const generalCards: NotionSearchResultCard[] = generalResults
-      .filter((r: NotionSearchResultItem) => !seenIds.has(r.id))
-      // VA search is an operational-knowledge search, not a browser for
-      // every object the integration token happens to have access to — see
-      // notion-search-exclusions.ts. Excluded by real database id only,
-      // never by title, so operational content is never dropped just
-      // because it mentions a person's name.
-      .filter((r: NotionSearchResultItem) => !isExcludedFromVaSearch(r))
-      .map((r: NotionSearchResultItem) => {
+    // Visibility layer (2026-09-30): a general result is shown only when this
+    // actor may see the page it lives under; unresolvable → hidden. Filtered
+    // on the real Notion object kind, before any card is built.
+    const resolve = await createNotionVisibilityResolver(client, 40);
+    const visibleResults = await filterVisibleNotionItems(
+      generalResults
+        .filter((r: NotionSearchResultItem) => !seenIds.has(r.id))
+        // VA search is an operational-knowledge search, not a browser for
+        // every object the integration token happens to have access to — see
+        // notion-search-exclusions.ts. Excluded by real database id only,
+        // never by title, so operational content is never dropped just
+        // because it mentions a person's name.
+        .filter((r: NotionSearchResultItem) => !isExcludedFromVaSearch(r)),
+      access,
+      resolve,
+      (r) => ({
+        kind: r.sourceType === "database" ? "database" : "page",
+        id: r.id,
+      }),
+    );
+    const visibleGeneral: NotionSearchResultCard[] = visibleResults.map(
+      (r: NotionSearchResultItem) => {
         const region = resolveRegion(r.title);
         return {
           id: r.id,
@@ -794,13 +836,14 @@ export async function searchNotionContent(
           region: region === UNKNOWN_REGION ? null : region,
           snippet: null,
         };
-      });
+      },
+    );
 
     return {
       configured: true,
       ok: true,
       query,
-      results: [...listingMatches, ...generalCards],
+      results: [...listingMatches, ...visibleGeneral],
     };
   } catch (err) {
     return {
@@ -835,6 +878,10 @@ export type NotionPageContentResult =
 const NOTION_PAGE_CONTENT_GENERIC_ERROR =
   "Couldn't load this page's content from Notion. Please try again.";
 
+/** Shown when the visibility layer hides a page from this actor (never says why or what the page is). */
+export const NOTION_PAGE_NO_ACCESS_ERROR =
+  "You don't have access to this Notion page.";
+
 /**
  * Backs the "read the real SOP/page content inline" experience (see
  * NotionSearch.tsx) — called only once a user actually opens a specific
@@ -866,13 +913,25 @@ export async function getNotionPageContent(
   actor: AuthContext,
   pageId: string,
 ): Promise<NotionPageContentResult> {
-  await assertPermission(actor, "integrations:read");
+  const access = await assertNotionContentAccess(actor);
 
   const token = process.env.NOTION_API_KEY;
   if (!token) return { configured: false };
 
   try {
     const client = new NotionClient({ token });
+    // Visibility layer (2026-09-30): checked BEFORE any content is fetched.
+    if (!access.canReadSensitive) {
+      const resolve = await createNotionVisibilityResolver(client, 12);
+      const visibility = await resolve("page", pageId);
+      if (!canViewNotionVisibility(visibility, access)) {
+        return {
+          configured: true,
+          ok: false,
+          error: NOTION_PAGE_NO_ACCESS_ERROR,
+        };
+      }
+    }
     const content = await client.getPageContent(pageId);
     return { configured: true, ok: true, content };
   } catch (err) {
@@ -905,15 +964,19 @@ export async function getNotionPageContent(
 export async function listNotionLibraryEntries(
   actor: AuthContext,
 ): Promise<IntegrationHighlights<NotionLibraryEntry>> {
-  await assertPermission(actor, "integrations:read");
+  const access = await assertNotionContentAccess(actor);
 
   const token = process.env.NOTION_API_KEY;
   if (!token) return { configured: false };
 
   try {
     const client = new NotionClient({ token });
-    const items = await client.listDataSourceEntries(
+    const entries = await client.listDataSourceEntries(
       NOTION_LIBRARY_DATA_SOURCE_ID,
+    );
+    // Visibility layer (2026-09-30): by LIBRARY row id; new rows are sensitive.
+    const items = entries.filter((entry) =>
+      canViewNotionVisibility(libraryEntryVisibility(entry.id), access),
     );
     return { configured: true, ok: true, items };
   } catch (err) {
@@ -987,7 +1050,7 @@ export async function searchNotionLibraryContent(
   actor: AuthContext,
   rawQuery: string,
 ): Promise<NotionLibrarySearchState> {
-  await assertPermission(actor, "integrations:read");
+  const access = await assertNotionContentAccess(actor);
 
   const token = process.env.NOTION_API_KEY;
   if (!token) return { configured: false };
@@ -997,8 +1060,12 @@ export async function searchNotionLibraryContent(
 
   try {
     const client = new NotionClient({ token });
-    const topLevelEntries = await client.listDataSourceEntries(
-      NOTION_LIBRARY_DATA_SOURCE_ID,
+    // Visibility layer (2026-09-30): only rows this actor may see can match,
+    // and a nested page inherits its row's level (or is forced sensitive).
+    const topLevelEntries = (
+      await client.listDataSourceEntries(NOTION_LIBRARY_DATA_SOURCE_ID)
+    ).filter((entry) =>
+      canViewNotionVisibility(libraryEntryVisibility(entry.id), access),
     );
     const topLevelTitleById = new Map(
       topLevelEntries.map((entry) => [entry.id, entry.title]),
@@ -1026,6 +1093,12 @@ export async function searchNotionLibraryContent(
       if (result.sourceType !== "page" || !result.parentPageId) continue;
       const parentTitle = topLevelTitleById.get(result.parentPageId);
       if (parentTitle === undefined) continue;
+      if (
+        isForcedSensitivePage(result.id) &&
+        !canViewNotionVisibility("sensitive", access)
+      ) {
+        continue;
+      }
       if (seenIds.has(result.id)) continue;
       seenIds.add(result.id);
       results.push({

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { processNotionWebhookEvent } from "@/domains/integrations/services/notion-webhook-event.service";
+import { captureNotionWebhookVerificationToken } from "@/domains/integrations/services/notion-webhook-setup.service";
 import { parseNotionWebhookVerificationRequest } from "@/domains/integrations/services/notion-webhook-verification.service";
 
 /**
@@ -14,10 +15,10 @@ import { parseNotionWebhookVerificationRequest } from "@/domains/integrations/se
  * Handles two distinct request shapes Notion can send here:
  * 1. The one-time verification handshake (`{ verification_token }`,
  *    unsigned) — sent once, immediately after a subscription is created.
- *    The token must be read from server logs and pasted into Notion's
- *    subscription UI within 5 minutes; it is deliberately never echoed
- *    back in the HTTP response (Notion's server is the caller here, not a
- *    human — a human can only ever see it via server logs).
+ *    Since 2026-09-30 the token is NEVER logged (it is the signing secret):
+ *    captureNotionWebhookVerificationToken() seals it for a one-time,
+ *    admin-only reveal in the dashboard and logs only a fingerprint. It is
+ *    never echoed back in the HTTP response either.
  * 2. A real, signed event notification — verified and processed by
  *    processNotionWebhookEvent(), which fails closed on every unexpected
  *    or unconfigured condition.
@@ -27,10 +28,15 @@ export async function POST(req: Request) {
 
   const verificationToken = parseNotionWebhookVerificationRequest(rawBody);
   if (verificationToken) {
-    console.warn(
-      "[notion-webhook] Received verification handshake token — paste into Notion's subscription UI within 5 minutes:",
-      verificationToken,
-    );
+    try {
+      await captureNotionWebhookVerificationToken(verificationToken);
+    } catch (err) {
+      // Never include the token; the error class is enough to investigate.
+      console.error(
+        "[notion-webhook] handshake capture failed:",
+        err instanceof Error ? err.name : "unknown",
+      );
+    }
     return NextResponse.json({ received: true });
   }
 

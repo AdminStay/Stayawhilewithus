@@ -29,6 +29,7 @@ import type {
   NotionTableRow,
   NotionTextContentBlock,
   NotionUser,
+  NotionParentRef,
 } from "./types";
 
 export type {
@@ -43,6 +44,7 @@ export type {
   NotionLibraryEntry,
   NotionListingRecord,
   NotionPageContent,
+  NotionParentRef,
   NotionRichTextRun,
   NotionSearchResultItem,
   NotionSearchSourceType,
@@ -1021,6 +1023,73 @@ export class NotionClient implements BaseIntegrationClient, SyncCapable {
     const lastEditedTime =
       typeof raw.last_edited_time === "string" ? raw.last_edited_time : "";
     return { type, text: mapRichTextRuns(body.rich_text), lastEditedTime };
+  }
+
+  /**
+   * Read-only (2026-09-30, Notion visibility layer): the parent of a page,
+   * block or database — only the normalized parent reference, never the
+   * object's properties or content. Used to resolve which approved root
+   * (LIBRARY entry, SOP root, View of Listings) a page lives under.
+   */
+  async getObjectParent(
+    kind: "page" | "block" | "database",
+    id: string,
+  ): Promise<NotionParentRef> {
+    const path =
+      kind === "page"
+        ? `/pages/${id}`
+        : kind === "block"
+          ? `/blocks/${id}`
+          : `/databases/${id}`;
+    const raw = await this.http.request<{ parent?: unknown }>(path);
+    return normalizeNotionParent(raw.parent);
+  }
+
+  /**
+   * Read-only: the database a data source belongs to (Notion's
+   * multi-source split — a page row reports its parent as the DATABASE id,
+   * so an approved data source id must be mapped to it). Null when Notion
+   * doesn't report one.
+   */
+  async getDataSourceParentDatabaseId(
+    dataSourceId: string,
+  ): Promise<string | null> {
+    const raw = await this.http.request<{ parent?: unknown }>(
+      `/data_sources/${dataSourceId}`,
+      { headers: { "Notion-Version": NOTION_DATA_SOURCE_QUERY_VERSION } },
+    );
+    const parent = normalizeNotionParent(raw.parent);
+    return parent.type === "database" ? parent.id : null;
+  }
+}
+
+/** Normalizes Notion's raw `parent` object (2026-09-30). Unrecognized shapes become `unknown`, never guessed. */
+export function normalizeNotionParent(parent: unknown): NotionParentRef {
+  if (!isPlainObject(parent)) return { type: "unknown", id: null };
+  const p = parent as Record<string, unknown>;
+  switch (p.type) {
+    case "page_id":
+      return typeof p.page_id === "string"
+        ? { type: "page", id: p.page_id }
+        : { type: "unknown", id: null };
+    case "database_id":
+      return typeof p.database_id === "string"
+        ? { type: "database", id: p.database_id }
+        : { type: "unknown", id: null };
+    case "data_source_id":
+      return typeof p.database_id === "string"
+        ? { type: "database", id: p.database_id }
+        : typeof p.data_source_id === "string"
+          ? { type: "data_source", id: p.data_source_id }
+          : { type: "unknown", id: null };
+    case "block_id":
+      return typeof p.block_id === "string"
+        ? { type: "block", id: p.block_id }
+        : { type: "unknown", id: null };
+    case "workspace":
+      return { type: "workspace", id: null };
+    default:
+      return { type: "unknown", id: null };
   }
 }
 
