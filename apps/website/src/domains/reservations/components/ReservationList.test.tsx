@@ -46,7 +46,10 @@ describe("ReservationList", () => {
       />,
     );
     expect(screen.getAllByText("Aqua Palm")).toHaveLength(2);
-    expect(screen.getByText("Cancelled")).toBeTruthy();
+    // The badge — not the "Cancelled" <option> in the other row's dropdown.
+    expect(
+      screen.getAllByText("Cancelled").filter((el) => el.tagName !== "OPTION"),
+    ).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Update" })).toHaveLength(1);
   });
 
@@ -57,7 +60,7 @@ describe("ReservationList", () => {
       />,
     );
     expect(screen.getByText("Managed in OwnerRez")).toBeTruthy();
-    expect(screen.getByText("CONFIRMED")).toBeTruthy();
+    expect(screen.getByText("Confirmed")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Update" })).toBeNull();
     expect(container.querySelector("form")).toBeNull();
     expect(container.querySelector('select[name="status"]')).toBeNull();
@@ -129,6 +132,71 @@ describe("ReservationList", () => {
         />,
       );
       expect(screen.queryAllByRole("link")).toHaveLength(0);
+    });
+
+    it("a cancelled OwnerRez booking keeps its Open in OwnerRez link (2026-10-07)", () => {
+      render(
+        <ReservationList
+          reservations={[{ ...ownerRezRow, status: "CANCELLED" }] as never}
+        />,
+      );
+      expect(screen.getByText("Cancelled")).toBeTruthy();
+      expect(
+        screen
+          .getByRole("link", { name: "Open this booking in OwnerRez" })
+          .getAttribute("href"),
+      ).toBe("https://secure.ownerreservations.com/bookings/19458918");
+      expect(screen.queryByText("Managed in OwnerRez")).toBeNull();
+    });
+  });
+
+  describe("organization (2026-10-07)", () => {
+    it("shows a Nights column and readable dates", () => {
+      render(<ReservationList reservations={[row("CONFIRMED")] as never} />);
+      expect(screen.getByText("Nights")).toBeTruthy();
+      expect(screen.getByText("3 nights")).toBeTruthy();
+      expect(screen.getByText(/Sep 29, 2026 –\s*Oct 2, 2026/)).toBeTruthy();
+    });
+
+    it("reads @db.Date check-in/out in UTC, so the day never shifts back", () => {
+      // Midnight UTC Oct 1 is still Sep 30 in every US zone; it must show Oct 1.
+      render(
+        <ReservationList
+          reservations={
+            [
+              {
+                ...row("CONFIRMED"),
+                checkInDate: new Date("2026-10-01T00:00:00.000Z"),
+                checkOutDate: new Date("2026-10-02T00:00:00.000Z"),
+              },
+            ] as never
+          }
+        />,
+      );
+      expect(screen.getByText(/Oct 1, 2026 –\s*Oct 2, 2026/)).toBeTruthy();
+      expect(screen.getByText("1 night")).toBeTruthy();
+    });
+
+    it("status labels are readable, while the submitted values stay the enum", () => {
+      const { container } = render(
+        <ReservationList reservations={[row("CHECKED_IN")] as never} />,
+      );
+      const options = [
+        ...container.querySelectorAll('select[name="status"] option'),
+      ].map((o) => [(o as HTMLOptionElement).value, o.textContent]);
+      expect(options).toEqual([
+        ["PENDING", "Pending"],
+        ["CONFIRMED", "Confirmed"],
+        ["CHECKED_IN", "Checked in"],
+        ["CHECKED_OUT", "Checked out"],
+        ["CANCELLED", "Cancelled"],
+      ]);
+      // The badge shows the label too.
+      expect(
+        screen
+          .getAllByText("Checked in")
+          .filter((el) => el.tagName !== "OPTION"),
+      ).toHaveLength(1);
     });
   });
 });

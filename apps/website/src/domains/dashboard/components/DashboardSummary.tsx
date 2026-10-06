@@ -38,6 +38,7 @@ import {
   TeamAvailability,
   type TeamAvailabilityDisplayEntry,
 } from "@/domains/team/components/TeamAvailability";
+import { SCHEDULE_TIMEZONE } from "@/domains/team/services/chicago-date";
 
 type Summary = Awaited<ReturnType<typeof getDashboardSummary>>;
 type SmartDeviceLike = Summary["smartDevices"][number];
@@ -70,8 +71,8 @@ function formatDate(date: Date): string {
  * with no meaningful time component. Formatting them with formatDate()'s
  * local-timezone toLocaleString() can shift the displayed day backward by
  * one for any timezone behind UTC. Read the UTC calendar fields directly
- * instead, matching the todayUtc()/isSameUtcDay() convention already used
- * server-side for the same reason.
+ * instead, matching calendarDay() in reservation-views.ts, which the
+ * server-side "today" lists use for the same reason.
  */
 function formatUtcDate(date: Date): string {
   return new Date(date).toLocaleDateString("en-US", {
@@ -195,7 +196,10 @@ function ListRow({
 }
 
 export function DashboardSummary({ summary }: { summary: Summary }) {
+  // In StayWhile's operating timezone, not the server's (UTC on Vercel),
+  // so the header doesn't jump to tomorrow at ~7–8 PM Central.
   const today = new Date().toLocaleDateString("en-US", {
+    timeZone: SCHEDULE_TIMEZONE,
     weekday: "long",
     month: "long",
     day: "numeric",
@@ -296,7 +300,8 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
   const atAGlance = [
     {
       label: "Properties",
-      value: summary.properties.length,
+      // Operational only (ACTIVE + ONBOARDING) — matches /properties' default.
+      value: summary.operationalPropertyCount,
       href: "/properties",
     },
     { label: "Open tasks", value: summary.openTasks.length, href: "/tasks" },
@@ -345,7 +350,7 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
           label="Occupancy"
           value={`${Math.round(summary.occupancyRate * 100)}%`}
           icon={Percent}
-          hint={`${summary.occupiedPropertyCount} of ${summary.properties.length} properties`}
+          hint={`${summary.occupiedPropertyCount} of ${summary.operationalPropertyCount} properties`}
           href="/properties"
         />
         <Metric

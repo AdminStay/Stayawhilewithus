@@ -10,11 +10,17 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
-  type Tone,
 } from "@stayw/ui";
 import { CalendarRange } from "lucide-react";
 
 import { updateReservationStatusAction } from "../actions";
+import {
+  formatReservationDate,
+  nightsLabel,
+  RESERVATION_STATUS_TONE,
+  reservationNights,
+  reservationStatusLabel,
+} from "../lib/reservation-summary";
 import type { Reservation } from "../services/reservations.service";
 
 import { OwnerRezLink } from "@/domains/integrations/components/OwnerRezLink";
@@ -35,18 +41,6 @@ const STATUSES = [
   "CHECKED_OUT",
   "CANCELLED",
 ] as const;
-
-const STATUS_TONE: Record<(typeof STATUSES)[number], Tone> = {
-  PENDING: "gold",
-  CONFIRMED: "info",
-  CHECKED_IN: "success",
-  CHECKED_OUT: "neutral",
-  CANCELLED: "error",
-};
-
-function formatDate(date: Date): string {
-  return new Date(date).toLocaleDateString();
-}
 
 export function ReservationList({
   reservations,
@@ -76,74 +70,88 @@ export function ReservationList({
         <TableHeaderCell>Property</TableHeaderCell>
         <TableHeaderCell>Guest</TableHeaderCell>
         <TableHeaderCell>Dates</TableHeaderCell>
+        <TableHeaderCell>Nights</TableHeaderCell>
         <TableHeaderCell className="text-right">Status</TableHeaderCell>
       </TableHead>
       <TableBody>
-        {reservations.map((r) => (
-          <TableRow key={r.id}>
-            <TableCell className="font-medium text-ink">
-              {r.property.name}
-              {ownerRezPropertyUrl(r.property.ownerRezPropertyId) && (
-                <OwnerRezLink
-                  href={ownerRezPropertyUrl(r.property.ownerRezPropertyId)!}
-                  label="OwnerRez"
-                  title={`Open ${r.property.name} in OwnerRez`}
-                />
-              )}
-            </TableCell>
-            <TableCell className="text-ink-muted">
-              {r.primaryGuest.firstName} {r.primaryGuest.lastName}
-            </TableCell>
-            <TableCell className="text-ink-muted">
-              {formatDate(r.checkInDate)} – {formatDate(r.checkOutDate)}
-            </TableCell>
-            <TableCell>
-              <div className="flex items-center justify-end gap-2">
-                {r.status === "CANCELLED" ? (
-                  <Badge tone="error">Cancelled</Badge>
-                ) : r.source === "OWNERREZ" ? (
-                  // OwnerRez is the source of truth (Meeting #6): its
-                  // bookings are read-only here and change in OwnerRez.
-                  <span className="flex items-center gap-2">
-                    <span className="text-xs text-ink-muted">
-                      Managed in OwnerRez
-                    </span>
-                    {ownerRezReservationUrl(r) && (
-                      <OwnerRezLink
-                        href={ownerRezReservationUrl(r)!}
-                        label="Open in OwnerRez"
-                        title="Open this booking in OwnerRez"
-                      />
-                    )}
-                    <Badge tone={STATUS_TONE[r.status]}>{r.status}</Badge>
-                  </span>
-                ) : (
-                  <form
-                    action={updateReservationStatusAction}
-                    className="flex items-center gap-1.5"
-                  >
-                    <input type="hidden" name="reservationId" value={r.id} />
-                    <Select
-                      name="status"
-                      defaultValue={r.status}
-                      className="py-1.5 text-xs"
-                    >
-                      {STATUSES.map((s) => (
-                        <option key={s} value={s}>
-                          {s}
-                        </option>
-                      ))}
-                    </Select>
-                    <Button type="submit" variant="secondary" size="sm">
-                      Update
-                    </Button>
-                    <Badge tone={STATUS_TONE[r.status]}>{r.status}</Badge>
-                  </form>
+        {reservations.map((r) => {
+          const bookingUrl = ownerRezReservationUrl(r);
+          const statusBadge = (
+            <Badge tone={RESERVATION_STATUS_TONE[r.status] ?? "neutral"}>
+              {reservationStatusLabel(r.status)}
+            </Badge>
+          );
+          return (
+            <TableRow key={r.id}>
+              <TableCell className="font-medium text-ink">
+                {r.property.name}
+                {ownerRezPropertyUrl(r.property.ownerRezPropertyId) && (
+                  <OwnerRezLink
+                    href={ownerRezPropertyUrl(r.property.ownerRezPropertyId)!}
+                    label="OwnerRez"
+                    title={`Open ${r.property.name} in OwnerRez`}
+                  />
                 )}
-              </div>
-            </TableCell>
-          </TableRow>
-        ))}
+              </TableCell>
+              <TableCell className="text-ink-muted">
+                {r.primaryGuest.firstName} {r.primaryGuest.lastName}
+              </TableCell>
+              <TableCell className="whitespace-nowrap text-ink-muted">
+                {formatReservationDate(r.checkInDate)} –{" "}
+                {formatReservationDate(r.checkOutDate)}
+              </TableCell>
+              <TableCell className="whitespace-nowrap text-ink-muted">
+                {nightsLabel(reservationNights(r.checkInDate, r.checkOutDate))}
+              </TableCell>
+              <TableCell>
+                <div className="flex items-center justify-end gap-2">
+                  {r.source === "OWNERREZ" || r.status === "CANCELLED" ? (
+                    // OwnerRez is the source of truth (Meeting #6): its
+                    // bookings are read-only here and change in OwnerRez.
+                    // Cancelled OwnerRez bookings keep their link too.
+                    <span className="flex items-center gap-2">
+                      {r.source === "OWNERREZ" && r.status !== "CANCELLED" && (
+                        <span className="text-xs text-ink-muted">
+                          Managed in OwnerRez
+                        </span>
+                      )}
+                      {bookingUrl && (
+                        <OwnerRezLink
+                          href={bookingUrl}
+                          label="Open in OwnerRez"
+                          title="Open this booking in OwnerRez"
+                        />
+                      )}
+                      {statusBadge}
+                    </span>
+                  ) : (
+                    <form
+                      action={updateReservationStatusAction}
+                      className="flex items-center gap-1.5"
+                    >
+                      <input type="hidden" name="reservationId" value={r.id} />
+                      <Select
+                        name="status"
+                        defaultValue={r.status}
+                        className="py-1.5 text-xs"
+                      >
+                        {STATUSES.map((s) => (
+                          <option key={s} value={s}>
+                            {reservationStatusLabel(s)}
+                          </option>
+                        ))}
+                      </Select>
+                      <Button type="submit" variant="secondary" size="sm">
+                        Update
+                      </Button>
+                      {statusBadge}
+                    </form>
+                  )}
+                </div>
+              </TableCell>
+            </TableRow>
+          );
+        })}
       </TableBody>
     </Table>
   );
