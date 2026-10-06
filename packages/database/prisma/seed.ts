@@ -67,6 +67,14 @@ const SYSTEM_ROLES: Array<{
       "guests:read",
       "tasks:manage",
       "cleaning_schedules:manage",
+      // Cleaning access (Kenny/Michelle, 2026-10-07). Permission checks
+      // match exact keys — :manage alone never unlocked /cleaning — so the
+      // keys the cleaning services check are granted explicitly. Changing a
+      // cleaning's cleaner stays Admin (+ future Staff) only — see
+      // cleaning-access.ts — and cleaners:read is NOT granted here.
+      "cleaning_schedules:read",
+      "cleaning_schedules:create",
+      "cleaning_schedules:update",
       "maintenance_requests:manage",
       "messages:manage",
       "notifications:read",
@@ -99,6 +107,9 @@ const SYSTEM_ROLES: Array<{
   },
   {
     name: "cleaner",
+    // Assign this role PER PROPERTY (grant-role.ts --property <id>): the
+    // cleaning services filter and check by that scope (2026-10-07). A
+    // global assignment would cover every property.
     description: "Property-scoped: views and completes assigned cleaning tasks",
     permissionKeys: [
       "tasks:read",

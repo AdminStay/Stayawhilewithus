@@ -82,9 +82,16 @@ function formatDate(date: Date): string {
 export function CleaningScheduleList({
   schedules,
   cleaners,
+  canUpdate = true,
 }: {
   schedules: ScheduleWithRelations[];
   cleaners?: CleaningCleanerProps;
+  /**
+   * 2026-10-07: false hides Reschedule/Reopen/Complete/Missed/Cancel for a
+   * viewer without cleaning_schedules:update anywhere (e.g. read_only). The
+   * server enforces it (and the per-property scope) regardless.
+   */
+  canUpdate?: boolean;
 }) {
   const showCleaner = cleaners?.canSeeCleaners === true;
   if (schedules.length === 0) {
@@ -188,7 +195,7 @@ export function CleaningScheduleList({
                 />
               </TableCell>
               <TableCell>
-                {(isOpen || isMissed) && (
+                {canUpdate && (isOpen || isMissed) && (
                   <div className="flex items-center justify-end gap-2">
                     <form
                       action={rescheduleCleaningScheduleAction}

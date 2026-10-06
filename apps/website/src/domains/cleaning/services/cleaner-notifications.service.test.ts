@@ -18,7 +18,9 @@ const { tx, mockPrisma } = vi.hoisted(() => {
 vi.mock("@stayw/database", () => ({ prisma: mockPrisma }));
 vi.mock("@stayw/auth", () => ({ assertPermission: vi.fn() }));
 vi.mock("@/platform/audit/record-audit", () => ({ recordAudit: vi.fn() }));
-vi.mock("@/platform/auth/is-global-admin", () => ({ isGlobalAdmin: vi.fn() }));
+vi.mock("@/platform/auth/is-global-admin", () => ({ hasGlobalRole: vi.fn() }));
+// Admin (+ Staff later) — the shared role list (cleaning-access.ts).
+vi.mock("./cleaning-access", () => ({ CLEANER_CHANGE_ROLE_NAMES: ["admin"] }));
 // Only CLEANER_LOCKED_STATUSES is used from the cleaning service.
 vi.mock("./cleaning.service", () => ({
   CLEANER_LOCKED_STATUSES: ["COMPLETED", "CANCELLED", "MISSED"],
@@ -38,7 +40,7 @@ import {
 } from "./cleaner-notifications.service";
 
 import { recordAudit } from "@/platform/audit/record-audit";
-import { isGlobalAdmin } from "@/platform/auth/is-global-admin";
+import { hasGlobalRole } from "@/platform/auth/is-global-admin";
 
 const actor = { userId: "admin-1" };
 const SCHEDULE = "55555555-5555-5555-5555-555555555555";
@@ -63,7 +65,7 @@ beforeEach(() => {
     async (fn: (t: typeof tx) => unknown) => fn(tx),
   );
   vi.mocked(assertPermission).mockResolvedValue(undefined);
-  vi.mocked(isGlobalAdmin).mockResolvedValue(true);
+  vi.mocked(hasGlobalRole).mockResolvedValue(true);
   vi.mocked(recordAudit).mockResolvedValue({ occurredAt: NOW } as never);
 });
 
@@ -132,7 +134,7 @@ describe("markCleanerNotified (Cleaner Phase 5.2)", () => {
   });
 
   it("refuses a non-admin who holds cleaning_schedules:update, before any read or write", async () => {
-    vi.mocked(isGlobalAdmin).mockResolvedValue(false);
+    vi.mocked(hasGlobalRole).mockResolvedValue(false);
 
     await expect(
       markCleanerNotified(actor, { scheduleId: SCHEDULE, cleanerId: ALEX }),
@@ -149,7 +151,7 @@ describe("markCleanerNotified (Cleaner Phase 5.2)", () => {
     await expect(
       markCleanerNotified(actor, { scheduleId: SCHEDULE, cleanerId: ALEX }),
     ).rejects.toThrow();
-    expect(isGlobalAdmin).not.toHaveBeenCalled();
+    expect(hasGlobalRole).not.toHaveBeenCalled();
     expectNoWrites();
   });
 
@@ -300,7 +302,7 @@ describe("listLatestCleanerNotifications (Cleaner Phase 5.2)", () => {
   });
 
   it("is admin only", async () => {
-    vi.mocked(isGlobalAdmin).mockResolvedValue(false);
+    vi.mocked(hasGlobalRole).mockResolvedValue(false);
 
     await expect(
       listLatestCleanerNotifications(actor, ["job-1"]),

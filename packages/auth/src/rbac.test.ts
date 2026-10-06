@@ -14,6 +14,8 @@ import { ForbiddenError } from "./errors";
 import {
   assertPermission,
   getEffectivePermissions,
+  getPermissionScope,
+  hasAnyScope,
   hasPermission,
 } from "./rbac";
 
@@ -448,5 +450,62 @@ describe("assertPermission", () => {
     await expect(
       assertPermission({ userId: "u1" }, "properties:delete"),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("getPermissionScope (2026-10-07)", () => {
+  const rows = (...propertyIds: Array<string | null>) =>
+    vi
+      .mocked(prisma.userRole.findMany)
+      .mockResolvedValueOnce(
+        propertyIds.map((propertyId) => ({ propertyId })) as never,
+      );
+
+  it("asks only for unexpired assignments whose role grants this exact key", async () => {
+    rows();
+    await getPermissionScope({ userId: "u1" }, "cleaning_schedules:read");
+
+    expect(prisma.userRole.findMany).toHaveBeenLastCalledWith({
+      where: {
+        userId: "u1",
+        OR: [{ expiresAt: null }, { expiresAt: { gt: expect.any(Date) } }],
+        role: {
+          rolePermissions: {
+            some: { permission: { key: "cleaning_schedules:read" } },
+          },
+        },
+      },
+      select: { propertyId: true },
+    });
+  });
+
+  it("a global assignment → global (property ids are irrelevant then)", async () => {
+    rows("p1", null);
+    expect(
+      await getPermissionScope({ userId: "u1" }, "cleaning_schedules:read"),
+    ).toEqual({ global: true, propertyIds: [] });
+  });
+
+  it("property-scoped assignments only → those properties, de-duplicated", async () => {
+    rows("p1", "p2", "p1");
+    expect(
+      await getPermissionScope({ userId: "u1" }, "cleaning_schedules:update"),
+    ).toEqual({ global: false, propertyIds: ["p1", "p2"] });
+  });
+
+  it("no matching assignment → no scope", async () => {
+    rows();
+    const scope = await getPermissionScope(
+      { userId: "u1" },
+      "cleaning_schedules:update",
+    );
+    expect(scope).toEqual({ global: false, propertyIds: [] });
+    expect(hasAnyScope(scope)).toBe(false);
+  });
+
+  it("hasAnyScope: global or at least one property", () => {
+    expect(hasAnyScope({ global: true, propertyIds: [] })).toBe(true);
+    expect(hasAnyScope({ global: false, propertyIds: ["p1"] })).toBe(true);
+    expect(hasAnyScope({ global: false, propertyIds: [] })).toBe(false);
   });
 });

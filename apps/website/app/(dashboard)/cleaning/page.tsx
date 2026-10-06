@@ -1,4 +1,4 @@
-import { hasPermission } from "@stayw/auth";
+import { ForbiddenError, hasPermission } from "@stayw/auth";
 import { DialogTrigger, PageHeader } from "@stayw/ui";
 
 import { listCurrentPropertyCleanerOptions } from "@/domains/cleaners/services/cleaner-assignments.service";
@@ -18,6 +18,7 @@ import {
   NEEDS_CLEANER_VIEW,
 } from "@/domains/cleaning/lib/needs-cleaner";
 import { listLatestCleanerNotifications } from "@/domains/cleaning/services/cleaner-notifications.service";
+import { hasCleaningPermissionAnywhere } from "@/domains/cleaning/services/cleaning-access";
 import {
   canChangeCleaningCleaner,
   listCleaningSchedules,
@@ -34,6 +35,20 @@ import { getCurrentUser } from "@/platform/auth/get-current-user";
  * picker, and choosing a non-default cleaner when scheduling, are admin
  * only (canChangeCleaningCleaner; the server enforces it again).
  */
+/**
+ * A property-scoped cleaner can't read properties/reservations (they're not
+ * in that role) — the page still works for them; the create form, which is
+ * the only thing that needs those lists, isn't offered without create.
+ */
+async function orEmpty<T>(load: () => Promise<T[]>): Promise<T[]> {
+  try {
+    return await load();
+  } catch (err) {
+    if (err instanceof ForbiddenError) return [];
+    throw err;
+  }
+}
+
 export default async function CleaningPage({
   searchParams,
 }: {
@@ -41,14 +56,25 @@ export default async function CleaningPage({
 }) {
   const actor = await getCurrentUser();
   const { view } = await searchParams;
-  const [schedules, properties, reservations, canSeeCleaners, canChange] =
-    await Promise.all([
-      listCleaningSchedules(actor),
-      listProperties(actor),
-      listReservations(actor),
-      hasPermission(actor, "cleaners:read"),
-      canChangeCleaningCleaner(actor),
-    ]);
+  // listCleaningSchedules is property-scoped on the server (2026-10-07):
+  // a cleaner sees only their properties' cleanings.
+  const [
+    schedules,
+    properties,
+    reservations,
+    canSeeCleaners,
+    canChange,
+    canCreate,
+    canUpdate,
+  ] = await Promise.all([
+    listCleaningSchedules(actor),
+    orEmpty(() => listProperties(actor)),
+    orEmpty(() => listReservations(actor)),
+    hasPermission(actor, "cleaners:read"),
+    canChangeCleaningCleaner(actor),
+    hasCleaningPermissionAnywhere(actor, "cleaning_schedules:create"),
+    hasCleaningPermissionAnywhere(actor, "cleaning_schedules:update"),
+  ]);
 
   const isAdmin = canSeeCleaners && canChange;
   const [propertyCleaners, activeCleaners, latestNotifications] = canSeeCleaners
@@ -86,18 +112,20 @@ export default async function CleaningPage({
         title="Cleaning"
         subtitle={`${schedules.length} ${schedules.length === 1 ? "schedule" : "schedules"} on the calendar`}
         actions={
-          <DialogTrigger label="Schedule cleaning" title="Schedule cleaning">
-            <CreateCleaningScheduleForm
-              properties={properties}
-              reservations={reservations}
-              cleaners={
-                canSeeCleaners
-                  ? { propertyCleaners, activeCleaners, canChoose: canChange }
-                  : undefined
-              }
-              action={createCleaningScheduleAction}
-            />
-          </DialogTrigger>
+          canCreate && (
+            <DialogTrigger label="Schedule cleaning" title="Schedule cleaning">
+              <CreateCleaningScheduleForm
+                properties={properties}
+                reservations={reservations}
+                cleaners={
+                  canSeeCleaners
+                    ? { propertyCleaners, activeCleaners, canChoose: canChange }
+                    : undefined
+                }
+                action={createCleaningScheduleAction}
+              />
+            </DialogTrigger>
+          )
         }
       />
       {canSeeCleaners && (
@@ -106,6 +134,7 @@ export default async function CleaningPage({
       {!(filtered && needingCleaner.length === 0) && (
         <CleaningScheduleList
           schedules={shownSchedules}
+          canUpdate={canUpdate}
           cleaners={{
             canSeeCleaners,
             canChangeCleaner: isAdmin,

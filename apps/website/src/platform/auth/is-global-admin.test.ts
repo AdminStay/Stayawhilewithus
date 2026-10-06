@@ -6,7 +6,7 @@ vi.mock("@stayw/database", () => ({
 
 import { prisma } from "@stayw/database";
 
-import { isGlobalAdmin } from "./is-global-admin";
+import { hasGlobalRole, isGlobalAdmin } from "./is-global-admin";
 
 const actor = { userId: "user-1" };
 
@@ -21,7 +21,7 @@ describe("isGlobalAdmin", () => {
       where: {
         userId: "user-1",
         propertyId: null,
-        role: { name: "admin" },
+        role: { name: { in: ["admin"] } },
         OR: [{ expiresAt: null }, { expiresAt: { gt: expect.any(Date) } }],
       },
       select: { id: true },
@@ -32,5 +32,35 @@ describe("isGlobalAdmin", () => {
     vi.mocked(prisma.userRole.findFirst).mockResolvedValueOnce(null);
 
     expect(await isGlobalAdmin(actor)).toBe(false);
+  });
+});
+
+describe("hasGlobalRole (2026-10-07)", () => {
+  it("matches any of the named roles, held globally and unexpired", async () => {
+    vi.mocked(prisma.userRole.findFirst).mockResolvedValueOnce({
+      id: "ur-2",
+    } as never);
+
+    expect(await hasGlobalRole(actor, ["admin", "staff"])).toBe(true);
+    expect(prisma.userRole.findFirst).toHaveBeenCalledWith({
+      where: {
+        userId: "user-1",
+        propertyId: null,
+        role: { name: { in: ["admin", "staff"] } },
+        OR: [{ expiresAt: null }, { expiresAt: { gt: expect.any(Date) } }],
+      },
+      select: { id: true },
+    });
+  });
+
+  it("is false (and makes no query) for an empty role list", async () => {
+    expect(await hasGlobalRole(actor, [])).toBe(false);
+    expect(prisma.userRole.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("is false when no matching role exists (e.g. a not-yet-created 'staff' role)", async () => {
+    vi.mocked(prisma.userRole.findFirst).mockResolvedValueOnce(null);
+
+    expect(await hasGlobalRole(actor, ["staff"])).toBe(false);
   });
 });
