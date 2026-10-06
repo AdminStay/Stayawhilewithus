@@ -49,6 +49,16 @@ jobs:
       - name: Generate Prisma client
         run: pnpm db:generate
 
+      # Plain postgres:16 lacks the Supabase roles that the RLS/grant
+      # hardening migrations reference; create no-login placeholders.
+      - name: Create Supabase placeholder roles
+        env:
+          PGPASSWORD: postgres
+        run: >-
+          psql -h localhost -U postgres -d staywhile_ci -v ON_ERROR_STOP=1
+          -c "CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN;
+          CREATE ROLE service_role NOLOGIN; CREATE ROLE supabase_admin NOLOGIN;"
+
       - name: Apply migrations
         run: pnpm --filter @stayw/database db:migrate:deploy
 
