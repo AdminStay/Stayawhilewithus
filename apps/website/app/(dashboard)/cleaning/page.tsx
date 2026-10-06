@@ -11,7 +11,12 @@ import {
 import type { CleanerNotificationView } from "@/domains/cleaning/components/CleanerNotifiedControl";
 import { CleaningScheduleList } from "@/domains/cleaning/components/CleaningScheduleList";
 import { CreateCleaningScheduleForm } from "@/domains/cleaning/components/CreateCleaningScheduleForm";
+import { NeedsCleanerNotice } from "@/domains/cleaning/components/NeedsCleanerNotice";
 import type { CleanerNotificationRecord } from "@/domains/cleaning/lib/cleaner-notification";
+import {
+  jobsNeedingCleaner,
+  NEEDS_CLEANER_VIEW,
+} from "@/domains/cleaning/lib/needs-cleaner";
 import { listLatestCleanerNotifications } from "@/domains/cleaning/services/cleaner-notifications.service";
 import {
   canChangeCleaningCleaner,
@@ -29,8 +34,13 @@ import { getCurrentUser } from "@/platform/auth/get-current-user";
  * picker, and choosing a non-default cleaner when scheduling, are admin
  * only (canChangeCleaningCleaner; the server enforces it again).
  */
-export default async function CleaningPage() {
+export default async function CleaningPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const actor = await getCurrentUser();
+  const { view } = await searchParams;
   const [schedules, properties, reservations, canSeeCleaners, canChange] =
     await Promise.all([
       listCleaningSchedules(actor),
@@ -64,6 +74,12 @@ export default async function CleaningPage() {
     };
   }
 
+  // Phase 5.3: open jobs with no cleaner. Only with cleaners:read — for
+  // anyone else cleanerId is hidden, so the notice and filter don't apply.
+  const needingCleaner = canSeeCleaners ? jobsNeedingCleaner(schedules) : [];
+  const filtered = canSeeCleaners && view === NEEDS_CLEANER_VIEW;
+  const shownSchedules = filtered ? needingCleaner : schedules;
+
   return (
     <div>
       <PageHeader
@@ -84,19 +100,24 @@ export default async function CleaningPage() {
           </DialogTrigger>
         }
       />
-      <CleaningScheduleList
-        schedules={schedules}
-        cleaners={{
-          canSeeCleaners,
-          canChangeCleaner: isAdmin,
-          propertyCleaners,
-          activeCleaners,
-          assignCleanerAction: assignCleaningScheduleCleanerAction,
-          ...(isAdmin
-            ? { notifications, markNotifiedAction: markCleanerNotifiedAction }
-            : {}),
-        }}
-      />
+      {canSeeCleaners && (
+        <NeedsCleanerNotice count={needingCleaner.length} filtered={filtered} />
+      )}
+      {!(filtered && needingCleaner.length === 0) && (
+        <CleaningScheduleList
+          schedules={shownSchedules}
+          cleaners={{
+            canSeeCleaners,
+            canChangeCleaner: isAdmin,
+            propertyCleaners,
+            activeCleaners,
+            assignCleanerAction: assignCleaningScheduleCleanerAction,
+            ...(isAdmin
+              ? { notifications, markNotifiedAction: markCleanerNotifiedAction }
+              : {}),
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -51,6 +51,7 @@ import {
   canChangeCleaningCleaner,
   completeCleaningSchedule,
   createCleaningSchedule,
+  listCleaningJobsNeedingCleaner,
   listCleaningSchedules,
   listRecentlyRescheduledCleanings,
   markCleaningScheduleMissed,
@@ -1071,4 +1072,56 @@ describe("assignCleaningScheduleCleaner with cleanerId null — clear back to Ne
       expect(recordAudit).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("listCleaningJobsNeedingCleaner (Cleaner Phase 5.3)", () => {
+  it("requires cleaning_schedules:read and cleaners:read, and queries open jobs with no cleaner", async () => {
+    vi.mocked(assertPermission).mockResolvedValue(undefined);
+    const rows = [{ id: "cs1", status: "SCHEDULED", cleanerId: null }];
+    vi.mocked(prisma.cleaningSchedule.findMany).mockResolvedValueOnce(
+      rows as never,
+    );
+
+    const result = await listCleaningJobsNeedingCleaner(actor);
+
+    expect(assertPermission).toHaveBeenCalledWith(
+      actor,
+      "cleaning_schedules:read",
+    );
+    expect(assertPermission).toHaveBeenCalledWith(actor, "cleaners:read");
+    expect(prisma.cleaningSchedule.findMany).toHaveBeenCalledWith({
+      where: {
+        cleanerId: null,
+        // Same closed set as lib/needs-cleaner.ts and the cleaner-lock rule.
+        status: { notIn: ["COMPLETED", "CANCELLED", "MISSED"] },
+      },
+      orderBy: { scheduledDate: "asc" },
+      select: {
+        id: true,
+        status: true,
+        cleanerId: true,
+        scheduledDate: true,
+        property: { select: { name: true } },
+      },
+    });
+    expect(result).toEqual(rows);
+  });
+
+  it("refuses (no query) without cleaners:read, since a job's cleaner would be hidden", async () => {
+    vi.mocked(assertPermission)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("ForbiddenError"));
+
+    await expect(listCleaningJobsNeedingCleaner(actor)).rejects.toThrow();
+    expect(prisma.cleaningSchedule.findMany).not.toHaveBeenCalled();
+  });
+
+  it("refuses (no query) without cleaning_schedules:read", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(
+      new Error("ForbiddenError"),
+    );
+
+    await expect(listCleaningJobsNeedingCleaner(actor)).rejects.toThrow();
+    expect(prisma.cleaningSchedule.findMany).not.toHaveBeenCalled();
+  });
 });

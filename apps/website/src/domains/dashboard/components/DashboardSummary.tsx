@@ -24,6 +24,11 @@ import type { ComponentType, ReactNode } from "react";
 
 import type { getDashboardSummary } from "../services/dashboard.service";
 
+import {
+  NEEDS_CLEANER_DESCRIPTION,
+  NEEDS_CLEANER_HREF,
+  needsCleanerTitle,
+} from "@/domains/cleaning/lib/needs-cleaner";
 import { OwnerRezLink } from "@/domains/integrations/components/OwnerRezLink";
 import { ownerRezBookingUrl } from "@/domains/integrations/lib/ownerrez-links";
 import { ownerRezPropertyLabel } from "@/domains/integrations/lib/ownerrez-property-names";
@@ -243,6 +248,21 @@ export function DashboardSummary({ summary }: { summary: Summary }) {
       badgeLabel: "Open",
       href: "/maintenance",
     })),
+    // Cleaner Phase 5.3: ONE aggregated row, not one per job. Only present
+    // for viewers allowed to see cleaners (the list is empty otherwise).
+    ...(summary.cleaningJobsNeedingCleaner.length > 0
+      ? [
+          {
+            id: "cleaning-needs-cleaner",
+            icon: Sparkles,
+            tone: "warning" as const,
+            label: needsCleanerTitle(summary.cleaningJobsNeedingCleaner.length),
+            meta: NEEDS_CLEANER_DESCRIPTION,
+            badgeLabel: "Needs cleaner",
+            href: NEEDS_CLEANER_HREF,
+          },
+        ]
+      : []),
     ...summary.pendingAiActions.map((a) => ({
       id: `ai-${a.id}`,
       icon: Bot,

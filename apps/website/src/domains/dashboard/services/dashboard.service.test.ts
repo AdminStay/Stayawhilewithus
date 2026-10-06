@@ -14,6 +14,7 @@ vi.mock("@/domains/ai/services/ai.service", () => ({
   listPendingAiActions: vi.fn(),
 }));
 vi.mock("@/domains/cleaning/services/cleaning.service", () => ({
+  listCleaningJobsNeedingCleaner: vi.fn(),
   listCleaningSchedules: vi.fn(),
   listRecentlyRescheduledCleanings: vi.fn(),
 }));
@@ -72,6 +73,7 @@ import {
   listPendingAiActions,
 } from "@/domains/ai/services/ai.service";
 import {
+  listCleaningJobsNeedingCleaner,
   listCleaningSchedules,
   listRecentlyRescheduledCleanings,
 } from "@/domains/cleaning/services/cleaning.service";
@@ -113,6 +115,7 @@ function daysFromToday(n: number): Date {
 }
 
 function mockAllLists() {
+  vi.mocked(listCleaningJobsNeedingCleaner).mockResolvedValue([] as never);
   vi.mocked(listProperties).mockResolvedValue([
     { id: "p1", status: "ACTIVE", deletedAt: null },
     { id: "p2", status: "ACTIVE", deletedAt: null },
@@ -630,5 +633,34 @@ describe("getDashboardSummary", () => {
     vi.mocked(listTasks).mockRejectedValueOnce(new Error("db down"));
 
     await expect(getDashboardSummary(actor)).rejects.toThrow("db down");
+  });
+});
+
+describe("getDashboardSummary — cleaning jobs needing a cleaner (Cleaner Phase 5.3)", () => {
+  afterEach(() => vi.resetAllMocks());
+
+  it("passes through the open, unassigned cleaning jobs from the cleaning service", async () => {
+    mockAllLists();
+    const jobs = [
+      { id: "cs1", status: "SCHEDULED", cleanerId: null },
+      { id: "cs2", status: "SCHEDULED", cleanerId: null },
+    ];
+    vi.mocked(listCleaningJobsNeedingCleaner).mockResolvedValue(jobs as never);
+
+    const summary = await getDashboardSummary(actor);
+
+    expect(listCleaningJobsNeedingCleaner).toHaveBeenCalledWith(actor);
+    expect(summary.cleaningJobsNeedingCleaner).toEqual(jobs);
+  });
+
+  it("degrades to an empty list (no attention row) for a viewer without the cleaning/cleaner permissions", async () => {
+    mockAllLists();
+    vi.mocked(listCleaningJobsNeedingCleaner).mockRejectedValue(
+      new ForbiddenError("cleaners:read"),
+    );
+
+    const summary = await getDashboardSummary(actor);
+
+    expect(summary.cleaningJobsNeedingCleaner).toEqual([]);
   });
 });

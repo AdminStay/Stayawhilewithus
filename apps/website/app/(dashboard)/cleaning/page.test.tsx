@@ -77,6 +77,9 @@ const schedule = (
 
 const ALEX = { id: "c-alex", name: "Alex", status: "ACTIVE" };
 
+/** The default /cleaning view (no ?view= filter). */
+const ALL_VIEW = { searchParams: Promise.resolve({}) };
+
 beforeEach(() => {
   m.listLatestCleanerNotifications.mockResolvedValue(new Map());
   m.listCleaningSchedules.mockResolvedValue([
@@ -110,7 +113,7 @@ describe("/cleaning (Cleaner Phase 4)", () => {
     m.hasPermission.mockResolvedValue(true);
     m.canChangeCleaningCleaner.mockResolvedValue(true);
 
-    render(await CleaningPage());
+    render(await CleaningPage(ALL_VIEW));
 
     expect(screen.getByRole("columnheader", { name: "Cleaner" })).toBeTruthy();
     const sandy = rowFor("Sandy Nudes");
@@ -141,7 +144,7 @@ describe("/cleaning (Cleaner Phase 4)", () => {
         schedule("b", "p-sandy", "Sandy Nudes", status, null),
       ]);
 
-      render(await CleaningPage());
+      render(await CleaningPage(ALL_VIEW));
 
       expect(within(rowFor("Harbor House")).getByText("Alex")).toBeTruthy();
       expect(
@@ -159,7 +162,7 @@ describe("/cleaning (Cleaner Phase 4)", () => {
     m.hasPermission.mockResolvedValue(true);
     m.canChangeCleaningCleaner.mockResolvedValue(false);
 
-    render(await CleaningPage());
+    render(await CleaningPage(ALL_VIEW));
 
     expect(screen.getByRole("columnheader", { name: "Cleaner" })).toBeTruthy();
     expect(
@@ -174,7 +177,7 @@ describe("/cleaning (Cleaner Phase 4)", () => {
     m.hasPermission.mockResolvedValue(false);
     m.canChangeCleaningCleaner.mockResolvedValue(false);
 
-    render(await CleaningPage());
+    render(await CleaningPage(ALL_VIEW));
 
     expect(screen.queryByRole("columnheader", { name: "Cleaner" })).toBeNull();
     expect(screen.queryByText("Needs cleaner")).toBeNull();
@@ -194,7 +197,7 @@ describe("/cleaning — Copy cleaner message (Cleaner Phase 5.1)", () => {
       schedule("b", "p-sandy", "Sandy Nudes", "SCHEDULED", null),
     ]);
 
-    render(await CleaningPage());
+    render(await CleaningPage(ALL_VIEW));
 
     expect(
       within(rowFor("Harbor House")).getByRole("button", COPY),
@@ -213,7 +216,7 @@ describe("/cleaning — Copy cleaner message (Cleaner Phase 5.1)", () => {
         schedule("a", "p-harbor", "Harbor House", status, ALEX),
       ]);
 
-      render(await CleaningPage());
+      render(await CleaningPage(ALL_VIEW));
 
       expect(screen.queryByRole("button", COPY)).toBeNull();
     },
@@ -226,7 +229,7 @@ describe("/cleaning — Copy cleaner message (Cleaner Phase 5.1)", () => {
       schedule("a", "p-harbor", "Harbor House", "SCHEDULED", ALEX),
     ]);
 
-    render(await CleaningPage());
+    render(await CleaningPage(ALL_VIEW));
 
     expect(within(rowFor("Harbor House")).getByText("Alex")).toBeTruthy();
     expect(screen.queryByRole("button", COPY)).toBeNull();
@@ -239,7 +242,7 @@ describe("/cleaning — Copy cleaner message (Cleaner Phase 5.1)", () => {
       schedule("a", "p-harbor", "Harbor House", "SCHEDULED", null),
     ]);
 
-    render(await CleaningPage());
+    render(await CleaningPage(ALL_VIEW));
 
     expect(screen.queryByRole("button", COPY)).toBeNull();
   });
@@ -267,7 +270,7 @@ describe("/cleaning — Copy cleaner message (Cleaner Phase 5.1)", () => {
       configurable: true,
     });
 
-    render(await CleaningPage());
+    render(await CleaningPage(ALL_VIEW));
     fireEvent.click(screen.getByRole("button", COPY));
 
     const copied = writeText.mock.calls[0]![0] as string;
@@ -309,7 +312,7 @@ describe("/cleaning — Mark cleaner notified (Cleaner Phase 5.2)", () => {
       ]),
     );
 
-    render(await CleaningPage());
+    render(await CleaningPage(ALL_VIEW));
 
     expect(m.listLatestCleanerNotifications).toHaveBeenCalledWith(
       { userId: "user-1" },
@@ -339,7 +342,7 @@ describe("/cleaning — Mark cleaner notified (Cleaner Phase 5.2)", () => {
         schedule("a", "p-harbor", "Harbor House", status, ALEX),
       ]);
 
-      render(await CleaningPage());
+      render(await CleaningPage(ALL_VIEW));
 
       expect(screen.queryByRole("button", MARK)).toBeNull();
       expect(screen.queryByText("Not notified yet")).toBeNull();
@@ -353,9 +356,117 @@ describe("/cleaning — Mark cleaner notified (Cleaner Phase 5.2)", () => {
       schedule("a", "p-harbor", "Harbor House", "SCHEDULED", ALEX),
     ]);
 
-    render(await CleaningPage());
+    render(await CleaningPage(ALL_VIEW));
 
     expect(screen.queryByRole("button", MARK)).toBeNull();
     expect(m.listLatestCleanerNotifications).not.toHaveBeenCalled();
+  });
+});
+
+describe("/cleaning — jobs needing attention (Cleaner Phase 5.3)", () => {
+  const MIXED = [
+    schedule("open-1", "p-sandy", "Sandy Nudes", "SCHEDULED", null),
+    schedule("open-2", "p-roseate", "Roseate Madre", "SCHEDULED", null),
+    schedule("assigned", "p-harbor", "Harbor House", "SCHEDULED", ALEX),
+    schedule("done", "p-done", "Done Cottage", "COMPLETED", null),
+    schedule("cancelled", "p-cancel", "Cancelled Villa", "CANCELLED", null),
+    schedule("missed", "p-missed", "Missed Lodge", "MISSED", null),
+  ];
+  const filteredView = {
+    searchParams: Promise.resolve({ view: "needs-cleaner" }),
+  };
+
+  it("shows the count and a link to only those jobs (open + unassigned only)", async () => {
+    m.hasPermission.mockResolvedValue(true);
+    m.canChangeCleaningCleaner.mockResolvedValue(false);
+    m.listCleaningSchedules.mockResolvedValue(MIXED);
+
+    render(await CleaningPage(ALL_VIEW));
+
+    const notice = screen.getByRole("status");
+    expect(
+      within(notice).getByText("2 cleaning jobs need attention"),
+    ).toBeTruthy();
+    expect(
+      within(notice).getByText("These jobs don't have a cleaner assigned."),
+    ).toBeTruthy();
+    expect(
+      within(notice)
+        .getByRole("link", { name: "Show only these" })
+        .getAttribute("href"),
+    ).toBe("/cleaning?view=needs-cleaner");
+    // The full list is still shown on the default view.
+    expect(screen.getByText("Done Cottage")).toBeTruthy();
+  });
+
+  it("?view=needs-cleaner lists only open jobs with no cleaner, each marked Needs cleaner", async () => {
+    m.hasPermission.mockResolvedValue(true);
+    m.canChangeCleaningCleaner.mockResolvedValue(false);
+    m.listCleaningSchedules.mockResolvedValue(MIXED);
+
+    render(await CleaningPage(filteredView));
+
+    for (const name of ["Sandy Nudes", "Roseate Madre"]) {
+      expect(within(rowFor(name)).getByText("Needs cleaner")).toBeTruthy();
+    }
+    for (const name of [
+      "Harbor House",
+      "Done Cottage",
+      "Cancelled Villa",
+      "Missed Lodge",
+    ]) {
+      expect(screen.queryByText(name)).toBeNull();
+    }
+    expect(
+      screen
+        .getByRole("link", { name: "Show all cleanings" })
+        .getAttribute("href"),
+    ).toBe("/cleaning");
+  });
+
+  it("no notice when no open job needs a cleaner; the filtered view says so", async () => {
+    m.hasPermission.mockResolvedValue(true);
+    m.canChangeCleaningCleaner.mockResolvedValue(false);
+    m.listCleaningSchedules.mockResolvedValue([
+      schedule("assigned", "p-harbor", "Harbor House", "SCHEDULED", ALEX),
+      schedule("done", "p-done", "Done Cottage", "COMPLETED", null),
+    ]);
+
+    render(await CleaningPage(ALL_VIEW));
+    expect(screen.queryByText(/need attention|needs attention/)).toBeNull();
+    cleanup();
+
+    render(await CleaningPage(filteredView));
+    expect(screen.getByText("No cleaning jobs need attention.")).toBeTruthy();
+    expect(screen.queryByText("Harbor House")).toBeNull();
+  });
+
+  it("without cleaners:read: no notice, and the filter is ignored (cleaners are hidden, so 'no cleaner' can't be known)", async () => {
+    m.hasPermission.mockResolvedValue(false);
+    m.canChangeCleaningCleaner.mockResolvedValue(false);
+    m.listCleaningSchedules.mockResolvedValue(
+      MIXED.map((s) => ({ ...s, cleanerId: null, cleaner: null })),
+    );
+
+    render(await CleaningPage(filteredView));
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/need attention/)).toBeNull();
+    // All jobs still listed — nothing filtered out.
+    expect(screen.getByText("Harbor House")).toBeTruthy();
+    expect(screen.getByText("Done Cottage")).toBeTruthy();
+  });
+
+  it("displays only — assigns nothing and calls no cleaner/notification write", async () => {
+    m.hasPermission.mockResolvedValue(true);
+    m.canChangeCleaningCleaner.mockResolvedValue(true);
+    m.listCleaningSchedules.mockResolvedValue(MIXED);
+
+    render(await CleaningPage(filteredView));
+
+    // The page only reads; it never calls an action while rendering.
+    const actions = await import("@/domains/cleaning/actions");
+    expect(actions.assignCleaningScheduleCleanerAction).not.toHaveBeenCalled();
+    expect(actions.markCleanerNotifiedAction).not.toHaveBeenCalled();
   });
 });
