@@ -14,6 +14,15 @@ const {
   mockFindEditAllowlistEntry: vi.fn(),
 }));
 
+// Meeting #5 (2026-09-24): dashboard editing is switched OFF in the product
+// (config/notion-dashboard-editing.ts). This suite exercises the dormant
+// write path itself, so it opts in explicitly; the real default is covered
+// by notion-dashboard-editing.test.ts.
+vi.mock("../config/notion-dashboard-editing", () => ({
+  NOTION_DASHBOARD_EDITING_ENABLED: true,
+  isNotionDashboardEditingEnabled: () => true,
+}));
+
 vi.mock("@stayw/auth", () => ({
   assertPermission: mockAssertPermission,
 }));

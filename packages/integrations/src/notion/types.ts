@@ -371,3 +371,13 @@ export interface NotionPageContent {
   blocks: NotionContentBlock[];
   truncated: boolean;
 }
+
+/**
+ * A normalized Notion parent reference (2026-09-30, visibility + activity
+ * monitoring). Only the parent's kind and id — never anything about the
+ * object's own content.
+ */
+export type NotionParentRef =
+  | { type: "page" | "database" | "data_source" | "block"; id: string }
+  | { type: "workspace"; id: null }
+  | { type: "unknown"; id: null };

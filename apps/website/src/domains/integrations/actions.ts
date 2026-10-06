@@ -26,6 +26,11 @@ import {
   updateNotionField,
   type NotionEditResult,
 } from "./services/notion-edit.service";
+import {
+  clearNotionWebhookVerificationToken,
+  revealNotionWebhookVerificationToken,
+  type RevealResult,
+} from "./services/notion-webhook-setup.service";
 
 import {
   syncAugustDevices,
@@ -374,5 +379,46 @@ export async function updateNotionFieldAction(
       status: "failure",
       error: err instanceof Error ? err.message : String(err),
     };
+  }
+}
+
+/**
+ * Admin-only (notion:manage, enforced in the service) one-time reveal of the
+ * Notion webhook verification token captured during setup (2026-09-30).
+ * Returns the token only to the requesting admin's browser so it can be
+ * pasted into Notion and Vercel; never logged, audited by fingerprint only.
+ */
+export async function revealNotionWebhookTokenAction(): Promise<
+  RevealResult | { status: "error" }
+> {
+  try {
+    const actor = await getCurrentUser();
+    const result = await revealNotionWebhookVerificationToken(actor);
+    revalidatePath("/notion");
+    return result;
+  } catch (err) {
+    console.error(
+      "revealNotionWebhookTokenAction failed:",
+      err instanceof Error ? err.name : "unknown",
+    );
+    return { status: "error" };
+  }
+}
+
+/** Admin-only: removes the captured setup token once setup is finished. */
+export async function clearNotionWebhookTokenAction(): Promise<{
+  status: "cleared" | "none" | "error";
+}> {
+  try {
+    const actor = await getCurrentUser();
+    const result = await clearNotionWebhookVerificationToken(actor);
+    revalidatePath("/notion");
+    return result;
+  } catch (err) {
+    console.error(
+      "clearNotionWebhookTokenAction failed:",
+      err instanceof Error ? err.name : "unknown",
+    );
+    return { status: "error" };
   }
 }

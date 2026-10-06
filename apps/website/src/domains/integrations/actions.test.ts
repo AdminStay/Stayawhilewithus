@@ -22,6 +22,11 @@ vi.mock("./services/integrations.service", () => ({
   getNotionPageContent: mockGetNotionPageContent,
 }));
 
+vi.mock("./services/notion-webhook-setup.service", () => ({
+  revealNotionWebhookVerificationToken: vi.fn(),
+  clearNotionWebhookVerificationToken: vi.fn(),
+}));
+
 vi.mock("./services/notion-edit.service", () => ({
   updateNotionField: vi.fn(),
 }));

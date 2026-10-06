@@ -2,7 +2,9 @@ import { hasPermission } from "@stayw/auth";
 import { PageHeader, SectionHeader } from "@stayw/ui";
 
 import {
+  clearNotionWebhookTokenAction,
   fetchNotionPageContentAction,
+  revealNotionWebhookTokenAction,
   searchNotionAction,
   searchNotionLibraryAction,
   updateNotionBlockContentAction,
@@ -13,7 +15,9 @@ import { NotionListingsSearch } from "@/domains/integrations/components/NotionLi
 import { NotionRecentActivity } from "@/domains/integrations/components/NotionRecentActivity";
 import { NotionSearch } from "@/domains/integrations/components/NotionSearch";
 import { NotionSopLibrary } from "@/domains/integrations/components/NotionSopLibrary";
+import { NotionWebhookSetupPanel } from "@/domains/integrations/components/NotionWebhookSetupPanel";
 import { NotionWorkspaceTabs } from "@/domains/integrations/components/NotionWorkspaceTabs";
+import { isNotionDashboardEditingEnabled } from "@/domains/integrations/config/notion-dashboard-editing";
 import { NOTION_SOPS_ROOT_PAGE_ID } from "@/domains/integrations/config/notion-sop-library";
 import {
   buildNotionListingClientDto,
@@ -26,8 +30,10 @@ import {
   type IntegrationHighlights,
   type NotionListingWithVisibility,
 } from "@/domains/integrations/services/integrations.service";
+import { getNotionAccess } from "@/domains/integrations/services/notion-access.service";
 import { listRecentNotionActivity } from "@/domains/integrations/services/notion-activity.service";
 import { listEditableNotionBlockIds } from "@/domains/integrations/services/notion-block-edit.service";
+import { getNotionWebhookSetupStatus } from "@/domains/integrations/services/notion-webhook-setup.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
 export default async function NotionPage() {
@@ -48,6 +54,22 @@ export default async function NotionPage() {
             to enable.
           </p>
         </div>
+      </div>
+    );
+  }
+
+  // Visibility layer (2026-09-30): Notion content needs notion:read
+  // (standard) or notion:manage (sensitive). Without either, say so plainly
+  // instead of failing the page.
+  const notionAccess = await getNotionAccess(actor);
+  if (!notionAccess.canReadStandard && !notionAccess.canReadSensitive) {
+    return (
+      <div>
+        <PageHeader title="Notion" subtitle="Read-only Notion information." />
+        <p className="text-sm text-ink-muted">
+          You don&apos;t have access to Notion content in StayWhile. Ask an
+          admin if you need it.
+        </p>
       </div>
     );
   }
@@ -74,7 +96,11 @@ export default async function NotionPage() {
   // annotateNotionFieldEditability() marks every field non-editable
   // regardless of this value — the dashboard stays 100% read-only today
   // even though admin already holds notion:update via its wildcard grant.
-  const canEditNotion = await hasPermission(actor, "notion:update");
+  // Meeting #5: the dashboard is read-only for Notion — the switch in
+  // config/notion-dashboard-editing.ts keeps every edit control off.
+  const canEditNotion =
+    isNotionDashboardEditingEnabled() &&
+    (await hasPermission(actor, "notion:update"));
 
   // Confirmed Property.notionPageId associations only — never inferred.
   // Empty today (no property has this field populated yet), so every
@@ -159,6 +185,11 @@ export default async function NotionPage() {
     ? await getNotionIntegrationIdentity(actor)
     : null;
 
+  // Admin-only webhook setup helper (notion:manage, enforced in the service).
+  const webhookSetupStatus = notionAccess.canReadSensitive
+    ? await getNotionWebhookSetupStatus(actor)
+    : null;
+
   return (
     <div>
       <PageHeader
@@ -190,6 +221,16 @@ export default async function NotionPage() {
                 <code className="text-xs">NOTION_API_KEY</code> to enable.
               </p>
             )}
+          </div>
+        )}
+        {webhookSetupStatus !== null && (
+          <div>
+            <SectionHeader title="Activity monitoring setup" size="lg" />
+            <NotionWebhookSetupPanel
+              status={webhookSetupStatus}
+              revealAction={revealNotionWebhookTokenAction}
+              clearAction={clearNotionWebhookTokenAction}
+            />
           </div>
         )}
         <div>

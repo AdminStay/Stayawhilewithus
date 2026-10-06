@@ -32,6 +32,25 @@ vi.mock("@stayw/auth", () => ({
   assertPermission: vi.fn(),
 }));
 
+// Visibility layer (2026-09-30): these suites test each read function's
+// own behavior, so the access helper is a pass-through here — full access,
+// and the same single assertPermission call each function made before
+// (now notion:read). Visibility itself is tested in notion-visibility.test.ts
+// and notion-access.service.test.ts.
+vi.mock("./notion-access.service", async () => {
+  const { assertPermission } = await import("@stayw/auth");
+  const full = { canReadStandard: true, canReadSensitive: true };
+  return {
+    getNotionAccess: vi.fn(async () => full),
+    assertNotionContentAccess: vi.fn(async (actor: unknown) => {
+      await assertPermission(actor as never, "notion:read");
+      return full;
+    }),
+    createNotionVisibilityResolver: vi.fn(async () => async () => "standard"),
+    filterVisibleNotionItems: vi.fn(async (items: unknown[]) => [...items]),
+  };
+});
+
 vi.mock("@/platform/audit/record-audit", () => ({
   recordAudit: vi.fn(),
 }));
@@ -632,7 +651,7 @@ describe("getNotionPageContent", () => {
 
     const result = await getNotionPageContent(actor, "page-1");
 
-    expect(assertPermission).toHaveBeenCalledWith(actor, "integrations:read");
+    expect(assertPermission).toHaveBeenCalledWith(actor, "notion:read");
     expect(mockGetPageContent).toHaveBeenCalledWith("page-1");
     expect(result).toEqual({ configured: true, ok: true, content });
   });
@@ -767,7 +786,7 @@ describe("listNotionListings", () => {
 
     const result = await listNotionListings(actor);
 
-    expect(assertPermission).toHaveBeenCalledWith(actor, "integrations:read");
+    expect(assertPermission).toHaveBeenCalledWith(actor, "notion:read");
     expect(mockListDataSourceRecords).toHaveBeenCalledWith("ds-123");
     expect(result).toEqual({
       configured: true,

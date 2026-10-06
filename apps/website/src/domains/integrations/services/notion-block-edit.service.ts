@@ -10,6 +10,7 @@ import {
   findBlockEditAllowlistEntry,
   NOTION_BLOCK_EDIT_ALLOWLIST,
 } from "../config/notion-block-edit-allowlist";
+import { isNotionDashboardEditingEnabled } from "../config/notion-dashboard-editing";
 import { updateNotionBlockRequestSchema } from "../schemas/notion-block-edit.schema";
 
 import { recordAudit } from "@/platform/audit/record-audit";
@@ -29,6 +30,7 @@ export async function listEditableNotionBlockIds(
   actor: AuthContext,
   pageId: string,
 ): Promise<string[]> {
+  if (!isNotionDashboardEditingEnabled()) return [];
   const canEdit = await hasPermission(actor, "notion:update");
   if (!canEdit) return [];
   return NOTION_BLOCK_EDIT_ALLOWLIST.filter(
@@ -137,6 +139,9 @@ export async function updateNotionBlockContent(
   actor: AuthContext,
   rawInput: unknown,
 ): Promise<NotionBlockEditResult> {
+  // Meeting #5: dashboard editing is off — refuse before anything else.
+  if (!isNotionDashboardEditingEnabled()) return { status: "not_editable" };
+
   await assertPermission(actor, "notion:update");
 
   const parsedInput = updateNotionBlockRequestSchema.safeParse(rawInput);
