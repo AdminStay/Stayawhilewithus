@@ -70,8 +70,10 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck --concurrency=1
 
+      # Loose env mode: turbo's strict mode strips DATABASE_URL from the test
+      # task, and august-command-locks.db.test.ts requires it in CI.
       - name: Test
-        run: pnpm test
+        run: pnpm run test --env-mode=loose
 
       - name: Build
         run: pnpm build
