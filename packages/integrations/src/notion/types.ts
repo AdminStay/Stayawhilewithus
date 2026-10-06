@@ -381,3 +381,17 @@ export type NotionParentRef =
   | { type: "page" | "database" | "data_source" | "block"; id: string }
   | { type: "workspace"; id: null }
   | { type: "unknown"; id: null };
+
+/**
+ * Read-only page metadata for activity enrichment (2026-09-30): the title,
+ * parent and trash flag, plus a property-id → property-name map so a
+ * webhook's `updated_properties` ids can be shown by name. Never any
+ * property VALUE.
+ */
+export interface NotionPageMetadata {
+  id: string;
+  title: string;
+  parent: NotionParentRef;
+  inTrash: boolean;
+  propertyNamesById: Record<string, string>;
+}

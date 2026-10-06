@@ -4,6 +4,7 @@ import { prisma } from "@stayw/database";
 
 import { notionWebhookEventSchema } from "../schemas/notion-webhook-event.schema";
 
+import { enrichStoredNotionEvent } from "./notion-event-enrichment.service";
 import {
   isNotionWebhookEventExcluded,
   classifyNotionWebhookEvent,
@@ -96,8 +97,16 @@ export async function processNotionWebhookEvent(
         eventType: classified.eventType,
         changedFieldNames: classified.changedFieldNames,
         occurredAt: classified.occurredAt,
+        authors: classified.authors,
+        parentType: classified.parent?.type ?? null,
+        parentId: classified.parent?.id ?? null,
+        attemptNumber: classified.attemptNumber,
       },
     });
+    // Best-effort, after the raw event is safely stored — a Notion lookup
+    // failure never loses or rejects the event itself. N2 stores and shows
+    // activity only; no notification is sent from here.
+    await enrichStoredNotionEvent(created.id, classified);
     return { status: "processed", eventId: created.id };
   } catch (err) {
     if (isUniqueConstraintViolation(err)) {

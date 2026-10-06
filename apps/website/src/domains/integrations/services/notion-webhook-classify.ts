@@ -16,6 +16,43 @@ export interface NotionClassifiedEvent {
   eventType: NotionWebhookEvent["type"];
   changedFieldNames: string[];
   occurredAt: Date;
+  /** Notion's `authors` — ids and person/bot/agent types only (2026-09-30). */
+  authors: Array<{ id: string; type: "person" | "bot" | "agent" }>;
+  /** Where the entity lives, from `data.parent` (ids only); null if absent. */
+  parent: NotionEventParent | null;
+  attemptNumber: number | null;
+}
+
+/**
+ * The event's own `data.parent` (webhook payload shape `{ id, type }`,
+ * e.g. type "page" | "database" | "data_source" | "block" | "space").
+ * Anything unrecognized is kept as "other" rather than guessed.
+ */
+export interface NotionEventParent {
+  type: "page" | "database" | "data_source" | "block" | "workspace" | "other";
+  id: string | null;
+}
+
+export function extractNotionEventParent(
+  data: unknown,
+): NotionEventParent | null {
+  if (typeof data !== "object" || data === null) return null;
+  const parent = (data as Record<string, unknown>).parent;
+  if (typeof parent !== "object" || parent === null) return null;
+  const p = parent as Record<string, unknown>;
+  const id = typeof p.id === "string" ? p.id : null;
+  switch (p.type) {
+    case "page":
+    case "database":
+    case "data_source":
+    case "block":
+      return { type: p.type, id };
+    case "space":
+    case "workspace":
+      return { type: "workspace", id: null };
+    default:
+      return { type: "other", id };
+  }
 }
 
 /**
@@ -104,5 +141,9 @@ export function classifyNotionWebhookEvent(
     eventType: event.type,
     changedFieldNames: extractChangedFieldNames(event),
     occurredAt: new Date(event.timestamp),
+    authors: (event.authors ?? []).map((a) => ({ id: a.id, type: a.type })),
+    parent: extractNotionEventParent(event.data),
+    attemptNumber:
+      typeof event.attempt_number === "number" ? event.attempt_number : null,
   };
 }

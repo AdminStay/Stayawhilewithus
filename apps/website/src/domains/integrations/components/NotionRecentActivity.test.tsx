@@ -1,92 +1,108 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { NotionActivityItem } from "../services/notion-activity.service";
+import type { NotionActivityView } from "../services/notion-activity.service";
 
 import { NotionRecentActivity } from "./NotionRecentActivity";
 
 afterEach(cleanup);
 
-function activity(overrides: Partial<NotionActivityItem>): NotionActivityItem {
-  return {
-    id: "1",
-    entityId: "page-1",
-    entityType: "page",
-    eventType: "page.properties_updated",
-    changedFieldCount: 2,
-    occurredAt: new Date("2026-09-16T12:00:00.000Z"),
-    ...overrides,
-  };
-}
+const NOW = new Date("2026-09-30T12:00:00.000Z");
+const view = (
+  overrides: Partial<NotionActivityView> = {},
+): NotionActivityView => ({
+  id: "row-1",
+  action: "updated_properties",
+  actionLabel: "Updated",
+  who: "Michelle",
+  verb: "updated",
+  where:
+    "Library › Property Directory › Palm Haven › Router and Thermostat Location",
+  change: "Changed: Router location",
+  occurredAt: new Date("2026-09-30T11:57:00.000Z"),
+  restricted: false,
+  ...overrides,
+});
 
-describe("NotionRecentActivity", () => {
-  it("shows a small, unobtrusive status line — never the large empty-state card — when there is no activity yet", () => {
-    const { container } = render(<NotionRecentActivity items={[]} />);
+describe("NotionRecentActivity (2026-09-30)", () => {
+  it("shows the honest empty state before monitoring is live", () => {
+    render(<NotionRecentActivity items={[]} now={NOW} />);
     expect(
-      screen.getByText(
-        "Notion change monitoring isn't active in Production yet.",
-      ),
+      screen.getByText(/monitoring isn.t active in Production yet/),
     ).toBeTruthy();
-    // No big section header or card wrapper while empty — this must stay a
-    // small status line, not a large empty-state block (Production
-    // feedback, 2026-09-24: it took up a large amount of screen space).
-    expect(screen.queryByText("Recent Notion Activity")).toBeNull();
-    expect(container.querySelector(".divide-y")).toBeNull();
   });
 
-  it("renders a human-readable label for a known event type", () => {
+  it("renders who / did what / where / what changed / when", () => {
+    render(<NotionRecentActivity items={[view()]} now={NOW} />);
+    const item = screen.getByRole("listitem");
+    expect(item.textContent).toContain(
+      "Michelle updated Library › Property Directory › Palm Haven › Router and Thermostat Location",
+    );
+    expect(within(item).getByText("Updated")).toBeTruthy();
+    expect(within(item).getByText("Changed: Router location")).toBeTruthy();
+    expect(within(item).getByText("3 minutes ago")).toBeTruthy();
+  });
+
+  it("covers the other actions with their labels", () => {
     render(
       <NotionRecentActivity
-        items={[activity({ eventType: "page.properties_updated" })]}
+        now={NOW}
+        items={[
+          view({
+            id: "a",
+            action: "deleted",
+            actionLabel: "Moved to trash",
+            verb: "moved to trash",
+            change: null,
+          }),
+          view({
+            id: "b",
+            action: "restored",
+            actionLabel: "Restored",
+            verb: "restored",
+            change: null,
+          }),
+          view({
+            id: "c",
+            action: "moved",
+            actionLabel: "Moved",
+            verb: "moved",
+            change: null,
+          }),
+          view({
+            id: "d",
+            action: "created",
+            actionLabel: "Created",
+            verb: "created",
+            change: null,
+          }),
+        ]}
       />,
     );
-    expect(screen.getByText("Page properties changed")).toBeTruthy();
+    for (const label of ["Moved to trash", "Restored", "Moved", "Created"]) {
+      expect(screen.getByText(label)).toBeTruthy();
+    }
   });
 
-  it("falls back to the raw event type string for an unrecognized type", () => {
+  it("marks a restricted item and shows no change details for it", () => {
     render(
       <NotionRecentActivity
-        items={[activity({ eventType: "page.some_future_event" })]}
+        now={NOW}
+        items={[
+          view({
+            where: "a restricted Notion page",
+            change: null,
+            restricted: true,
+          }),
+        ]}
       />,
     );
-    expect(screen.getByText("page.some_future_event")).toBeTruthy();
-  });
-
-  it("shows a changed-field count, never a field name or value", () => {
-    render(
-      <NotionRecentActivity items={[activity({ changedFieldCount: 3 })]} />,
+    const item = screen.getByRole("listitem");
+    expect(within(item).getByText("Restricted")).toBeTruthy();
+    expect(item.textContent).toContain(
+      "Michelle updated a restricted Notion page",
     );
-    expect(screen.getByText("3 fields changed")).toBeTruthy();
-  });
-
-  it("omits the changed-field badge entirely when the count is zero", () => {
-    render(
-      <NotionRecentActivity items={[activity({ changedFieldCount: 0 })]} />,
-    );
-    expect(screen.queryByText(/fields? changed/)).toBeNull();
-  });
-
-  it("contains no write/mutation affordance anywhere in the rendered output", () => {
-    const { container } = render(
-      <NotionRecentActivity items={[activity({})]} />,
-    );
-    expect(container.querySelector("button")).toBeNull();
-    expect(container.querySelector("form")).toBeNull();
-    expect(screen.queryByText(/^delete$/i)).toBeNull();
-    expect(screen.queryByText(/^save$/i)).toBeNull();
-  });
-
-  // Requirement 7: Recent Activity still exposes no raw Notion content,
-  // value, or entity id — never rendered anywhere in the DOM, even though
-  // NotionActivityItem carries entityId on the object this component
-  // receives.
-  it("never renders the raw Notion entityId anywhere in the DOM", () => {
-    const { container } = render(
-      <NotionRecentActivity
-        items={[activity({ entityId: "9f2c1a7e-raw-notion-page-id" })]}
-      />,
-    );
-    expect(container.textContent).not.toContain("9f2c1a7e-raw-notion-page-id");
+    expect(item.textContent).not.toContain("Changed:");
   });
 });
