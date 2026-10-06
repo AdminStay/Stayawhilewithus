@@ -245,7 +245,9 @@ describe("DashboardSummary — cleaning jobs needing attention (Cleaner Phase 5.
       1,
     );
     expect(
-      screen.getByText("These jobs don't have a cleaner assigned."),
+      screen.getByText(
+        "These jobs have no cleaner assigned, or their cleaner is inactive.",
+      ),
     ).toBeTruthy();
     expect(screen.getByText("Needs cleaner")).toBeTruthy();
   });

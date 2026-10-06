@@ -388,7 +388,9 @@ describe("/cleaning — jobs needing attention (Cleaner Phase 5.3)", () => {
       within(notice).getByText("2 cleaning jobs need attention"),
     ).toBeTruthy();
     expect(
-      within(notice).getByText("These jobs don't have a cleaner assigned."),
+      within(notice).getByText(
+        "These jobs have no cleaner assigned, or their cleaner is inactive.",
+      ),
     ).toBeTruthy();
     expect(
       within(notice)

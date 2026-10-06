@@ -65,7 +65,7 @@ export async function markCleanerNotified(
         id: true,
         status: true,
         scheduledDate: true,
-        cleaner: { select: { id: true, name: true } },
+        cleaner: { select: { id: true, name: true, status: true } },
         property: { select: { id: true, name: true } },
       },
     });
@@ -87,6 +87,13 @@ export async function markCleanerNotified(
     if (job.cleaner.id !== input.cleanerId) {
       throw new CleaningRuleError(
         "This cleaning's cleaner was just changed. Refresh the page and check before marking them notified.",
+      );
+    }
+    // 2026-10-07: an inactive cleaner isn't going to do the job — the job
+    // needs a new cleaner, not a notification.
+    if (job.cleaner.status !== "ACTIVE") {
+      throw new CleaningRuleError(
+        `${job.cleaner.name} is inactive, so a notification can't be recorded. Choose an active cleaner for this cleaning first.`,
       );
     }
 

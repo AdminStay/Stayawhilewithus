@@ -97,10 +97,11 @@ async function assertActiveCleaner(
 }
 
 /**
- * Cleaner Phase 5.3 — OPEN cleaning jobs with no assigned cleaner (the
+ * Cleaner Phase 5.3 — OPEN cleaning jobs with no usable cleaner (the
  * dashboard's "needs attention" count). Same definition as
- * lib/needs-cleaner.ts's needsCleaner(): cleanerId is null and the status
- * isn't COMPLETED/CANCELLED/MISSED. Read-only; assigns nothing.
+ * lib/needs-cleaner.ts's needsCleaner(): the status isn't
+ * COMPLETED/CANCELLED/MISSED and either cleanerId is null or (2026-10-07)
+ * the stored cleaner is no longer ACTIVE. Read-only; assigns nothing.
  *
  * Requires cleaning_schedules:read AND cleaners:read — without the latter,
  * a job's cleaner is hidden, so "has no cleaner" can't be shown (same rule
@@ -112,8 +113,8 @@ export async function listCleaningJobsNeedingCleaner(actor: AuthContext) {
   await assertPermission(actor, "cleaners:read");
   return prisma.cleaningSchedule.findMany({
     where: {
-      cleanerId: null,
       status: { notIn: [...CLEANER_LOCKED_STATUSES] },
+      OR: [{ cleanerId: null }, { cleaner: { status: { not: "ACTIVE" } } }],
     },
     orderBy: { scheduledDate: "asc" },
     select: {
@@ -122,6 +123,7 @@ export async function listCleaningJobsNeedingCleaner(actor: AuthContext) {
       cleanerId: true,
       scheduledDate: true,
       property: { select: { name: true } },
+      cleaner: { select: { status: true } },
     },
   });
 }
@@ -326,13 +328,61 @@ function isSameUtcDate(a: Date, b: Date): boolean {
 }
 
 /**
+ * Lifecycle rules (2026-10-07), enforced here on the server — not only by
+ * which buttons /cleaning shows — so every caller (forms, the cleaning.complete
+ * AI tool, a stale page) gets the same answer:
+ *   - complete / cancel / missed only from an OPEN job (SCHEDULED or
+ *     IN_PROGRESS); a completed, cancelled or missed job can't be closed again
+ *     or switched to another closed status;
+ *   - reschedule an open or MISSED job; never a COMPLETED or CANCELLED one.
+ *     Rescheduling a MISSED job reopens it as SCHEDULED (it still needs doing).
+ * The status condition is part of each UPDATE, so a job closed a moment
+ * earlier can't slip through between the read and the write.
+ */
+export const CLEANING_OPEN_STATUSES: readonly CleaningStatus[] = [
+  "SCHEDULED",
+  "IN_PROGRESS",
+];
+export const CLEANING_RESCHEDULABLE_STATUSES: readonly CleaningStatus[] = [
+  ...CLEANING_OPEN_STATUSES,
+  "MISSED",
+];
+
+const STATUS_WORDS: Record<CleaningStatus, string> = {
+  SCHEDULED: "scheduled",
+  IN_PROGRESS: "in progress",
+  COMPLETED: "completed",
+  CANCELLED: "cancelled",
+  MISSED: "marked missed",
+};
+
+const CHANGED_MEANWHILE_MESSAGE =
+  "This cleaning was just changed by someone else. Refresh the page.";
+
+async function findScheduleOrThrow(
+  tx: Prisma.TransactionClient,
+  scheduleId: string,
+) {
+  const existing = await tx.cleaningSchedule.findUnique({
+    where: { id: scheduleId },
+  });
+  if (!existing) {
+    throw new CleaningRuleError(
+      "This cleaning no longer exists. Refresh the page.",
+    );
+  }
+  return existing;
+}
+
+/**
  * originalScheduledDate is only ever set once — on the first reschedule —
  * and left alone on every reschedule after that, so it keeps meaning "the
  * date this was first scheduled for," not "the date before the most recent
  * change." The backing Task's dueAt moves with it so "tasks due today"
- * stays accurate. Submitting the same date back is a no-op, not a
- * reschedule — otherwise re-saving the form with nothing actually changed
- * would falsely mark the schedule as rescheduled.
+ * stays accurate. Submitting the same date back for an open job is a no-op,
+ * not a reschedule — otherwise re-saving the form with nothing actually
+ * changed would falsely mark the schedule as rescheduled. For a MISSED job
+ * the same date is a real change: it reopens the job on that date.
  */
 export async function rescheduleCleaningSchedule(
   actor: AuthContext,
@@ -341,75 +391,126 @@ export async function rescheduleCleaningSchedule(
 ) {
   await assertPermission(actor, "cleaning_schedules:update");
 
-  const existing = await prisma.cleaningSchedule.findUniqueOrThrow({
-    where: { id: scheduleId },
-  });
+  return prisma.$transaction(async (tx) => {
+    const existing = await findScheduleOrThrow(tx, scheduleId);
+    if (!CLEANING_RESCHEDULABLE_STATUSES.includes(existing.status)) {
+      throw new CleaningRuleError(
+        `This cleaning is ${STATUS_WORDS[existing.status]}, so it can't be rescheduled.`,
+      );
+    }
 
-  if (isSameUtcDate(existing.scheduledDate, input.scheduledDate)) {
-    return existing;
-  }
+    const reopen = existing.status === "MISSED";
+    const dateChanged = !isSameUtcDate(
+      existing.scheduledDate,
+      input.scheduledDate,
+    );
+    if (!reopen && !dateChanged) return existing;
 
-  const schedule = await prisma.$transaction(async (tx) => {
-    const updated = await tx.cleaningSchedule.update({
-      where: { id: scheduleId },
-      data: {
+    const data = {
+      ...(dateChanged && {
         scheduledDate: input.scheduledDate,
         originalScheduledDate:
           existing.originalScheduledDate ?? existing.scheduledDate,
+      }),
+      ...(reopen && { status: "SCHEDULED" as const }),
+    };
+    const { count } = await tx.cleaningSchedule.updateMany({
+      where: {
+        id: existing.id,
+        status: { in: [...CLEANING_RESCHEDULABLE_STATUSES] },
       },
+      data,
     });
+    if (count === 0) throw new CleaningRuleError(CHANGED_MEANWHILE_MESSAGE);
 
-    await tx.task.update({
-      where: { id: updated.taskId },
-      data: { dueAt: input.scheduledDate },
+    if (dateChanged) {
+      await tx.task.update({
+        where: { id: existing.taskId },
+        data: { dueAt: input.scheduledDate },
+      });
+    }
+
+    const schedule = { ...existing, ...data };
+    await recordAudit(
+      {
+        actorUserId: actor.userId,
+        actorType: "USER",
+        action: "cleaning_schedule.rescheduled",
+        entityType: "CleaningSchedule",
+        entityId: existing.id,
+        beforeState: existing,
+        afterState: schedule,
+        ...(reopen && { metadata: { reopenedFromMissed: true } }),
+      },
+      tx,
+    );
+    return schedule;
+  });
+}
+
+/**
+ * Moves an OPEN job to a closed status, with the status condition in the
+ * UPDATE, the backing Task change (if any) in the same transaction, and an
+ * audit entry carrying both the before and after state.
+ */
+async function closeCleaningSchedule(
+  actor: AuthContext,
+  scheduleId: string,
+  to: "COMPLETED" | "CANCELLED" | "MISSED",
+  action: string,
+  taskData: Prisma.TaskUpdateInput | null,
+) {
+  await assertPermission(actor, "cleaning_schedules:update");
+
+  return prisma.$transaction(async (tx) => {
+    const existing = await findScheduleOrThrow(tx, scheduleId);
+    if (!CLEANING_OPEN_STATUSES.includes(existing.status)) {
+      throw new CleaningRuleError(
+        `This cleaning is already ${STATUS_WORDS[existing.status]}, so it can't be ${STATUS_WORDS[to]}.`,
+      );
+    }
+
+    const { count } = await tx.cleaningSchedule.updateMany({
+      where: {
+        id: existing.id,
+        status: { in: [...CLEANING_OPEN_STATUSES] },
+      },
+      data: { status: to },
     });
+    if (count === 0) throw new CleaningRuleError(CHANGED_MEANWHILE_MESSAGE);
 
-    return updated;
+    if (taskData) {
+      await tx.task.update({ where: { id: existing.taskId }, data: taskData });
+    }
+
+    const schedule = { ...existing, status: to };
+    await recordAudit(
+      {
+        actorUserId: actor.userId,
+        actorType: "USER",
+        action,
+        entityType: "CleaningSchedule",
+        entityId: existing.id,
+        beforeState: existing,
+        afterState: schedule,
+      },
+      tx,
+    );
+    return schedule;
   });
-
-  await recordAudit({
-    actorUserId: actor.userId,
-    actorType: "USER",
-    action: "cleaning_schedule.rescheduled",
-    entityType: "CleaningSchedule",
-    entityId: schedule.id,
-    beforeState: existing,
-    afterState: schedule,
-  });
-
-  return schedule;
 }
 
 export async function completeCleaningSchedule(
   actor: AuthContext,
   scheduleId: string,
 ) {
-  await assertPermission(actor, "cleaning_schedules:update");
-
-  const schedule = await prisma.$transaction(async (tx) => {
-    const updated = await tx.cleaningSchedule.update({
-      where: { id: scheduleId },
-      data: { status: "COMPLETED" },
-    });
-
-    await tx.task.update({
-      where: { id: updated.taskId },
-      data: { status: "DONE", completedAt: new Date() },
-    });
-
-    return updated;
-  });
-
-  await recordAudit({
-    actorUserId: actor.userId,
-    actorType: "USER",
-    action: "cleaning_schedule.completed",
-    entityType: "CleaningSchedule",
-    entityId: schedule.id,
-    afterState: schedule,
-  });
-
-  return schedule;
+  return closeCleaningSchedule(
+    actor,
+    scheduleId,
+    "COMPLETED",
+    "cleaning_schedule.completed",
+    { status: "DONE", completedAt: new Date() },
+  );
 }
 
 /** Cancelling the schedule also cancels the backing Task — there's no more work to do. */
@@ -417,57 +518,29 @@ export async function cancelCleaningSchedule(
   actor: AuthContext,
   scheduleId: string,
 ) {
-  await assertPermission(actor, "cleaning_schedules:update");
-
-  const schedule = await prisma.$transaction(async (tx) => {
-    const updated = await tx.cleaningSchedule.update({
-      where: { id: scheduleId },
-      data: { status: "CANCELLED" },
-    });
-
-    await tx.task.update({
-      where: { id: updated.taskId },
-      data: { status: "CANCELLED" },
-    });
-
-    return updated;
-  });
-
-  await recordAudit({
-    actorUserId: actor.userId,
-    actorType: "USER",
-    action: "cleaning_schedule.cancelled",
-    entityType: "CleaningSchedule",
-    entityId: schedule.id,
-    afterState: schedule,
-  });
-
-  return schedule;
+  return closeCleaningSchedule(
+    actor,
+    scheduleId,
+    "CANCELLED",
+    "cleaning_schedule.cancelled",
+    { status: "CANCELLED" },
+  );
 }
 
 /**
  * A missed cleaning still needs doing — unlike cancel, the backing Task is
- * left as-is (not marked CANCELLED/DONE) so it still shows up as open work.
+ * left as-is (not marked CANCELLED/DONE) so it still shows up as open work,
+ * and rescheduling the job reopens it (see rescheduleCleaningSchedule).
  */
 export async function markCleaningScheduleMissed(
   actor: AuthContext,
   scheduleId: string,
 ) {
-  await assertPermission(actor, "cleaning_schedules:update");
-
-  const schedule = await prisma.cleaningSchedule.update({
-    where: { id: scheduleId },
-    data: { status: "MISSED" },
-  });
-
-  await recordAudit({
-    actorUserId: actor.userId,
-    actorType: "USER",
-    action: "cleaning_schedule.missed",
-    entityType: "CleaningSchedule",
-    entityId: schedule.id,
-    afterState: schedule,
-  });
-
-  return schedule;
+  return closeCleaningSchedule(
+    actor,
+    scheduleId,
+    "MISSED",
+    "cleaning_schedule.missed",
+    null,
+  );
 }

@@ -9,6 +9,7 @@ const { mockPrisma } = vi.hoisted(() => {
       update: vi.fn(),
     },
     propertyCleanerAssignment: { count: vi.fn() },
+    cleaningSchedule: { count: vi.fn() },
     cleanerContact: {
       findUnique: vi.fn(),
       create: vi.fn(),
@@ -200,9 +201,39 @@ describe("setCleanerStatus — deactivate, never delete", () => {
     expect(recordAudit).not.toHaveBeenCalled();
   });
 
-  it("deactivates an unassigned cleaner and audits cleaner.deactivated", async () => {
+  it("refuses to deactivate a cleaner who is still the stored cleaner on open cleanings (2026-10-07)", async () => {
     mockPrisma.cleaner.findUnique.mockResolvedValueOnce(row());
     mockPrisma.propertyCleanerAssignment.count.mockResolvedValueOnce(0);
+    mockPrisma.cleaningSchedule.count.mockResolvedValueOnce(3);
+
+    await expect(
+      setCleanerStatus(actor, { id: ID, status: "INACTIVE" }),
+    ).rejects.toThrow(/still the cleaner on 3 open cleanings/);
+    // Open = SCHEDULED / IN_PROGRESS; completed, cancelled and missed jobs
+    // don't block deactivation.
+    expect(mockPrisma.cleaningSchedule.count).toHaveBeenCalledWith({
+      where: { cleanerId: ID, status: { in: ["SCHEDULED", "IN_PROGRESS"] } },
+    });
+    expect(mockPrisma.cleaner.update).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("names a single open cleaning in the singular", async () => {
+    mockPrisma.cleaner.findUnique.mockResolvedValueOnce(row());
+    mockPrisma.propertyCleanerAssignment.count.mockResolvedValueOnce(0);
+    mockPrisma.cleaningSchedule.count.mockResolvedValueOnce(1);
+
+    await expect(
+      setCleanerStatus(actor, { id: ID, status: "INACTIVE" }),
+    ).rejects.toThrow(
+      /still the cleaner on 1 open cleaning\. Reassign or clear it/,
+    );
+  });
+
+  it("deactivates a cleaner with no assignments and no open cleanings, and audits cleaner.deactivated", async () => {
+    mockPrisma.cleaner.findUnique.mockResolvedValueOnce(row());
+    mockPrisma.propertyCleanerAssignment.count.mockResolvedValueOnce(0);
+    mockPrisma.cleaningSchedule.count.mockResolvedValueOnce(0);
     mockPrisma.cleaner.update.mockResolvedValueOnce(
       row({ status: "INACTIVE" }),
     );
@@ -227,6 +258,7 @@ describe("setCleanerStatus — deactivate, never delete", () => {
     await setCleanerStatus(actor, { id: ID, status: "ACTIVE" });
 
     expect(mockPrisma.propertyCleanerAssignment.count).not.toHaveBeenCalled();
+    expect(mockPrisma.cleaningSchedule.count).not.toHaveBeenCalled();
     expect(vi.mocked(recordAudit).mock.calls[0]![0]).toMatchObject({
       action: "cleaner.reactivated",
     });

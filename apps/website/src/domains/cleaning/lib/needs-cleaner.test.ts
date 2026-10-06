@@ -30,6 +30,37 @@ describe("needsCleaner (Cleaner Phase 5.3)", () => {
       expect(needsCleaner(job("a", status, null))).toBe(false);
     },
   );
+
+  // 2026-10-07: a deactivated stored cleaner isn't going to do the job.
+  it("includes an open job whose stored cleaner is inactive", () => {
+    expect(
+      needsCleaner({
+        ...job("a", "SCHEDULED", "c-old"),
+        cleaner: { status: "INACTIVE" },
+      }),
+    ).toBe(true);
+  });
+
+  it("excludes an open job whose stored cleaner is active", () => {
+    expect(
+      needsCleaner({
+        ...job("a", "IN_PROGRESS", "c-alex"),
+        cleaner: { status: "ACTIVE" },
+      }),
+    ).toBe(false);
+  });
+
+  it.each(["COMPLETED", "CANCELLED", "MISSED"])(
+    "excludes a %s job even when its cleaner is inactive",
+    (status) => {
+      expect(
+        needsCleaner({
+          ...job("a", status, "c-old"),
+          cleaner: { status: "INACTIVE" },
+        }),
+      ).toBe(false);
+    },
+  );
 });
 
 describe("jobsNeedingCleaner", () => {
@@ -63,7 +94,7 @@ describe("attention text and link", () => {
 
   it("explains why and links to the filtered cleaning list", () => {
     expect(NEEDS_CLEANER_DESCRIPTION).toBe(
-      "These jobs don't have a cleaner assigned.",
+      "These jobs have no cleaner assigned, or their cleaner is inactive.",
     );
     expect(NEEDS_CLEANER_HREF).toBe("/cleaning?view=needs-cleaner");
   });
