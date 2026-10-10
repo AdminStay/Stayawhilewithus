@@ -1,13 +1,16 @@
 import "server-only";
 
 import { prisma } from "@stayw/database";
+import { HttpRequestError } from "@stayw/integrations/core";
+import { NotionClient } from "@stayw/integrations/notion";
 
 import { notionWebhookEventSchema } from "../schemas/notion-webhook-event.schema";
 
 import { enrichStoredNotionEvent } from "./notion-event-enrichment.service";
 import {
-  isNotionWebhookEventExcluded,
   classifyNotionWebhookEvent,
+  resolveNotionWebhookExclusion,
+  type NotionDataSourceParentLookup,
 } from "./notion-webhook-classify";
 import { verifyNotionWebhookSignature } from "./notion-webhook-signature";
 
@@ -18,14 +21,51 @@ export type ProcessNotionWebhookEventResult =
   | { status: "invalid_signature" }
   | { status: "invalid_payload"; error: string }
   | { status: "excluded" }
+  /** The exclusion check couldn't run (lookup failed) — nothing stored; Notion should redeliver. */
+  | { status: "retry_later" }
   | { status: "duplicate" }
   | { status: "processed"; eventId: string };
 
+// Data source → database never changes, so a successful lookup is cached
+// for the life of the server instance (definitive nulls are not cached).
+const dataSourceDatabaseCache = new Map<string, string>();
+
+/**
+ * Read-only `GET /data_sources/{id}` via the existing NotionClient. 403/404
+ * (the integration can't see it) → null, which the exclusion rule treats as
+ * excluded (fail closed). Any other failure, or no NOTION_API_KEY, throws →
+ * "retry_later" for events that need the lookup.
+ */
+const defaultDataSourceParentLookup: NotionDataSourceParentLookup = async (
+  dataSourceId,
+) => {
+  const cached = dataSourceDatabaseCache.get(dataSourceId);
+  if (cached) return cached;
+  const token = process.env.NOTION_API_KEY;
+  if (!token) throw new Error("NOTION_API_KEY is not configured");
+  try {
+    const databaseId = await new NotionClient({
+      token,
+    }).getDataSourceParentDatabaseId(dataSourceId);
+    if (databaseId) dataSourceDatabaseCache.set(dataSourceId, databaseId);
+    return databaseId;
+  } catch (err) {
+    if (
+      err instanceof HttpRequestError &&
+      (err.status === 403 || err.status === 404)
+    ) {
+      return null;
+    }
+    throw err;
+  }
+};
+
 /**
  * The full receive-a-real-Notion-event pipeline: verify signature → parse →
- * classify → apply the same staff/contact-directory exclusion "Search
- * Notion" uses → dedupe by Notion's own event id → store. Nothing here ever
- * calls out to Notion or writes anything back — strictly an inbound sink.
+ * apply the same staff/contact-directory exclusion "Search Notion" uses
+ * (resolveNotionWebhookExclusion — a database row's data source is resolved
+ * to its database with one read-only, cached GET) → classify → dedupe by
+ * Notion's own event id → store. Nothing is ever written back to Notion.
  *
  * **This function is never reachable in Production today.** No real Notion
  * webhook subscription has been created (that requires a public HTTPS URL
@@ -45,6 +85,7 @@ export type ProcessNotionWebhookEventResult =
 export async function processNotionWebhookEvent(
   rawBody: string,
   signatureHeader: string | null,
+  lookupDataSourceParent: NotionDataSourceParentLookup = defaultDataSourceParentLookup,
 ): Promise<ProcessNotionWebhookEventResult> {
   const verificationToken = process.env.NOTION_WEBHOOK_VERIFICATION_TOKEN;
   if (!verificationToken) return { status: "not_configured" };
@@ -69,8 +110,17 @@ export async function processNotionWebhookEvent(
 
   const event = result.data;
 
-  if (isNotionWebhookEventExcluded(event)) {
-    return { status: "excluded" };
+  const exclusion = await resolveNotionWebhookExclusion(
+    event,
+    lookupDataSourceParent,
+  );
+  if (exclusion === "excluded") return { status: "excluded" };
+  if (exclusion === "unresolved") {
+    // Fail closed: never store an event whose directory status is unknown.
+    console.warn(
+      "[notion-webhook] exclusion check unavailable; asking Notion to redeliver",
+    );
+    return { status: "retry_later" };
   }
 
   const classified = classifyNotionWebhookEvent(event);

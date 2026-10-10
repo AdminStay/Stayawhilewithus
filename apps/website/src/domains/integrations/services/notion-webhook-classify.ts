@@ -55,29 +55,6 @@ export function extractNotionEventParent(
   }
 }
 
-/**
- * `data.parent` follows Notion's standard parent-object shape used
- * throughout their API (`{ type: "database_id", database_id }` /
- * `{ type: "page_id", page_id }` / `{ type: "workspace", workspace: true }`)
- * — Notion's webhook-delivery docs confirm every page/database event's
- * `data` includes a `parent` field but do not show its literal JSON, so
- * this is inferred from their established object model, not guessed from
- * nothing. Deliberately defensive: any shape mismatch returns null rather
- * than throwing, since this only gates the search-exclusion check below,
- * never the base classification. **Re-verify against a real captured
- * payload before this ever backs a live subscription.**
- */
-function extractParentDatabaseId(data: unknown): string | null {
-  if (typeof data !== "object" || data === null) return null;
-  const parent = (data as Record<string, unknown>).parent;
-  if (typeof parent !== "object" || parent === null) return null;
-  const parentObj = parent as Record<string, unknown>;
-  if (parentObj.type !== "database_id") return null;
-  return typeof parentObj.database_id === "string"
-    ? parentObj.database_id
-    : null;
-}
-
 function extractChangedFieldNames(event: NotionWebhookEvent): string[] {
   const data = event.data;
   if (!data) return [];
@@ -105,26 +82,110 @@ function extractChangedFieldNames(event: NotionWebhookEvent): string[] {
 }
 
 /**
- * True when the event belongs to (or, for a `database.*` event, IS) one of
- * the staff/contact-directory databases already excluded from VA search
- * (see notion-search-exclusions.ts) — reused here so a change to internal
- * contact info never surfaces in "Recent Notion Activity" either. Only
- * checked by real Notion database id, matching the same rule the search
- * feature already follows.
+ * Staff/contact-directory exclusion for webhook events (2026-10-11 fix).
+ *
+ * The real webhook payload (developers.notion.com/reference/webhooks-events-
+ * delivery) identifies where an entity lives with `data.parent: { id, type }`,
+ * type "page" | "database" | "data_source" | "space" | "block". Under API
+ * versions from 2025-09-03 (the subscription uses 2026-03-11) a database
+ * ROW's parent is its DATA SOURCE (`type: "data_source"`), and database
+ * content/schema changes arrive as `data_source.*` events whose entity IS the
+ * data source. The excluded list holds DATABASE ids (the same ids "Search
+ * Notion" excludes), so a data source is resolved to its parent database with
+ * a read-only lookup before comparing. The older API-object shape
+ * (`{ type: "database_id", database_id }`) is still recognized.
+ *
+ * Fail-closed:
+ *   - "excluded"   → drop: belongs to an excluded database, OR its data
+ *                    source's database can't be determined (the lookup
+ *                    definitively returns null — e.g. the integration
+ *                    can't read it), since it can't be proven not to be a
+ *                    directory;
+ *   - "unresolved" → the lookup failed for another reason (network/5xx):
+ *                    store nothing and ask Notion to redeliver later;
+ *   - "allowed"    → not in a database, or in a non-excluded one. The
+ *                    default-sensitive visibility rules still apply after
+ *                    storage, unchanged.
+ * Only ids are compared — never titles or keywords.
  */
-export function isNotionWebhookEventExcluded(
+export type NotionWebhookExclusion = "excluded" | "allowed" | "unresolved";
+
+/**
+ * A data source's parent DATABASE id. Resolves null when Notion definitively
+ * won't say (no access / not found / no database parent); throws on any other
+ * failure.
+ */
+export type NotionDataSourceParentLookup = (
+  dataSourceId: string,
+) => Promise<string | null>;
+
+type NotionContainerRef =
+  { kind: "database"; id: string } | { kind: "data_source"; id: string };
+
+const normalizeId = (id: string) => id.replace(/-/g, "").toLowerCase();
+const EXCLUDED_DATABASE_KEYS = new Set(
+  [...EXCLUDED_DATABASE_IDS].map(normalizeId),
+);
+
+function parentContainerRef(data: unknown): NotionContainerRef | null {
+  if (typeof data !== "object" || data === null) return null;
+  const parent = (data as Record<string, unknown>).parent;
+  if (typeof parent !== "object" || parent === null) return null;
+  const p = parent as Record<string, unknown>;
+  // Webhook payload shape: { id, type }.
+  if (typeof p.id === "string" && p.id) {
+    if (p.type === "database") return { kind: "database", id: p.id };
+    if (p.type === "data_source") return { kind: "data_source", id: p.id };
+  }
+  // Older API-object shape, still accepted defensively.
+  if (p.type === "database_id" && typeof p.database_id === "string") {
+    return { kind: "database", id: p.database_id };
+  }
+  if (p.type === "data_source_id" && typeof p.data_source_id === "string") {
+    return { kind: "data_source", id: p.data_source_id };
+  }
+  return null;
+}
+
+/** The database or data source an event belongs to (or IS), if any. */
+function eventContainerRef(
   event: NotionWebhookEvent,
-): boolean {
-  if (event.entity.type === "database") {
-    return EXCLUDED_DATABASE_IDS.has(event.entity.id);
+): NotionContainerRef | null {
+  switch (event.entity.type) {
+    case "database":
+      return { kind: "database", id: event.entity.id };
+    case "data_source":
+      return { kind: "data_source", id: event.entity.id };
+    case "page":
+    case "block":
+      return parentContainerRef(event.data);
+    default:
+      // comment.* — not subscribed; sensitive-by-default display applies.
+      return null;
   }
-  if (event.entity.type === "page") {
-    const parentDatabaseId = extractParentDatabaseId(event.data);
-    return (
-      parentDatabaseId !== null && EXCLUDED_DATABASE_IDS.has(parentDatabaseId)
-    );
+}
+
+export async function resolveNotionWebhookExclusion(
+  event: NotionWebhookEvent,
+  lookupDataSourceParent: NotionDataSourceParentLookup,
+): Promise<NotionWebhookExclusion> {
+  const ref = eventContainerRef(event);
+  if (!ref) return "allowed";
+
+  let databaseId: string | null;
+  if (ref.kind === "database") {
+    databaseId = ref.id;
+  } else {
+    try {
+      databaseId = await lookupDataSourceParent(ref.id);
+    } catch {
+      return "unresolved";
+    }
+    if (!databaseId) return "excluded";
   }
-  return false;
+  return EXCLUDED_DATABASE_KEYS.has(normalizeId(databaseId))
+    ? "excluded"
+    : "allowed";
 }
 
 /**
