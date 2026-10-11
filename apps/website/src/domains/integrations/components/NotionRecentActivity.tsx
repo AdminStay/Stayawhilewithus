@@ -4,7 +4,10 @@ import { relativeTime } from "../services/notion-activity-view";
 import type { NotionActivityView } from "../services/notion-activity.service";
 import type { NotionActivityAction } from "../services/notion-event-enrichment";
 
-import { formatTimestamp } from "@/domains/smart-devices/lib/format-timestamp";
+import {
+  formatExactTimestamp,
+  formatTimestamp,
+} from "@/domains/smart-devices/lib/format-timestamp";
 
 const ACTION_TONE: Partial<Record<NotionActivityAction, Tone>> = {
   deleted: "error",
@@ -43,31 +46,43 @@ export function NotionRecentActivity({
       />
       <Card noPadding>
         <ul className="divide-y divide-border">
-          {items.map((item) => (
-            <li key={item.id} className="px-4 py-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge
-                  tone={(item.action && ACTION_TONE[item.action]) || "neutral"}
+          {items.map((item) => {
+            // Exact stored receive time with seconds, America/Chicago
+            // (StayWhile's operating timezone); omitted if missing/invalid.
+            const received = formatExactTimestamp(item.receivedAt);
+            return (
+              <li key={item.id} className="px-4 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge
+                    tone={
+                      (item.action && ACTION_TONE[item.action]) || "neutral"
+                    }
+                  >
+                    {item.actionLabel}
+                  </Badge>
+                  <span className="text-sm text-ink">
+                    <span className="font-medium">{item.who}</span> {item.verb}{" "}
+                    <span className="font-medium">{item.where}</span>
+                  </span>
+                  {item.restricted && <Badge tone="neutral">Restricted</Badge>}
+                </div>
+                {item.change && (
+                  <p className="mt-1 text-xs text-ink-muted">{item.change}</p>
+                )}
+                <p
+                  className="mt-1 text-xs text-ink-faint"
+                  title={formatTimestamp(item.occurredAt)}
                 >
-                  {item.actionLabel}
-                </Badge>
-                <span className="text-sm text-ink">
-                  <span className="font-medium">{item.who}</span> {item.verb}{" "}
-                  <span className="font-medium">{item.where}</span>
-                </span>
-                {item.restricted && <Badge tone="neutral">Restricted</Badge>}
-              </div>
-              {item.change && (
-                <p className="mt-1 text-xs text-ink-muted">{item.change}</p>
-              )}
-              <p
-                className="mt-1 text-xs text-ink-faint"
-                title={formatTimestamp(item.occurredAt)}
-              >
-                {relativeTime(item.occurredAt, now)}
-              </p>
-            </li>
-          ))}
+                  {relativeTime(item.occurredAt, now)}
+                </p>
+                {received && (
+                  <p className="mt-0.5 text-xs text-ink-faint">
+                    Received {received}
+                  </p>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </Card>
     </div>

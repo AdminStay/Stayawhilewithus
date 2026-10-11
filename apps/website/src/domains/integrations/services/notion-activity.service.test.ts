@@ -69,6 +69,30 @@ describe("listRecentNotionActivity (2026-09-30)", () => {
     expect(select).toHaveProperty("details", true);
   });
 
+  it("selects the stored received_at (2026-10-11) and still orders by occurredAt, newest first", async () => {
+    await listRecentNotionActivity(ACTOR);
+    const args = mockFindMany.mock.calls[0]![0];
+    expect(args.select).toHaveProperty("receivedAt", true);
+    expect(args.orderBy).toEqual({ occurredAt: "desc" });
+  });
+
+  it("passes received_at through to the view unchanged, for enriched and unenriched rows", async () => {
+    const receivedAt = new Date("2026-09-30T12:00:04.000Z");
+    mockFindMany.mockResolvedValueOnce([
+      row({ id: "enriched", receivedAt }),
+      row({ id: "plain", details: null, receivedAt }),
+    ]);
+    const [enriched, plain] = await listRecentNotionActivity(ACTOR);
+    expect(enriched!.receivedAt).toEqual(receivedAt);
+    expect(plain!.receivedAt).toEqual(receivedAt);
+  });
+
+  it("a row without received_at yields null (no fabricated time)", async () => {
+    mockFindMany.mockResolvedValueOnce([row()]);
+    const [item] = await listRecentNotionActivity(ACTOR);
+    expect(item!.receivedAt).toBeNull();
+  });
+
   it("builds who / did what / where / what changed", async () => {
     mockFindMany.mockResolvedValueOnce([row()]);
     const [item] = await listRecentNotionActivity(ACTOR);

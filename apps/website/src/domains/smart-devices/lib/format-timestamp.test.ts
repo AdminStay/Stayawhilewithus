@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { formatTimestamp } from "./format-timestamp";
+import { formatExactTimestamp, formatTimestamp } from "./format-timestamp";
 
 const ORIGINAL_TZ = process.env.TZ;
 
@@ -70,4 +70,50 @@ describe("formatTimestamp", () => {
       formatTimestamp(new Date("2026-09-02T05:29:00.000Z")),
     ).not.toThrow();
   });
+});
+
+describe("formatExactTimestamp (Recent Notion Activity, 2026-10-11)", () => {
+  it("formats the exact instant WITH SECONDS in America/Chicago, CDT in summer", () => {
+    // 2026-10-11T01:03:07Z -> 8:03:07 PM CDT on Oct 10 (UTC-5).
+    expect(formatExactTimestamp(new Date("2026-10-11T01:03:07.000Z"))).toBe(
+      "October 10, 2026 · 8:03:07 PM CDT",
+    );
+  });
+
+  it("uses CST in winter (DST derived per instant, never hard-coded)", () => {
+    // 2026-01-15T18:00:05Z -> 12:00:05 PM CST (UTC-6).
+    expect(formatExactTimestamp(new Date("2026-01-15T18:00:05.000Z"))).toBe(
+      "January 15, 2026 · 12:00:05 PM CST",
+    );
+  });
+
+  it("distinguishes events one second apart", () => {
+    const a = formatExactTimestamp(new Date("2026-10-11T01:03:07.000Z"));
+    const b = formatExactTimestamp(new Date("2026-10-11T01:03:08.000Z"));
+    expect(a).not.toBe(b);
+    expect(b).toBe("October 10, 2026 · 8:03:08 PM CDT");
+  });
+
+  it("is independent of the server/viewer timezone (fixed America/Chicago)", () => {
+    const instant = new Date("2026-10-11T01:03:07.000Z");
+    process.env.TZ = "Asia/Manila";
+    const manila = formatExactTimestamp(instant);
+    process.env.TZ = "UTC";
+    const utc = formatExactTimestamp(instant);
+    expect(manila).toBe("October 10, 2026 · 8:03:07 PM CDT");
+    expect(utc).toBe(manila);
+  });
+
+  it("accepts an ISO string (serialized date)", () => {
+    expect(formatExactTimestamp("2026-10-11T01:03:07.000Z")).toBe(
+      "October 10, 2026 · 8:03:07 PM CDT",
+    );
+  });
+
+  it.each([null, undefined, "not a date", "", Number.NaN])(
+    "returns null — never 'Invalid Date' or a throw — for %p",
+    (value) => {
+      expect(formatExactTimestamp(value as never)).toBeNull();
+    },
+  );
 });
