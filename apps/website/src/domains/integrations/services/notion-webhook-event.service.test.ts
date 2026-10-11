@@ -178,18 +178,102 @@ describe("processNotionWebhookEvent", () => {
     expect(JSON.stringify(call)).not.toContain("sensitive");
   });
 
-  it("excludes an event belonging to a known staff/contact-directory database and never stores it", async () => {
-    const body = eventBody({
-      data: {
-        parent: {
-          type: "database_id",
-          database_id: "d3d6058d-b989-82df-b0d8-014512d331ec",
+  // Staff/contact-directory exclusion against the REAL 2026-03-11 payload
+  // shape (2026-10-11 fix): a database row's parent is its data source.
+  describe("staff/contact-directory exclusion (real payload shape)", () => {
+    const PEOPLE_DB = "d3d6058d-b989-82df-b0d8-014512d331ec"; // People (excluded)
+    const PEOPLE_DS = "11111111-aaaa-4bbb-8ccc-000000000001";
+    const LIBRARY_DS = "11111111-aaaa-4bbb-8ccc-000000000003";
+    const lookup = vi.fn(async (id: string) =>
+      id === PEOPLE_DS
+        ? PEOPLE_DB
+        : id === LIBRARY_DS
+          ? "e54961ca-c27c-4bbd-b4b3-a766d9b0dd64"
+          : null,
+    );
+
+    it("a People row edit (parent = directory data source) is excluded and never stored", async () => {
+      const body = eventBody({
+        entity: { id: "staff-row", type: "page" },
+        data: {
+          parent: { id: PEOPLE_DS, type: "data_source" },
+          updated_properties: ["phone"],
         },
-      },
+      });
+      const result = await processNotionWebhookEvent(body, sign(body), lookup);
+      expect(result).toEqual({ status: "excluded" });
+      expect(mockFindUnique).not.toHaveBeenCalled();
+      expect(mockCreate).not.toHaveBeenCalled();
+      expect(mockEnrich).not.toHaveBeenCalled();
     });
-    const result = await processNotionWebhookEvent(body, sign(body));
-    expect(result).toEqual({ status: "excluded" });
-    expect(mockCreate).not.toHaveBeenCalled();
+
+    it("a data_source.schema_updated on the People data source is excluded", async () => {
+      const body = eventBody({
+        type: "data_source.schema_updated",
+        entity: { id: PEOPLE_DS, type: "data_source" },
+        data: { parent: { id: PEOPLE_DB, type: "database" } },
+      });
+      const result = await processNotionWebhookEvent(body, sign(body), lookup);
+      expect(result).toEqual({ status: "excluded" });
+      expect(mockCreate).not.toHaveBeenCalled();
+    });
+
+    it("an ordinary LIBRARY row edit is stored as before (stays visible, sensitive rules unchanged)", async () => {
+      const body = eventBody({
+        entity: { id: "sop-row", type: "page" },
+        data: {
+          parent: { id: LIBRARY_DS, type: "data_source" },
+          updated_properties: ["prop-1"],
+        },
+      });
+      const result = await processNotionWebhookEvent(body, sign(body), lookup);
+      expect(result).toEqual({ status: "processed", eventId: "row-1" });
+      expect(mockCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          entityId: "sop-row",
+          parentType: "data_source",
+          parentId: LIBRARY_DS,
+        }),
+      });
+    });
+
+    it("a lookup failure stores NOTHING and asks Notion to retry (fail closed)", async () => {
+      const failing = vi.fn(async () => {
+        throw new Error("ECONNRESET");
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const body = eventBody({
+        data: { parent: { id: PEOPLE_DS, type: "data_source" } },
+      });
+      const result = await processNotionWebhookEvent(body, sign(body), failing);
+      expect(result).toEqual({ status: "retry_later" });
+      expect(mockCreate).not.toHaveBeenCalled();
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(PEOPLE_DS);
+      warn.mockRestore();
+    });
+
+    it("an unknown data source Notion won't describe (lookup → null) is excluded, not stored", async () => {
+      const body = eventBody({
+        data: { parent: { id: "unknown-ds", type: "data_source" } },
+      });
+      const result = await processNotionWebhookEvent(body, sign(body), lookup);
+      expect(result).toEqual({ status: "excluded" });
+      expect(mockCreate).not.toHaveBeenCalled();
+    });
+
+    it("the exclusion check runs only after the signature is verified (no lookup for a bad signature)", async () => {
+      const body = eventBody({
+        data: { parent: { id: PEOPLE_DS, type: "data_source" } },
+      });
+      lookup.mockClear();
+      const result = await processNotionWebhookEvent(
+        body,
+        "sha256=wrong",
+        lookup,
+      );
+      expect(result).toEqual({ status: "invalid_signature" });
+      expect(lookup).not.toHaveBeenCalled();
+    });
   });
 
   it("treats a repeat delivery of the same Notion event id as a duplicate and never double-stores it", async () => {

@@ -52,6 +52,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ received: true });
     case "not_configured":
       return NextResponse.json({ error: "Not configured" }, { status: 503 });
+    case "retry_later":
+      // The staff-directory exclusion couldn't be checked; nothing was
+      // stored. A non-2xx makes Notion redeliver later.
+      return NextResponse.json(
+        { error: "Temporarily unavailable" },
+        { status: 503 },
+      );
     case "invalid_signature":
       return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
     case "invalid_payload":
