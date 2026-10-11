@@ -46,3 +46,34 @@ export function formatTimestamp(date: Date | null): string {
     .find((part) => part.type === "timeZoneName")?.value;
   return zoneAbbreviation ? `${formatted} ${zoneAbbreviation}` : formatted;
 }
+
+/**
+ * Exact date + time WITH SECONDS, e.g. "October 10, 2026 · 8:03:07 PM CDT"
+ * (2026-10-11, Recent Notion Activity). Same fixed America/Chicago zone,
+ * en-US locale and per-instant CDT/CST derivation as formatTimestamp(), so
+ * server and client render identical text. Returns null for a missing or
+ * unparseable value — callers then omit the line instead of showing
+ * "Invalid Date" or throwing.
+ */
+export function formatExactTimestamp(
+  value: Date | string | number | null | undefined,
+): string | null {
+  if (value === null || value === undefined) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  }).formatToParts(date);
+  const get = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  const zone = get("timeZoneName");
+  return `${get("month")} ${get("day")}, ${get("year")} · ${get("hour")}:${get("minute")}:${get("second")} ${get("dayPeriod")}${zone ? ` ${zone}` : ""}`;
+}
