@@ -40,6 +40,7 @@ export async function listRecentNotionActivity(
       eventType: true,
       changedFieldNames: true,
       occurredAt: true,
+      receivedAt: true,
       details: true,
     },
   });

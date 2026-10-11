@@ -39,6 +39,8 @@ export interface NotionActivityRow {
   eventType: string;
   changedFieldNames: unknown;
   occurredAt: Date;
+  /** When StayWhile received the event (notion_page_events.received_at). */
+  receivedAt?: Date | null;
   details: unknown;
 }
 
@@ -51,6 +53,8 @@ export interface NotionActivityView {
   where: string;
   change: string | null;
   occurredAt: Date;
+  /** Stored receive time, shown as the exact timestamp (2026-10-11); null if missing. */
+  receivedAt: Date | null;
   restricted: boolean;
 }
 
@@ -91,6 +95,7 @@ export function toNotionActivityView(
       where: noun,
       change: count > 0 ? `${count} item${count > 1 ? "s" : ""} changed` : null,
       occurredAt: row.occurredAt,
+      receivedAt: row.receivedAt ?? null,
       restricted: false,
     };
   }
@@ -108,6 +113,7 @@ export function toNotionActivityView(
       : describeNotionLocation(details),
     change: restricted ? null : describeNotionChange(details),
     occurredAt: row.occurredAt,
+    receivedAt: row.receivedAt ?? null,
     restricted,
   };
 }
