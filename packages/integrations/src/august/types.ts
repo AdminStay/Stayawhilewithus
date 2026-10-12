@@ -182,6 +182,17 @@ export interface AugustLockDetail {
   health?: AugustLockHealthTelemetry;
 }
 
+/**
+ * What the async remote-operate PUT told us (2026-10-13, command
+ * diagnostics): only the 2xx HTTP status August acknowledged with. Never
+ * the body (it's empty, and isn't trusted anyway) or any header. A 2xx
+ * still means only "accepted" — never proof of the resulting lock state.
+ */
+export interface AugustOperateAck {
+  /** e.g. 200 or 202; `null` if the status couldn't be observed. */
+  httpStatus: number | null;
+}
+
 /** See AugustLockDetail.health. Every field is `null` when August didn't report it — never guessed. */
 export interface AugustLockHealthTelemetry {
   /** Raw `LockStatus.status`, e.g. "locked" / "unlocked" / "unknown". */

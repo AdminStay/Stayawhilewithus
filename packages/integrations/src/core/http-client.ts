@@ -140,6 +140,15 @@ export interface HttpRequestCallOptions {
    * AugustClient.operate() for the one caller that sets it.
    */
   ignoreSuccessBody?: boolean;
+  /**
+   * Per-call opt-in (2026-10-13, August command diagnostics): called once
+   * with the HTTP status of the 2xx response that this request resolves
+   * with, before its body is read or discarded. Diagnostic only — it can't
+   * change the outcome: a callback that throws is ignored, and callers that
+   * omit it keep today's behavior byte-for-byte. Never given headers or a
+   * body. See AugustClient.operate() for the one caller that sets it.
+   */
+  onSuccessStatus?: (status: number) => void;
 }
 
 /**
@@ -181,6 +190,14 @@ export class HttpClient {
           }
           lastError = error;
           continue;
+        }
+
+        if (callOptions.onSuccessStatus) {
+          try {
+            callOptions.onSuccessStatus(response.status);
+          } catch {
+            // Diagnostic only — never allowed to change the result.
+          }
         }
 
         if (callOptions.ignoreSuccessBody) {
