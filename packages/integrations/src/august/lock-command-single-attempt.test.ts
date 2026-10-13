@@ -153,9 +153,11 @@ describe("AugustClient physical commands — real async empty-body acknowledgeme
         .mockResolvedValue(new Response(null, { status: 202 }));
       global.fetch = fetchMock;
 
-      await expect(
-        call(new AugustClient(credentials)),
-      ).resolves.toBeUndefined();
+      // Only the acknowledging status comes back (diagnostics) — never a
+      // parsed body.
+      await expect(call(new AugustClient(credentials))).resolves.toEqual({
+        httpStatus: 202,
+      });
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const [url, init] = fetchMock.mock.calls[0]!;
@@ -168,9 +170,9 @@ describe("AugustClient physical commands — real async empty-body acknowledgeme
 
   it("an empty 200 is handled the same way", async () => {
     global.fetch = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
-    await expect(
-      new AugustClient(credentials).lock("lock-1"),
-    ).resolves.toBeUndefined();
+    await expect(new AugustClient(credentials).lock("lock-1")).resolves.toEqual(
+      { httpStatus: 200 },
+    );
   });
 
   it("a definite provider rejection (403 with a body) still throws HttpRequestError after ONE fetch", async () => {
@@ -190,16 +192,14 @@ describe("AugustClient physical commands — real async empty-body acknowledgeme
   });
 
   it("reads are unaffected: getLockDetail() still parses its JSON body", async () => {
-    global.fetch = vi
-      .fn()
-      .mockResolvedValue(
-        Response.json({
-          LockID: "lock-1",
-          LockName: "Front Door",
-          HouseID: "h1",
-          battery: 0.9,
-        }),
-      );
+    global.fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        LockID: "lock-1",
+        LockName: "Front Door",
+        HouseID: "h1",
+        battery: 0.9,
+      }),
+    );
     const detail = await new AugustClient(credentials).getLockDetail("lock-1");
     expect(detail).toMatchObject({
       id: "lock-1",

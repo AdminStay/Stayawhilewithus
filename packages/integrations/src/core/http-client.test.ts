@@ -327,3 +327,87 @@ describe("HttpClient — ignoreSuccessBody per-call opt-in", () => {
     expect(err).toMatchObject({ status: 403 });
   });
 });
+
+describe("HttpClient — onSuccessStatus per-call opt-in (2026-10-13, command diagnostics)", () => {
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    originalFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("reports the 2xx status once, and the result is unchanged (empty 202 still resolves undefined, one fetch)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 202 }));
+    global.fetch = fetchMock;
+    const onSuccessStatus = vi.fn();
+    const client = new HttpClient({ baseUrl: "https://example.test" });
+
+    await expect(
+      client.request(
+        "/x",
+        { method: "PUT" },
+        { maxRetries: 0, ignoreSuccessBody: true, onSuccessStatus },
+      ),
+    ).resolves.toBeUndefined();
+    expect(onSuccessStatus).toHaveBeenCalledTimes(1);
+    expect(onSuccessStatus).toHaveBeenCalledWith(202);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("is given only the status — never headers or the body", async () => {
+    global.fetch = vi.fn().mockResolvedValue(Response.json({ a: 1 }));
+    const onSuccessStatus = vi.fn();
+    const client = new HttpClient({ baseUrl: "https://example.test" });
+
+    await expect(
+      client.request("/x", {}, { onSuccessStatus }),
+    ).resolves.toEqual({ a: 1 });
+    expect(onSuccessStatus.mock.calls).toEqual([[200]]);
+  });
+
+  it("is never called for an error response, which still throws exactly as before", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(Response.json({ code: "X" }, { status: 403 }));
+    const onSuccessStatus = vi.fn();
+    const client = new HttpClient({ baseUrl: "https://example.test" });
+
+    const err = await client
+      .request(
+        "/x",
+        {},
+        { maxRetries: 0, ignoreSuccessBody: true, onSuccessStatus },
+      )
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpRequestError);
+    expect(onSuccessStatus).not.toHaveBeenCalled();
+  });
+
+  it("a callback that throws can't change the result or cause a retry", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(null, { status: 202 }));
+    global.fetch = fetchMock;
+    const client = new HttpClient({ baseUrl: "https://example.test" });
+
+    await expect(
+      client.request(
+        "/x",
+        { method: "PUT" },
+        {
+          maxRetries: 0,
+          ignoreSuccessBody: true,
+          onSuccessStatus: () => {
+            throw new Error("diagnostic bug");
+          },
+        },
+      ),
+    ).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

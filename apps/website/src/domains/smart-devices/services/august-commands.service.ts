@@ -7,9 +7,21 @@ import {
   isAugustBrand,
   type AugustLockDetail,
   type AugustLockOperation,
+  type AugustOperateAck,
 } from "@stayw/integrations/august";
 import { HttpRequestError } from "@stayw/integrations/core";
 
+import {
+  AUGUST_COMMAND_DIAGNOSTICS_VERSION,
+  buildAckDiagnostics,
+  buildReadErrorPoll,
+  buildReadOkPoll,
+  buildSkippedPoll,
+  safeDiagnosticTimestamp,
+  safeDiagnosticToken,
+  type AugustCommandDiagnostics,
+  type AugustConfirmationPollDiagnostics,
+} from "../lib/august-command-diagnostics";
 import { OPERATIONAL_HOLD_LABELS } from "../lib/lock-health";
 
 import { acquireAugustCommandSlotsLock } from "./august-command-locks";
@@ -145,6 +157,19 @@ function expectedLockStateFor(
 }
 
 /**
+ * Diagnostics must never change an outcome (2026-10-13): a bug in a
+ * diagnostics builder yields no diagnostics rather than an exception in the
+ * command path, where it would be misread as a read or command failure.
+ */
+function tryDiagnostic<T>(build: () => T): T | undefined {
+  try {
+    return build();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Polls getLockDetail() up to CONFIRMATION_POLL_ATTEMPTS times, pausing
  * CONFIRMATION_POLL_DELAY_MS between attempts, until August reports a
  * real, valid lock state that MATCHES the requested operation (2026-09-25
@@ -162,33 +187,79 @@ function expectedLockStateFor(
  * (never throws) if every attempt is exhausted without ever reporting the
  * expected state — the caller (sendAugustLockCommand()) treats that as
  * AMBIGUOUS, never a guessed success.
+ *
+ * Also returns a sanitized trace of every attempt (2026-10-13, command
+ * diagnostics — see lib/august-command-diagnostics.ts), recorded on the
+ * audit row only. The trace is built alongside the unchanged loop: same
+ * attempts, same pauses, same budget check, same match rule, and a read
+ * error is still swallowed as "not yet confirmed". At most
+ * CONFIRMATION_POLL_ATTEMPTS entries, since a budget skip ends the loop.
  */
 async function pollForConfirmedLockState(
   client: AugustClient,
   externalDeviceId: string,
   operation: AugustLockOperation,
   deadline: number,
-): Promise<AugustLockDetail | null> {
+  ackReceivedAtMs: number,
+): Promise<{
+  confirmed: AugustLockDetail | null;
+  polls: AugustConfirmationPollDiagnostics[];
+  deadlineReached: boolean;
+}> {
   const expected = expectedLockStateFor(operation);
+  const polls: AugustConfirmationPollDiagnostics[] = [];
   for (let attempt = 0; attempt < CONFIRMATION_POLL_ATTEMPTS; attempt++) {
     const pause = attempt > 0 ? CONFIRMATION_POLL_DELAY_MS : 0;
     // Only start a poll (and its pause) if it can finish inside the time
     // budget — see COMMAND_TIME_BUDGET_MS.
-    if (Date.now() + pause + SINGLE_READ_WORST_CASE_MS > deadline) break;
+    if (Date.now() + pause + SINGLE_READ_WORST_CASE_MS > deadline) {
+      const skipped = tryDiagnostic(() =>
+        buildSkippedPoll({
+          attempt: attempt + 1,
+          msSinceAck: Date.now() - ackReceivedAtMs,
+        }),
+      );
+      if (skipped) polls.push(skipped);
+      return { confirmed: null, polls, deadlineReached: true };
+    }
     if (pause > 0) await sleep(pause);
+    const readStartedAt = Date.now();
     try {
       // Single attempt: this loop is the retry mechanism, and one timeout
       // per read is what makes the budget check above hold.
       const detail = await client.getLockDetail(externalDeviceId, {
         maxRetries: 0,
       });
-      if (detail.lockState?.toLowerCase() === expected) return detail;
-    } catch {
+      const matchedExpected = detail.lockState?.toLowerCase() === expected;
+      const entry = tryDiagnostic(() =>
+        buildReadOkPoll({
+          attempt: attempt + 1,
+          msSinceAck: readStartedAt - ackReceivedAtMs,
+          durationMs: Date.now() - readStartedAt,
+          detail,
+          matchedExpected,
+          ackReceivedAtMs,
+        }),
+      );
+      if (entry) polls.push(entry);
+      if (matchedExpected) {
+        return { confirmed: detail, polls, deadlineReached: false };
+      }
+    } catch (err) {
       // A read failure is treated the same as "no confirmation yet" — try
       // again on the next poll rather than aborting the whole window.
+      const entry = tryDiagnostic(() =>
+        buildReadErrorPoll({
+          attempt: attempt + 1,
+          msSinceAck: readStartedAt - ackReceivedAtMs,
+          durationMs: Date.now() - readStartedAt,
+          error: err,
+        }),
+      );
+      if (entry) polls.push(entry);
     }
   }
-  return null;
+  return { confirmed: null, polls, deadlineReached: false };
 }
 
 /**
@@ -674,6 +745,26 @@ export async function sendAugustLockCommand(
   // — see this function's own doc comment item 6/7 below).
   let commandAttempted = false;
   const startedAt = Date.now();
+  // Sanitized command diagnostics (2026-10-13, see
+  // lib/august-command-diagnostics.ts). Set once the real command has been
+  // attempted and attached to that command's SUCCEEDED/AMBIGUOUS/FAILED row
+  // only; never read back to decide anything.
+  let diagnostics: AugustCommandDiagnostics | undefined;
+  let preCommandLockState: string | null = null;
+  let preCommandLockStatusAt: string | null = null;
+  let putStartedAt: number | null = null;
+  const diagnosticsFor = (
+    ack: AugustCommandDiagnostics["ack"],
+  ): AugustCommandDiagnostics => ({
+    version: AUGUST_COMMAND_DIAGNOSTICS_VERSION,
+    preCommandMs: Math.max(0, (putStartedAt ?? startedAt) - startedAt),
+    preCommandLockState,
+    preCommandLockStatusAt,
+    ack,
+    polls: [],
+    budgetMs: COMMAND_TIME_BUDGET_MS,
+    deadlineReached: false,
+  });
 
   // Pre-command time check (see COMMAND_TIME_BUDGET_MS): if August's reads
   // were too slow, refuse before any physical command is sent.
@@ -728,6 +819,10 @@ export async function sendAugustLockCommand(
     // proceed normally.
     const preCommandState = freshDetail.lockState?.toLowerCase() ?? null;
     const targetState = expectedLockStateFor(input.operation);
+    preCommandLockState = safeDiagnosticToken(preCommandState);
+    preCommandLockStatusAt = safeDiagnosticTimestamp(
+      freshDetail.health?.lockStatusAt,
+    );
     if (preCommandState === targetState) {
       // Anything short of a real, on-record SUCCEEDED means this exact
       // device has never had its remote-command operability positively
@@ -850,13 +945,26 @@ export async function sendAugustLockCommand(
     // already passed — from here onward, any failure means we genuinely
     // don't know for certain the physical lock was untouched.
     commandAttempted = true;
+    putStartedAt = Date.now();
+    let ack: AugustOperateAck | undefined;
     if (input.operation === "LOCK") {
-      await client.lock(externalDeviceId);
+      ack = await client.lock(externalDeviceId);
     } else if (input.operation === "UNLOCK") {
-      await client.unlock(externalDeviceId);
+      ack = await client.unlock(externalDeviceId);
     } else {
-      await client.unlatch(externalDeviceId);
+      ack = await client.unlatch(externalDeviceId);
     }
+    const ackReceivedAtMs = Date.now();
+    const putElapsedMs = ackReceivedAtMs - putStartedAt;
+    diagnostics = tryDiagnostic(() =>
+      diagnosticsFor(
+        buildAckDiagnostics({
+          httpStatus: ack?.httpStatus ?? null,
+          elapsedMs: putElapsedMs,
+          receivedAtMs: ackReceivedAtMs,
+        }),
+      ),
+    );
 
     // Confirmation (2026-09-25, Phase 2 — async mode + bounded polling):
     // the PUT above only acknowledged receipt, it does not itself prove
@@ -867,12 +975,21 @@ export async function sendAugustLockCommand(
     // the OLD state (e.g. still "locked" shortly after an UNLOCK) must
     // never be accepted as confirmation; only a matching state counts
     // toward SUCCEEDED/verified.
-    const confirmed = await pollForConfirmedLockState(
+    const poll = await pollForConfirmedLockState(
       client,
       externalDeviceId,
       input.operation,
       startedAt + COMMAND_TIME_BUDGET_MS,
+      ackReceivedAtMs,
     );
+    if (diagnostics) {
+      diagnostics = {
+        ...diagnostics,
+        polls: poll.polls,
+        deadlineReached: poll.deadlineReached,
+      };
+    }
+    const confirmed = poll.confirmed;
     if (!confirmed) {
       // August acknowledged the request (no HttpRequestError was thrown
       // above — that path already returns FAILED), but no definitive lock
@@ -889,6 +1006,7 @@ export async function sendAugustLockCommand(
         result: "AMBIGUOUS",
         errorDetail:
           "Command was sent and acknowledged by August, but no definitive lock state was confirmed within the polling window.",
+        diagnostics,
       });
       return { status: "ambiguous", reason: AMBIGUOUS_OUTCOME_BLOCKED_REASON };
     }
@@ -939,6 +1057,7 @@ export async function sendAugustLockCommand(
       previousMetadata,
       result: "SUCCEEDED",
       confirmedLockState: confirmed.lockState,
+      diagnostics,
     });
 
     return { status: "success", lockState: confirmed.lockState };
@@ -967,6 +1086,20 @@ export async function sendAugustLockCommand(
     // computeFirstTestEligibility) without claiming to be one.
     const isDefinitive = !commandAttempted || err instanceof HttpRequestError;
     const errorDetail = err instanceof Error ? err.message : String(err);
+    // Diagnostics only for a command that was actually attempted: if the
+    // PUT itself threw, no acknowledgement was recorded yet, so describe
+    // the failed PUT; a later failure keeps what was already recorded.
+    const catchDiagnostics = !commandAttempted
+      ? undefined
+      : (diagnostics ??
+        tryDiagnostic(() =>
+          diagnosticsFor(
+            buildAckDiagnostics({
+              error: err,
+              elapsedMs: Date.now() - (putStartedAt ?? Date.now()),
+            }),
+          ),
+        ));
 
     if (isDefinitive) {
       const safeMessage = translateAugustCommandError(err);
@@ -978,6 +1111,7 @@ export async function sendAugustLockCommand(
         previousMetadata,
         result: "FAILED",
         errorDetail,
+        diagnostics: catchDiagnostics,
       });
       return { status: "failure", reason: safeMessage };
     }
@@ -990,6 +1124,7 @@ export async function sendAugustLockCommand(
       previousMetadata,
       result: "AMBIGUOUS",
       errorDetail,
+      diagnostics: catchDiagnostics,
     });
     return { status: "ambiguous", reason: AMBIGUOUS_OUTCOME_BLOCKED_REASON };
   } finally {
@@ -1020,6 +1155,12 @@ async function recordAuditSafely(args: {
   errorDetail?: string;
   /** Operator-readable explanation for a non-error outcome (NO_ACTION_ALREADY_IN_STATE). */
   note?: string;
+  /**
+   * Sanitized command diagnostics (lib/august-command-diagnostics.ts) —
+   * only on rows for a command that was actually attempted. Stored under
+   * `metadata.diagnostics`, alongside (never replacing) errorDetail/note.
+   */
+  diagnostics?: AugustCommandDiagnostics;
 }): Promise<void> {
   await recordAudit({
     actorUserId: args.actor.userId,
@@ -1043,11 +1184,12 @@ async function recordAuditSafely(args: {
       }),
     } as Prisma.InputJsonValue,
     metadata:
-      args.errorDetail || args.note
+      args.errorDetail || args.note || args.diagnostics
         ? ({
             ...(args.errorDetail && { errorDetail: args.errorDetail }),
             ...(args.note && { note: args.note }),
-          } as Prisma.InputJsonValue)
+            ...(args.diagnostics && { diagnostics: args.diagnostics }),
+          } as unknown as Prisma.InputJsonValue)
         : undefined,
   });
 }

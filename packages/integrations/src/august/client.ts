@@ -19,6 +19,7 @@ import {
   type AugustLock,
   type AugustLockCapabilities,
   type AugustLockDetail,
+  type AugustOperateAck,
 } from "./types";
 
 export type {
@@ -29,6 +30,7 @@ export type {
   AugustLockDetail,
   AugustLockHealthTelemetry,
   AugustLockOperation,
+  AugustOperateAck,
 } from "./types";
 export { isAugustBrand } from "./types";
 
@@ -371,26 +373,38 @@ export class AugustClient
    * never ran its confirmation polling. The body carries nothing this client
    * trusts anyway: a 2xx here means only "accepted", and success is decided
    * solely by the follow-up reads. Shared by lock(), unlock() and unlatch().
+   *
+   * Returns the acknowledging 2xx status (2026-10-13, command diagnostics)
+   * — recorded for diagnosis only, never used to decide an outcome. The
+   * request itself (one PUT, no retry, body discarded) is unchanged.
    */
   private async operate(
     lockId: string,
     segment: "lock" | "unlock" | "unlatch",
-  ): Promise<void> {
+  ): Promise<AugustOperateAck> {
+    let httpStatus: number | null = null;
     await this.http.request<unknown>(
       `/remoteoperate/${encodeURIComponent(lockId)}/${segment}?type=async`,
       { method: "PUT" },
-      { maxRetries: 0, ignoreSuccessBody: true },
+      {
+        maxRetries: 0,
+        ignoreSuccessBody: true,
+        onSuccessStatus: (status) => {
+          httpStatus = status;
+        },
+      },
     );
+    return { httpStatus };
   }
 
   /** `PUT /remoteoperate/{lockId}/lock` — see operate()'s doc comment. */
-  async lock(lockId: string): Promise<void> {
-    await this.operate(lockId, "lock");
+  async lock(lockId: string): Promise<AugustOperateAck> {
+    return this.operate(lockId, "lock");
   }
 
   /** `PUT /remoteoperate/{lockId}/unlock` — see operate()'s doc comment. */
-  async unlock(lockId: string): Promise<void> {
-    await this.operate(lockId, "unlock");
+  async unlock(lockId: string): Promise<AugustOperateAck> {
+    return this.operate(lockId, "unlock");
   }
 
   /**
@@ -400,8 +414,8 @@ export class AugustClient
    * itself performs no capability check, matching every other method on
    * this client (capability/authorization gating lives one layer up).
    */
-  async unlatch(lockId: string): Promise<void> {
-    await this.operate(lockId, "unlatch");
+  async unlatch(lockId: string): Promise<AugustOperateAck> {
+    return this.operate(lockId, "unlatch");
   }
 
   /**
