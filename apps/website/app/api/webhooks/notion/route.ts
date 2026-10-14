@@ -5,12 +5,11 @@ import { captureNotionWebhookVerificationToken } from "@/domains/integrations/se
 import { parseNotionWebhookVerificationRequest } from "@/domains/integrations/services/notion-webhook-verification.service";
 
 /**
- * ⚠️ NOT REGISTERED WITH NOTION. This endpoint exists and is fully tested
- * (see notion-webhook-event.service.test.ts) but no real Notion webhook
- * subscription has ever been created against it — that requires a public
- * HTTPS URL and completing Notion's one-time verification handshake, a
- * genuine external-system action explicitly held for separate approval.
- * See HANDOFF.md's Notion section for the current status.
+ * LIVE in Production since 2026-10-11: StayWhile's Notion webhook
+ * subscription (API 2026-03-11) delivers here, and
+ * `NOTION_WEBHOOK_VERIFICATION_TOKEN` is set, so signed events are verified
+ * and stored for Recent Notion Activity. Tested in
+ * notion-webhook-event.service.test.ts.
  *
  * Handles two distinct request shapes Notion can send here:
  * 1. The one-time verification handshake (`{ verification_token }`,

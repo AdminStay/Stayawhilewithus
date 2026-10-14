@@ -23,14 +23,16 @@ const view = (
   occurredAt: new Date("2026-09-30T11:57:00.000Z"),
   receivedAt: null,
   restricted: false,
+  notionUrl: null,
+  earlierValueUnknown: false,
   ...overrides,
 });
 
 describe("NotionRecentActivity (2026-09-30)", () => {
-  it("shows the honest empty state before monitoring is live", () => {
+  it("shows an honest empty state when nothing has been recorded", () => {
     render(<NotionRecentActivity items={[]} now={NOW} />);
     expect(
-      screen.getByText(/monitoring isn.t active in Production yet/),
+      screen.getByText("No Notion changes have been recorded yet."),
     ).toBeTruthy();
   });
 
@@ -196,5 +198,77 @@ describe("NotionRecentActivity — exact received timestamp (2026-10-11)", () =>
     expect(item.textContent).toContain("a restricted Notion page");
     expect(item.textContent).not.toContain("Router location");
     expect(within(item).getByText(/^Received September 30, 2026/)).toBeTruthy();
+  });
+});
+
+describe("NotionRecentActivity — Phase 0 (2026-10-15)", () => {
+  const URL = "https://notion.so/3e26058db989803da1d7f06f8adc27a6";
+
+  it("renders Open in Notion as a new-tab link with noopener noreferrer", () => {
+    render(
+      <NotionRecentActivity items={[view({ notionUrl: URL })]} now={NOW} />,
+    );
+    const link = screen.getByRole("link", { name: "Open in Notion" });
+    expect(link.getAttribute("href")).toBe(URL);
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer");
+  });
+
+  it("renders no link when the item has none", () => {
+    render(<NotionRecentActivity items={[view()]} now={NOW} />);
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("never renders a non-http(s) URL as a link", () => {
+    render(
+      <NotionRecentActivity
+        items={[view({ notionUrl: "javascript:alert(1)" })]}
+        now={NOW}
+      />,
+    );
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("a restricted item shows the badge and no link", () => {
+    render(
+      <NotionRecentActivity
+        now={NOW}
+        items={[
+          view({
+            where: "a restricted Notion page",
+            change: null,
+            restricted: true,
+          }),
+        ]}
+      />,
+    );
+    const item = screen.getByRole("listitem");
+    expect(within(item).getByText("Restricted")).toBeTruthy();
+    expect(within(item).queryByRole("link")).toBeNull();
+  });
+
+  it("says the earlier value is unknown only when flagged", () => {
+    render(
+      <NotionRecentActivity
+        now={NOW}
+        items={[
+          view({ id: "edit", earlierValueUnknown: true }),
+          view({ id: "create", action: "created", earlierValueUnknown: false }),
+        ]}
+      />,
+    );
+    expect(screen.getAllByText("Earlier value unknown")).toHaveLength(1);
+  });
+
+  it("renders the Unknown editor label it is given", () => {
+    render(
+      <NotionRecentActivity
+        items={[view({ who: "Unknown editor" })]}
+        now={NOW}
+      />,
+    );
+    expect(screen.getByRole("listitem").textContent).toContain(
+      "Unknown editor updated",
+    );
   });
 });

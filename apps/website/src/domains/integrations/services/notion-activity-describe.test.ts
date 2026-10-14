@@ -29,12 +29,21 @@ describe("describeNotionActors — never invents a name", () => {
       "Michelle",
     );
     expect(describeNotionActors([{ type: "person", name: null }])).toBe(
-      "A Notion user",
+      "Unknown editor",
     );
     expect(describeNotionActors([{ type: "bot", name: null }])).toBe(
       "An integration",
     );
-    expect(describeNotionActors([])).toBe("Someone");
+    expect(describeNotionActors([])).toBe("Unknown editor");
+    expect(describeNotionActors([{ type: "agent", name: null }])).toBe(
+      "A Notion agent",
+    );
+    expect(
+      describeNotionActors([
+        { type: "person", name: null },
+        { type: "person", name: null },
+      ]),
+    ).toBe("Unknown editor and 1 other");
     expect(
       describeNotionActors([
         { type: "person", name: "Kenny" },

@@ -18,11 +18,13 @@ export type { NotionActivityView };
  * viewer (see notion-activity-view.ts): who (only names Notion supplied),
  * what action, where (breadcrumb + title), which fields changed (names,
  * never values), when. Sensitive events are redacted for viewers without
- * `notion:manage`. Nothing here returns Notion ids — the entity id is not
- * even selected.
+ * `notion:manage`. The entity id is selected (Phase 0, 2026-10-15) only so
+ * the view can build an "Open in Notion" link for rows this viewer may see;
+ * it is never returned as a field of its own.
  *
- * Reads only stored events; returns an empty list until the webhook
- * subscription is registered, rather than fabricating activity.
+ * Reads only stored events (the Notion webhook subscription has been live
+ * in Production since 2026-10-11); an empty list means nothing has been
+ * recorded, never fabricated activity.
  */
 export async function listRecentNotionActivity(
   actor: AuthContext,
@@ -36,6 +38,7 @@ export async function listRecentNotionActivity(
     take: limit,
     select: {
       id: true,
+      entityId: true,
       entityType: true,
       eventType: true,
       changedFieldNames: true,

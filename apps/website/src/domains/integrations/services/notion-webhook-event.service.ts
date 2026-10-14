@@ -67,13 +67,9 @@ const defaultDataSourceParentLookup: NotionDataSourceParentLookup = async (
  * to its database with one read-only, cached GET) → classify → dedupe by
  * Notion's own event id → store. Nothing is ever written back to Notion.
  *
- * **This function is never reachable in Production today.** No real Notion
- * webhook subscription has been created (that requires a public HTTPS URL
- * and completing Notion's one-time verification handshake — a genuine
- * external-system action requiring separate approval, see HANDOFF.md's
- * Notion section). It exists, and is fully tested, so that step is a
- * config/registration action away rather than a coding project, once
- * approved.
+ * Live in Production since 2026-10-11, when StayWhile's Notion webhook
+ * subscription was registered and verified; every real delivery to
+ * `/api/webhooks/notion` comes through here.
  *
  * Fails closed on missing configuration: `NOTION_WEBHOOK_VERIFICATION_TOKEN`
  * unset means signature verification is impossible, so nothing is ever
