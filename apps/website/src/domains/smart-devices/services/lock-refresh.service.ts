@@ -9,6 +9,7 @@ import {
 } from "@stayw/integrations/august";
 import { HttpRequestError } from "@stayw/integrations/core";
 
+import { classifyAugustRequestError } from "../lib/august-command-diagnostics";
 import { buildLockHealthUpdate } from "../lib/lock-health";
 
 import { AUGUST_DETAIL_CONCURRENCY, chunk } from "./provider-devices.service";
@@ -199,15 +200,67 @@ export const LOCK_REFRESH_ON_VIEW_MIN_INTERVAL_MS = 10 * 60 * 1000;
 export const AUGUST_RATE_LIMIT_COOLDOWN_MS = 30 * 60 * 1000;
 export const AUGUST_RATE_LIMITED_MARKER = "AUGUST_RATE_LIMITED";
 
+/**
+ * Prefix of the errorMessage on a run that had eligible locks but got no
+ * reading for any of them (2026-10-14). Such a run used to close SUCCEEDED
+ * with 0 records — and bump lastSyncedAt — so a fleet-wide refusal (e.g. an
+ * expired August token answering every read with 4xx) looked healthy from
+ * 2026-10-12 22:00 UTC on. Deliberately different from
+ * AUGUST_RATE_LIMITED_MARKER: it starts no cooldown.
+ */
+export const AUGUST_NO_READINGS_MARKER = "AUGUST_NO_READINGS";
+
+/**
+ * Sanitized count of failed lock reads per category (2026-10-14), e.g.
+ * `{ http_401: 43 }`. Keys come only from readFailureCategory() — never an
+ * error message, URL, lock id or provider text.
+ */
+export type AugustReadFailureCounts = Record<string, number>;
+
 interface AugustRefreshRunResult extends AugustRefreshResult {
   /** True when August answered 429 and the remaining batches were not requested. */
   rateLimited: boolean;
   /** Eligible locks never requested because the run stopped after a 429. */
   skippedAfterRateLimit: number;
+  /** Enabled, mapped locks this run set out to refresh. */
+  eligible: number;
+  readFailures: AugustReadFailureCounts;
 }
 
 function isRateLimitError(reason: unknown): boolean {
   return reason instanceof HttpRequestError && reason.status === 429;
+}
+
+/**
+ * One failed read's category (2026-10-14): `http_<status>` for an HTTP
+ * error response, otherwise `timeout` / `network` / `other` (the same coarse
+ * classes the command diagnostics use). Only the numeric status is kept —
+ * HttpRequestError's message contains the request path (with the lock id)
+ * and is never read here.
+ */
+function readFailureCategory(reason: unknown): string {
+  if (reason instanceof HttpRequestError) {
+    return Number.isInteger(reason.status) &&
+      reason.status >= 100 &&
+      reason.status <= 599
+      ? `http_${reason.status}`
+      : "http_unknown";
+  }
+  return classifyAugustRequestError(reason);
+}
+
+const MAX_FAILURE_CATEGORIES_IN_MESSAGE = 6;
+
+/** e.g. "http_401=43" or "http_404=2, timeout=1" — most frequent first, bounded. */
+export function formatReadFailures(failures: AugustReadFailureCounts): string {
+  const entries = Object.entries(failures).sort(
+    ([a, x], [b, y]) => y - x || a.localeCompare(b),
+  );
+  const shown = entries
+    .slice(0, MAX_FAILURE_CATEGORIES_IN_MESSAGE)
+    .map(([category, count]) => `${category}=${count}`);
+  if (entries.length > MAX_FAILURE_CATEGORIES_IN_MESSAGE) shown.push("…");
+  return shown.length > 0 ? shown.join(", ") : "none";
 }
 
 /**
@@ -274,6 +327,8 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshRunResult> {
       notReturnedByProvider: 0,
       rateLimited: false,
       skippedAfterRateLimit: 0,
+      eligible: 0,
+      readFailures: {},
     };
   }
 
@@ -288,6 +343,10 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshRunResult> {
   let notReturnedByProvider = 0;
   let rateLimited = false;
   let requested = 0;
+  const readFailures: AugustReadFailureCounts = {};
+  const countFailure = (category: string) => {
+    readFailures[category] = (readFailures[category] ?? 0) + 1;
+  };
 
   for (const batch of chunk(eligibleDevices, AUGUST_DETAIL_CONCURRENCY)) {
     // 429 breaker: once August has asked us to slow down, no further batch
@@ -314,6 +373,7 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshRunResult> {
     for (const outcome of settled) {
       if (outcome.status !== "fulfilled") {
         notReturnedByProvider++;
+        countFailure(readFailureCategory(outcome.reason));
         if (isRateLimitError(outcome.reason)) rateLimited = true;
         continue;
       }
@@ -330,6 +390,7 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshRunResult> {
       // in this codebase, e.g. refreshNestTelemetry()'s matching check).
       if (!device.smartDeviceId) {
         notReturnedByProvider++;
+        countFailure("not_linked");
         continue;
       }
 
@@ -406,8 +467,10 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshRunResult> {
 
   const skippedAfterRateLimit = eligibleDevices.length - requested;
   logLockRefresh("august_refresh_completed", {
+    eligible: eligibleDevices.length,
     refreshed,
     notReturnedByProvider,
+    readFailures,
     rateLimited,
     skippedAfterRateLimit,
   });
@@ -417,6 +480,8 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshRunResult> {
     notReturnedByProvider,
     rateLimited,
     skippedAfterRateLimit,
+    eligible: eligibleDevices.length,
+    readFailures,
   };
 }
 
@@ -597,8 +662,13 @@ async function runGuardedAugustTelemetryRefresh(
   }
 
   try {
-    const { rateLimited, skippedAfterRateLimit, ...result } =
-      await runAugustTelemetryRefresh();
+    const {
+      rateLimited,
+      skippedAfterRateLimit,
+      eligible,
+      readFailures,
+      ...result
+    } = await runAugustTelemetryRefresh();
 
     if (rateLimited) {
       // Closed FAILED with the marker so every entry point sees the
@@ -616,6 +686,7 @@ async function runGuardedAugustTelemetryRefresh(
       logLockRefresh("august_guarded_refresh_rate_limited", {
         refreshed: result.refreshed,
         notReturnedByProvider: result.notReturnedByProvider,
+        readFailures,
         skippedAfterRateLimit,
       });
       return {
@@ -626,6 +697,29 @@ async function runGuardedAugustTelemetryRefresh(
           finishedAt.getTime() + AUGUST_RATE_LIMIT_COOLDOWN_MS,
         ).toISOString(),
       };
+    }
+
+    if (eligible > 0 && result.refreshed === 0) {
+      // No eligible lock returned a reading (2026-10-14): a FAILED run, not
+      // a 0-record success. lastSyncedAt/status are left alone (nothing was
+      // synced), so /locks' "Updated …" time stops advancing too. No
+      // cooldown and no retry — the next scheduled/on-view run is unchanged.
+      const reason = `${AUGUST_NO_READINGS_MARKER}: August returned no lock readings (0 of ${eligible} refreshed; ${formatReadFailures(readFailures)}).`;
+      await prisma.integrationSyncLog.update({
+        where: { id: claim.logId },
+        data: {
+          status: "FAILED",
+          recordsProcessed: 0,
+          errorMessage: reason,
+          finishedAt: new Date(),
+        },
+      });
+      logLockRefresh("august_guarded_refresh_no_readings", {
+        eligible,
+        notReturnedByProvider: result.notReturnedByProvider,
+        readFailures,
+      });
+      return { status: "failed", reason };
     }
 
     await prisma.integrationSyncLog.update({
@@ -644,6 +738,7 @@ async function runGuardedAugustTelemetryRefresh(
     logLockRefresh("august_guarded_refresh_completed", {
       refreshed: result.refreshed,
       notReturnedByProvider: result.notReturnedByProvider,
+      readFailures,
     });
     return { status: "completed", ...result };
   } catch (err) {

@@ -637,7 +637,7 @@ describe("refreshAugustTelemetry", () => {
     });
   });
 
-  it("leaves a device August doesn't confirm this time completely untouched and counts it separately, if every device in a batch fails", async () => {
+  it("leaves a device August doesn't confirm this time completely untouched — and when NO eligible lock returned a reading, the run is a sanitized failure, never a 0-record success (2026-10-14)", async () => {
     vi.mocked(prisma.providerDevice.findMany).mockResolvedValueOnce([
       eligibleProviderDevice("pd-1", "lock-1", "sd-1"),
     ] as never);
@@ -648,9 +648,9 @@ describe("refreshAugustTelemetry", () => {
     expect(prisma.smartDevice.update).not.toHaveBeenCalled();
     expect(prisma.providerDevice.update).not.toHaveBeenCalled();
     expect(result).toEqual({
-      status: "completed",
-      refreshed: 0,
-      notReturnedByProvider: 1,
+      status: "failed",
+      reason:
+        "AUGUST_NO_READINGS: August returned no lock readings (0 of 1 refreshed; other=1).",
     });
   });
 
@@ -1646,5 +1646,241 @@ describe("refresh-on-view gate + 429 breaker/cooldown (2026-09-27)", () => {
       cooldownUntil: null,
     });
     expect(mockEnsureConnectionRows).not.toHaveBeenCalled();
+  });
+  describe("read-failure diagnostics + zero-read runs (2026-10-14)", () => {
+    let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+    const loggedEvents = (): Array<Record<string, unknown>> =>
+      consoleLogSpy.mock.calls
+        .filter((call) => call[0] === "[lock-refresh]")
+        .map((call) => JSON.parse(call[1] as string));
+    const event = (name: string) =>
+      loggedEvents().find((e) => e.event === name);
+
+    beforeEach(() => {
+      consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      mockConnectionFindUnique.mockResolvedValue({ id: "conn-august-1" });
+    });
+    afterEach(() => consoleLogSpy.mockRestore());
+
+    it("every read refused with 401 → FAILED with the no-readings marker and the category count; lastSyncedAt/CONNECTED not bumped; no device written", async () => {
+      useStatefulLogs(3);
+      mockGetLockDetail.mockImplementation(async (id: string) => {
+        throw new HttpRequestError(`/locks/${id}`, 401);
+      });
+
+      const outcome = await refreshAugustTelemetryAutomatic();
+
+      const reason =
+        "AUGUST_NO_READINGS: August returned no lock readings (0 of 3 refreshed; http_401=3).";
+      expect(outcome).toEqual({ status: "failed", reason });
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toMatchObject({ status: "FAILED", errorMessage: reason });
+      expect(mockSyncLogUpdate).toHaveBeenCalledWith({
+        where: { id: logs[0]!.id },
+        data: {
+          status: "FAILED",
+          recordsProcessed: 0,
+          errorMessage: reason,
+          finishedAt: expect.any(Date),
+        },
+      });
+      expect(mockConnectionUpdate).not.toHaveBeenCalled();
+      expect(prisma.smartDevice.update).not.toHaveBeenCalled();
+      expect(prisma.providerDevice.update).not.toHaveBeenCalled();
+      // One read per lock — the refresh itself adds no retry.
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(3);
+      expect(event("august_refresh_completed")).toMatchObject({
+        eligible: 3,
+        refreshed: 0,
+        notReturnedByProvider: 3,
+        readFailures: { http_401: 3 },
+        rateLimited: false,
+      });
+      expect(event("august_guarded_refresh_no_readings")).toMatchObject({
+        eligible: 3,
+        notReturnedByProvider: 3,
+        readFailures: { http_401: 3 },
+      });
+      expect(event("august_guarded_refresh_completed")).toBeUndefined();
+    });
+
+    it("mixed failures are counted per category: http status, timeout, network, other", async () => {
+      useStatefulLogs(6);
+      const failures: Record<string, unknown> = {
+        "ext-0": new HttpRequestError("/locks/ext-0", 401),
+        "ext-1": new HttpRequestError("/locks/ext-1", 401),
+        "ext-2": new HttpRequestError("/locks/ext-2", 404),
+        "ext-3": new DOMException("The operation was aborted.", "AbortError"),
+        "ext-4": new TypeError("fetch failed"),
+        "ext-5": new Error("Unexpected end of JSON input"),
+      };
+      mockGetLockDetail.mockImplementation(async (id: string) => {
+        throw failures[id];
+      });
+
+      const outcome = await refreshAugustTelemetryAutomatic();
+
+      expect(outcome).toEqual({
+        status: "failed",
+        reason:
+          "AUGUST_NO_READINGS: August returned no lock readings (0 of 6 refreshed; http_401=2, http_404=1, network=1, other=1, timeout=1).",
+      });
+      expect(event("august_refresh_completed")!.readFailures).toEqual({
+        http_401: 2,
+        http_404: 1,
+        timeout: 1,
+        network: 1,
+        other: 1,
+      });
+    });
+
+    it("partial success is unchanged: completed, SUCCEEDED, lastSyncedAt bumped — failures are now counted in the logs", async () => {
+      useStatefulLogs(3);
+      mockGetLockDetail.mockImplementation(async (id: string) => {
+        if (id === "ext-0") return augustLockDetail(id);
+        throw new HttpRequestError(`/locks/${id}`, 401);
+      });
+
+      const outcome = await refreshAugustTelemetryAutomatic();
+
+      expect(outcome).toEqual({
+        status: "completed",
+        refreshed: 1,
+        notReturnedByProvider: 2,
+      });
+      expect(logs[0]).toMatchObject({
+        status: "SUCCEEDED",
+        errorMessage: null,
+      });
+      expect(mockConnectionUpdate).toHaveBeenCalledWith({
+        where: { id: "conn-august-1" },
+        data: { status: "CONNECTED", lastSyncedAt: expect.any(Date) },
+      });
+      expect(event("august_guarded_refresh_completed")).toMatchObject({
+        refreshed: 1,
+        notReturnedByProvider: 2,
+        readFailures: { http_401: 2 },
+      });
+    });
+
+    it("zero eligible locks is unchanged: completed with 0, SUCCEEDED, no August call", async () => {
+      useStatefulLogs(0);
+
+      const outcome = await refreshAugustTelemetryAutomatic();
+
+      expect(outcome).toEqual({
+        status: "completed",
+        refreshed: 0,
+        notReturnedByProvider: 0,
+      });
+      expect(logs[0]).toMatchObject({
+        status: "SUCCEEDED",
+        errorMessage: null,
+      });
+      expect(mockGetLockDetail).not.toHaveBeenCalled();
+    });
+
+    it("a 429 with zero readings still takes the rate-limit path (marker + cooldown), not the no-readings one", async () => {
+      useStatefulLogs(3);
+      mockGetLockDetail.mockImplementation(async (id: string) => {
+        throw new HttpRequestError(`/locks/${id}`, id === "ext-1" ? 429 : 401);
+      });
+
+      const outcome = await refreshAugustTelemetryAutomatic();
+
+      expect(outcome).toMatchObject({ status: "rate_limited", refreshed: 0 });
+      expect(logs[0]!.errorMessage).toMatch(
+        new RegExp(`^${AUGUST_RATE_LIMITED_MARKER}:`),
+      );
+      expect(event("august_guarded_refresh_rate_limited")).toMatchObject({
+        readFailures: { http_401: 2, http_429: 1 },
+      });
+    });
+
+    it("a zero-read FAILED run starts no cooldown and no extra retries: on-view is still gated for 10 min, the next scheduled run proceeds as before", async () => {
+      useStatefulLogs(2);
+      mockGetLockDetail.mockImplementation(async (id: string) => {
+        throw new HttpRequestError(`/locks/${id}`, 401);
+      });
+      await refreshAugustTelemetryAutomatic();
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(2);
+
+      expect(await refreshAugustTelemetryIfStale(actor as never)).toMatchObject(
+        { status: "fresh" },
+      );
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(2);
+
+      expect(await refreshAugustTelemetryAutomatic()).toMatchObject({
+        status: "failed",
+      });
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(4);
+      expect(logs.map((l) => l.status)).toEqual(["FAILED", "FAILED"]);
+    });
+
+    it("freshness does not advance after a zero-read run (no SUCCEEDED row is written)", async () => {
+      useStatefulLogs(2);
+      mockGetLockDetail.mockImplementation(async (id: string) => {
+        throw new HttpRequestError(`/locks/${id}`, 401);
+      });
+      await refreshAugustTelemetryAutomatic();
+
+      expect(await getAugustRefreshFreshness(actor as never)).toEqual({
+        lastSucceededAt: null,
+        cooldownUntil: null,
+      });
+    });
+
+    it("SANITIZED: no token, identifier, lock id, URL path or provider text reaches the logs, the stored message or the returned reason", async () => {
+      process.env.AUGUST_ACCESS_TOKEN = "SECRET-TOKEN-VALUE";
+      process.env.AUGUST_IDENTIFIER = "email:owner-secret@example.com";
+      useStatefulLogs(3);
+      mockGetLockDetail.mockImplementation(async (id: string) => {
+        if (id === "ext-0") {
+          throw new HttpRequestError(`/locks/LOCKID-${id}`, 401, {
+            providerErrorCode: "token SECRET-TOKEN-VALUE expired",
+            providerMessage:
+              "Bad token SECRET-TOKEN-VALUE for owner-secret@example.com",
+          });
+        }
+        if (id === "ext-1") {
+          throw new Error(
+            "Request to /locks/LOCKID-ext-1 failed: SECRET-TOKEN-VALUE",
+          );
+        }
+        throw new TypeError(
+          "fetch failed for https://api-production.august.com/locks/LOCKID-ext-2",
+        );
+      });
+
+      const outcome = await refreshAugustTelemetryAutomatic();
+
+      const surfaces = [
+        JSON.stringify(consoleLogSpy.mock.calls),
+        logs[0]!.errorMessage ?? "",
+        JSON.stringify(outcome),
+      ];
+      for (const text of surfaces) {
+        for (const secret of [
+          "SECRET-TOKEN-VALUE",
+          "owner-secret",
+          "LOCKID",
+          "ext-0",
+          "ext-1",
+          "ext-2",
+          "/locks",
+          "august.com",
+          "Bad token",
+          "expired",
+          "fetch failed",
+        ]) {
+          expect(text).not.toContain(secret);
+        }
+      }
+      expect(outcome).toEqual({
+        status: "failed",
+        reason:
+          "AUGUST_NO_READINGS: August returned no lock readings (0 of 3 refreshed; http_401=1, network=1, other=1).",
+      });
+    });
   });
 });
