@@ -13,11 +13,17 @@ import { useState, type ReactNode } from "react";
  * "Search All Notion" stays outside this component entirely (rendered above
  * it on the page), since it's a cross-cutting feature, not one section's
  * content.
+ *
+ * "Recent Activity" (2026-10-16) is a fourth tab, shown only when the page
+ * passes `activityContent` — i.e. only to viewers allowed to read the
+ * activity feed. Omitted (undefined) means no tab at all, never an empty one
+ * that would imply "no activity" when the real answer is "no access."
  */
 const TABS = [
   { id: "sops", label: "SOPs" },
   { id: "library", label: "Library" },
   { id: "listings", label: "Property Listings" },
+  { id: "activity", label: "Recent Activity" },
 ] as const;
 
 type NotionTabId = (typeof TABS)[number]["id"];
@@ -26,12 +32,17 @@ export function NotionWorkspaceTabs({
   sopsContent,
   libraryContent,
   listingsContent,
+  activityContent,
 }: {
   sopsContent: ReactNode;
   libraryContent: ReactNode;
   listingsContent: ReactNode;
+  activityContent?: ReactNode;
 }) {
   const [active, setActive] = useState<NotionTabId>("sops");
+  const tabs = TABS.filter(
+    (tab) => tab.id !== "activity" || activityContent !== undefined,
+  );
 
   return (
     <div className="space-y-4">
@@ -40,7 +51,7 @@ export function NotionWorkspaceTabs({
         aria-label="Notion sections"
         className="flex gap-1 rounded-lg border border-border bg-surface-muted p-1"
       >
-        {TABS.map((tab) => {
+        {tabs.map((tab) => {
           const isActive = active === tab.id;
           return (
             <button
@@ -65,6 +76,7 @@ export function NotionWorkspaceTabs({
         {active === "sops" && sopsContent}
         {active === "library" && libraryContent}
         {active === "listings" && listingsContent}
+        {active === "activity" && activityContent}
       </div>
     </div>
   );

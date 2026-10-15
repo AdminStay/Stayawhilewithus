@@ -243,6 +243,25 @@ describe("listRecentNotionActivity (2026-09-30)", () => {
     expect(item!.notionUrl).toBe(PAGE_URL);
   });
 
+  it("names every author Notion reported, including integrations and the overflow count (2026-10-16)", async () => {
+    mockFindMany.mockResolvedValueOnce([
+      row({
+        details: details({
+          actors: [
+            { type: "person", name: "Kenny" },
+            { type: "bot", name: "Zapier" },
+            { type: "agent", name: null },
+          ],
+          additionalActors: 2,
+        }),
+      }),
+    ]);
+    const [item] = await listRecentNotionActivity(ACTOR);
+    expect(item!.who).toBe(
+      "Kenny, Zapier (integration), a Notion agent and 2 others",
+    );
+  });
+
   it("shows Unknown editor when Notion supplied no editor name, never an invented one", async () => {
     mockFindMany.mockResolvedValueOnce([
       row({ details: details({ actors: [] }) }),

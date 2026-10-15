@@ -78,6 +78,9 @@ export function notionActivityAction(
   }
 }
 
+/** Authors named per event; the rest are counted in `additionalActors`. */
+export const MAX_STORED_ACTORS = 5;
+
 export interface NotionEventActor {
   type: "person" | "bot" | "agent";
   /** Null when Notion did not provide a name — never guessed. */
@@ -93,7 +96,13 @@ export interface NotionEventDetails {
   visibility: NotionVisibility;
   /** The top-level LIBRARY row this lives under, when any (drives notification rules). */
   libraryEntryId: string | null;
+  /** Up to MAX_STORED_ACTORS of Notion's `authors`, in Notion's order. */
   actors: NotionEventActor[];
+  /**
+   * Authors Notion reported beyond those stored in `actors` (2026-10-16);
+   * absent on older rows, which never recorded the overflow.
+   */
+  additionalActors?: number;
   /** Property NAMES that changed (properties_updated only); never values. */
   changedProperties: string[];
   changedCount: number;
@@ -263,14 +272,22 @@ export async function buildNotionEventDetails(
     .resolveVisibility(subjectKind, subjectId)
     .catch((): NotionVisibility => "sensitive");
 
+  // People and integrations are both Notion users, so the same cached Users
+  // API lookup names either (2026-10-16: integrations were previously never
+  // looked up). Agents aren't looked up. A failed lookup is null — never a
+  // guess.
   const actors: NotionEventActor[] = [];
-  for (const author of event.authors.slice(0, 5)) {
+  for (const author of event.authors.slice(0, MAX_STORED_ACTORS)) {
     const name =
-      author.type === "person"
-        ? await deps.getUserDisplayName(author.id).catch(() => null)
-        : null;
+      author.type === "agent"
+        ? null
+        : await deps.getUserDisplayName(author.id).catch(() => null);
     actors.push({ type: author.type, name });
   }
+  const additionalActors = Math.max(
+    0,
+    event.authors.length - MAX_STORED_ACTORS,
+  );
 
   const changedProperties =
     action === "updated_properties"
@@ -285,6 +302,7 @@ export async function buildNotionEventDetails(
     visibility,
     libraryEntryId,
     actors,
+    ...(additionalActors > 0 ? { additionalActors } : {}),
     changedProperties,
     changedCount: event.changedFieldNames.length,
     inTrash,

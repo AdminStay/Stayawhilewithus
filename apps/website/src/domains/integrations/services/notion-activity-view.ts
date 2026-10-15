@@ -148,7 +148,7 @@ export function toNotionActivityView(
     id: row.id,
     action,
     actionLabel,
-    who: describeNotionActors(details.actors),
+    who: describeNotionActors(details.actors, details.additionalActors ?? 0),
     verb,
     where: restricted
       ? "a restricted Notion page"

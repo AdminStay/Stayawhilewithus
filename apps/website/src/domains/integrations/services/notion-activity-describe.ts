@@ -32,30 +32,80 @@ export const ACTION_VERB: Record<NotionActivityAction, string> = {
  */
 export const UNKNOWN_EDITOR = "Unknown editor";
 
-/** Who did it, from Notion's own data only — never an invented name. */
+function countLabel(n: number, one: string, many: string): string {
+  return n === 1 ? one : `${n} ${many}`;
+}
+
+/** "A", "A and B", "A, B and C". */
+function joinList(parts: string[]): string {
+  if (parts.length <= 1) return parts[0] ?? "";
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+}
+
+/**
+ * Who did it, from Notion's own `authors` data only — never an invented
+ * name (2026-10-16). Every author Notion reported is represented:
+ *   - a person's name when Notion's Users API supplied one, else
+ *     "Unknown editor" (or "N unknown editors");
+ *   - an integration as "<name> (integration)" when Notion supplied its
+ *     name, else "An integration";
+ *   - a Notion agent as "<name> (Notion agent)" or "A Notion agent";
+ *   - authors beyond those stored (`additionalActors`) as "N others".
+ * A name is whatever account Notion reports: a shared Notion login shows
+ * that login's name, because Notion can't tell which human used it.
+ */
 export function describeNotionActors(
   actors: readonly NotionEventActor[],
+  additionalActors = 0,
 ): string {
-  if (actors.length === 0) return UNKNOWN_EDITOR;
-  const named = actors
-    .map((a) => a.name)
-    .filter((n): n is string => Boolean(n));
-  if (named.length > 0) {
-    const unnamed = actors.length - named.length;
-    return unnamed > 0
-      ? `${named.join(", ")} and ${unnamed} other${unnamed > 1 ? "s" : ""}`
-      : named.join(", ");
+  const parts: string[] = [];
+  let unknownPeople = 0;
+  let unnamedBots = 0;
+  let unnamedAgents = 0;
+  for (const actor of actors) {
+    if (actor.name) {
+      parts.push(
+        actor.type === "bot"
+          ? `${actor.name} (integration)`
+          : actor.type === "agent"
+            ? `${actor.name} (Notion agent)`
+            : actor.name,
+      );
+    } else if (actor.type === "bot") unnamedBots += 1;
+    else if (actor.type === "agent") unnamedAgents += 1;
+    else unknownPeople += 1;
   }
-  const first = actors[0]!.type;
-  const label =
-    first === "bot"
-      ? "An integration"
-      : first === "agent"
-        ? "A Notion agent"
-        : UNKNOWN_EDITOR;
-  return actors.length > 1
-    ? `${label} and ${actors.length - 1} other${actors.length > 2 ? "s" : ""}`
-    : label;
+  if (unknownPeople > 0) {
+    parts.push(
+      countLabel(
+        unknownPeople,
+        parts.length === 0 ? UNKNOWN_EDITOR : "an unknown editor",
+        "unknown editors",
+      ),
+    );
+  }
+  if (unnamedBots > 0) {
+    parts.push(
+      countLabel(
+        unnamedBots,
+        parts.length === 0 ? "An integration" : "an integration",
+        "integrations",
+      ),
+    );
+  }
+  if (unnamedAgents > 0) {
+    parts.push(
+      countLabel(
+        unnamedAgents,
+        parts.length === 0 ? "A Notion agent" : "a Notion agent",
+        "Notion agents",
+      ),
+    );
+  }
+  if (additionalActors > 0) {
+    parts.push(countLabel(additionalActors, "1 other", "others"));
+  }
+  return parts.length === 0 ? UNKNOWN_EDITOR : joinList(parts);
 }
 
 /** "Library › Property Directory › Palm Haven › Router and Thermostat Location" */
