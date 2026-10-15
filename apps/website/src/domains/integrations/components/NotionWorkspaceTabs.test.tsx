@@ -88,3 +88,64 @@ describe("NotionWorkspaceTabs", () => {
     expect(screen.queryByText("Library content")).toBeNull();
   });
 });
+
+describe("NotionWorkspaceTabs — Recent Activity tab (2026-10-16)", () => {
+  const renderWithActivity = () =>
+    render(
+      <NotionWorkspaceTabs
+        sopsContent={<p>SOPs content</p>}
+        libraryContent={<p>Library content</p>}
+        listingsContent={<p>Listings content</p>}
+        activityContent={<p>Activity content</p>}
+      />,
+    );
+
+  it("lists the four tabs in order: SOPs, Library, Property Listings, Recent Activity", () => {
+    renderWithActivity();
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual([
+      "SOPs",
+      "Library",
+      "Property Listings",
+      "Recent Activity",
+    ]);
+  });
+
+  it("starts on SOPs; the activity feed isn't rendered until its tab is chosen", () => {
+    renderWithActivity();
+    expect(screen.getByText("SOPs content")).toBeTruthy();
+    expect(screen.queryByText("Activity content")).toBeNull();
+  });
+
+  it("switching to Recent Activity shows only the activity feed", () => {
+    renderWithActivity();
+    fireEvent.click(screen.getByRole("tab", { name: "Recent Activity" }));
+    expect(screen.getByText("Activity content")).toBeTruthy();
+    expect(screen.queryByText("SOPs content")).toBeNull();
+    expect(screen.queryByText("Library content")).toBeNull();
+    expect(screen.queryByText("Listings content")).toBeNull();
+    const selected = screen
+      .getAllByRole("tab")
+      .filter((t) => t.getAttribute("aria-selected") === "true");
+    expect(selected.map((t) => t.textContent)).toEqual(["Recent Activity"]);
+  });
+
+  it("switching away from Recent Activity hides it again", () => {
+    renderWithActivity();
+    fireEvent.click(screen.getByRole("tab", { name: "Recent Activity" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Library" }));
+    expect(screen.getByText("Library content")).toBeTruthy();
+    expect(screen.queryByText("Activity content")).toBeNull();
+  });
+
+  it("has no Recent Activity tab at all when no activity content is passed (no access)", () => {
+    render(
+      <NotionWorkspaceTabs
+        sopsContent={<p>SOPs content</p>}
+        libraryContent={<p>Library content</p>}
+        listingsContent={<p>Listings content</p>}
+      />,
+    );
+    expect(screen.queryByRole("tab", { name: "Recent Activity" })).toBeNull();
+    expect(screen.getAllByRole("tab")).toHaveLength(3);
+  });
+});

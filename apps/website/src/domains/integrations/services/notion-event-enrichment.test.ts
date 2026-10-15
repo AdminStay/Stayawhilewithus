@@ -140,7 +140,7 @@ describe("buildNotionEventDetails", () => {
     });
   });
 
-  it("never invents a name: no user-info capability → name null; bots/agents are not looked up", async () => {
+  it("never invents a name: no user-info capability → name null; agents are not looked up", async () => {
     const lookup = vi.fn(async () => null);
     const d = await buildNotionEventDetails(
       event({
@@ -157,7 +157,57 @@ describe("buildNotionEventDetails", () => {
       { type: "bot", name: null },
       { type: "agent", name: null },
     ]);
-    expect(lookup).toHaveBeenCalledTimes(1);
+    // The person and the integration are both Notion users; the agent isn't.
+    expect(lookup).toHaveBeenCalledTimes(2);
+    expect(lookup).not.toHaveBeenCalledWith("agent-1");
+  });
+
+  it("names an integration with the name Notion's Users API reports (2026-10-16)", async () => {
+    const lookup = vi.fn(async (id: string) =>
+      id === "bot-1" ? "Zapier" : id === "user-m" ? "Michelle" : null,
+    );
+    const d = await buildNotionEventDetails(
+      event({
+        authors: [
+          { id: "user-m", type: "person" },
+          { id: "bot-1", type: "bot" },
+        ],
+      }),
+      deps({ getUserDisplayName: lookup }),
+    );
+    expect(d.actors).toEqual([
+      { type: "person", name: "Michelle" },
+      { type: "bot", name: "Zapier" },
+    ]);
+    expect(d).not.toHaveProperty("additionalActors");
+  });
+
+  it("a failed name lookup is null, never a guess", async () => {
+    const d = await buildNotionEventDetails(
+      event({ authors: [{ id: "user-x", type: "person" }] }),
+      deps({
+        getUserDisplayName: vi.fn(async () => {
+          throw new Error("network");
+        }),
+      }),
+    );
+    expect(d.actors).toEqual([{ type: "person", name: null }]);
+  });
+
+  it("stores up to 5 authors and counts the rest instead of dropping them", async () => {
+    const lookup = vi.fn(async (id: string) => `Name ${id}`);
+    const d = await buildNotionEventDetails(
+      event({
+        authors: Array.from({ length: 7 }, (_, i) => ({
+          id: `u${i}`,
+          type: "person" as const,
+        })),
+      }),
+      deps({ getUserDisplayName: lookup }),
+    );
+    expect(d.actors).toHaveLength(5);
+    expect(d.additionalActors).toBe(2);
+    expect(lookup).toHaveBeenCalledTimes(5);
   });
 
   it("never stores values — only names and counts", async () => {
