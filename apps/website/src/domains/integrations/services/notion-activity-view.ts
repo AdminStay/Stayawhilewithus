@@ -2,15 +2,20 @@
  * Recent Notion Activity view model (2026-09-30). Pure: turns a stored
  * event row (+ its sanitized enrichment) into one readable line —
  * "[Who] [did what] [where] — [what changed] — [when]" — for a specific
- * viewer. Never includes Notion ids, values or integration internals.
- * Sensitive events are shown to viewers without notion:manage as "a
- * restricted Notion page", with no title or change details.
+ * viewer. Never includes values or integration internals, and never a raw
+ * Notion id: the only place an id appears is inside `notionUrl`, the
+ * "Open in Notion" link (Phase 0, 2026-10-15), and only for rows this viewer
+ * may see. Sensitive events are shown to viewers without notion:manage as
+ * "a restricted Notion page", with no title, change details or link.
  */
+import { notionPageUrl } from "../components/notion-link.utils";
+
 import {
   ACTION_VERB,
   describeNotionActors,
   describeNotionChange,
   describeNotionLocation,
+  UNKNOWN_EDITOR,
 } from "./notion-activity-describe";
 import {
   notionActivityAction,
@@ -35,6 +40,8 @@ export const ACTION_LABEL: Record<NotionActivityAction, string> = {
 
 export interface NotionActivityRow {
   id: string;
+  /** The Notion page/database id. Used only to build `notionUrl`; never copied to the view. */
+  entityId?: string | null;
   entityType: string;
   eventType: string;
   changedFieldNames: unknown;
@@ -56,6 +63,37 @@ export interface NotionActivityView {
   /** Stored receive time, shown as the exact timestamp (2026-10-11); null if missing. */
   receivedAt: Date | null;
   restricted: boolean;
+  /** "Open in Notion" link, or null when this row must not link (see notionLinkFor). */
+  notionUrl: string | null;
+  /**
+   * True for edits whose earlier values StayWhile never captured — always
+   * the case today (no snapshots exist), so the UI says so instead of
+   * implying a before→after it doesn't have.
+   */
+  earlierValueUnknown: boolean;
+}
+
+/** Edits that changed existing values (as opposed to create/move/trash/…). */
+const VALUE_CHANGING_ACTIONS: ReadonlySet<NotionActivityAction> = new Set([
+  "updated_properties",
+  "updated_content",
+]);
+
+/**
+ * Fail closed: link only an enriched (so its visibility is known), visible,
+ * not-in-trash page or database whose id is well-formed. Data sources,
+ * blocks and comments never link — their ids aren't page URLs.
+ */
+function notionLinkFor(
+  row: NotionActivityRow,
+  details: NotionEventDetails,
+  action: NotionActivityAction | null,
+  restricted: boolean,
+): string | null {
+  if (restricted) return null;
+  if (row.entityType !== "page" && row.entityType !== "database") return null;
+  if (details.inTrash === true || action === "deleted") return null;
+  return notionPageUrl(row.entityId);
 }
 
 function readDetails(value: unknown): NotionEventDetails | null {
@@ -90,13 +128,17 @@ export function toNotionActivityView(
       id: row.id,
       action,
       actionLabel,
-      who: "Someone",
+      who: UNKNOWN_EDITOR,
       verb,
       where: noun,
       change: count > 0 ? `${count} item${count > 1 ? "s" : ""} changed` : null,
       occurredAt: row.occurredAt,
       receivedAt: row.receivedAt ?? null,
       restricted: false,
+      // Visibility is unknown without enrichment: never link.
+      notionUrl: null,
+      earlierValueUnknown:
+        action !== null && VALUE_CHANGING_ACTIONS.has(action),
     };
   }
 
@@ -115,6 +157,9 @@ export function toNotionActivityView(
     occurredAt: row.occurredAt,
     receivedAt: row.receivedAt ?? null,
     restricted,
+    notionUrl: notionLinkFor(row, details, action, restricted),
+    earlierValueUnknown:
+      !restricted && action !== null && VALUE_CHANGING_ACTIONS.has(action),
   };
 }
 

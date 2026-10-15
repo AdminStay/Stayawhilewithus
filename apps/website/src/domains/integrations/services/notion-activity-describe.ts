@@ -25,11 +25,18 @@ export const ACTION_VERB: Record<NotionActivityAction, string> = {
   comment_deleted: "deleted a comment on",
 };
 
+/**
+ * Shown when Notion supplied no editor at all, or a person without a name
+ * (Phase 0, 2026-10-15). Integrations and Notion agents keep their own
+ * labels — that much Notion did tell us.
+ */
+export const UNKNOWN_EDITOR = "Unknown editor";
+
 /** Who did it, from Notion's own data only — never an invented name. */
 export function describeNotionActors(
   actors: readonly NotionEventActor[],
 ): string {
-  if (actors.length === 0) return "Someone";
+  if (actors.length === 0) return UNKNOWN_EDITOR;
   const named = actors
     .map((a) => a.name)
     .filter((n): n is string => Boolean(n));
@@ -45,7 +52,7 @@ export function describeNotionActors(
       ? "An integration"
       : first === "agent"
         ? "A Notion agent"
-        : "A Notion user";
+        : UNKNOWN_EDITOR;
   return actors.length > 1
     ? `${label} and ${actors.length - 1} other${actors.length > 2 ? "s" : ""}`
     : label;
