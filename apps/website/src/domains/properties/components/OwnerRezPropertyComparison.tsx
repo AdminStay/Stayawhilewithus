@@ -137,12 +137,10 @@ export function OwnerRezPropertyComparison({
               )}
               <Table>
                 <TableHead>
-                  <TableRow>
-                    <TableHeaderCell>Field</TableHeaderCell>
-                    <TableHeaderCell>StayWhile</TableHeaderCell>
-                    <TableHeaderCell>OwnerRez</TableHeaderCell>
-                    <TableHeaderCell>Status</TableHeaderCell>
-                  </TableRow>
+                  <TableHeaderCell>Field</TableHeaderCell>
+                  <TableHeaderCell>StayWhile</TableHeaderCell>
+                  <TableHeaderCell>OwnerRez</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell>
                 </TableHead>
                 <TableBody>
                   {row.fields.map((f) => (

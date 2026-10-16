@@ -211,6 +211,17 @@ describe("/properties/ownerrez/compare", () => {
     expect(screen.queryAllByRole("button")).toHaveLength(0);
     expect(container.querySelector("form")).toBeNull();
   });
+
+  it("renders valid table markup: no row nested inside another row", async () => {
+    mockCompare.mockResolvedValueOnce({
+      configured: true,
+      rows: [fabricatedRow(1)],
+      rateLimited: false,
+    });
+    const { container } = render(await OwnerRezPropertyComparePage());
+    expect(container.querySelector("tr tr")).toBeNull();
+    expect(container.querySelectorAll("thead th")).toHaveLength(4);
+  });
 });
 
 describe("source-level read-only proof", () => {
