@@ -59,6 +59,11 @@ export const NAV_SECTIONS: NavSection[] = [
         label: "OwnerRez Match Report",
         icon: "plug",
       },
+      {
+        href: "/properties/ownerrez/compare",
+        label: "OwnerRez Comparison",
+        icon: "plug",
+      },
       { href: "/audit", label: "Audit", icon: "shield" },
       { href: "/users", label: "Users", icon: "userCog" },
     ],
