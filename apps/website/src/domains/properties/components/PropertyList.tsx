@@ -22,6 +22,10 @@ import {
   updatePropertyStatusAction,
 } from "../actions";
 import {
+  ADDRESS_PART_LABEL,
+  formatStoredPropertyAddress,
+} from "../lib/property-address";
+import {
   PROPERTY_STATUS_TONE,
   propertyStatusLabel,
 } from "../lib/property-status-filter";
@@ -33,6 +37,30 @@ import { OwnerRezLink } from "@/domains/integrations/components/OwnerRezLink";
 import { ownerRezPropertyUrl } from "@/domains/integrations/lib/ownerrez-links";
 
 const STATUSES = ["ACTIVE", "INACTIVE", "ONBOARDING", "OFFBOARDED"] as const;
+
+/**
+ * Full stored address (2026-10-20), exactly as stored — display only. A
+ * blank required part is named, never filled in.
+ */
+function PropertyAddress({ property }: { property: Property }) {
+  const { lines, missing } = formatStoredPropertyAddress(property);
+  if (lines.length === 0) {
+    return <span className="text-ink-faint">No address stored</span>;
+  }
+  return (
+    <div>
+      {lines.map((line, i) => (
+        <div key={i}>{line}</div>
+      ))}
+      {missing.length > 0 && (
+        <div className="text-xs text-warning-600">
+          Incomplete address: missing{" "}
+          {missing.map((part) => ADDRESS_PART_LABEL[part]).join(", ")}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function PropertyList({
   properties,
@@ -63,7 +91,7 @@ export function PropertyList({
     <Table>
       <TableHead>
         <TableHeaderCell>Property</TableHeaderCell>
-        <TableHeaderCell>Location</TableHeaderCell>
+        <TableHeaderCell>Address</TableHeaderCell>
         <TableHeaderCell>Status</TableHeaderCell>
         {cleanerSummaries && <TableHeaderCell>Cleaner</TableHeaderCell>}
         <TableHeaderCell>Max occupancy</TableHeaderCell>
@@ -84,7 +112,7 @@ export function PropertyList({
               )}
             </TableCell>
             <TableCell className="text-ink-muted">
-              {p.city}, {p.state}
+              <PropertyAddress property={p} />
             </TableCell>
             <TableCell>
               <StatusIndicator
