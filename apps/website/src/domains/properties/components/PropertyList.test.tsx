@@ -104,3 +104,95 @@ describe("PropertyList — Cleaner column (Cleaner Assignments Phase 3)", () => 
     expect(unassigned.textContent).toBe("No cleaner");
   });
 });
+
+describe("PropertyList — full stored address (2026-10-20)", () => {
+  // FABRICATED TEST FIXTURES — not real StayWhile addresses.
+  const fabricatedAddress = {
+    addressLine1: "100 Example Street",
+    addressLine2: "Unit 2",
+    city: "Testville",
+    state: "FL",
+    postalCode: "00001",
+  };
+
+  function addressCell(overrides: Record<string, unknown> = {}) {
+    render(
+      <PropertyList
+        properties={
+          [
+            property({
+              name: "FABRICATED Test Property",
+              ...fabricatedAddress,
+              ...overrides,
+            }),
+          ] as never
+        }
+      />,
+    );
+    const cells = screen.getAllByRole("row")[1]!.querySelectorAll("td");
+    return cells[1]!;
+  }
+
+  function lineTexts(cell: HTMLElement) {
+    return [...cell.querySelectorAll(":scope > div > div")].map(
+      (d) => d.textContent,
+    );
+  }
+
+  it("labels the column Address", () => {
+    addressCell();
+    expect(screen.getByRole("columnheader", { name: "Address" })).toBeTruthy();
+    expect(screen.queryByRole("columnheader", { name: "Location" })).toBeNull();
+  });
+
+  it("shows the complete stored address, line by line", () => {
+    const cell = addressCell();
+    expect(lineTexts(cell)).toEqual([
+      "100 Example Street",
+      "Unit 2",
+      "Testville, FL 00001",
+    ]);
+    expect(cell.textContent).not.toContain("Incomplete");
+  });
+
+  it.each([null, ""])(
+    "omits a missing second line (%j) and doesn't flag it",
+    (addressLine2) => {
+      const cell = addressCell({ addressLine2 });
+      expect(lineTexts(cell)).toEqual([
+        "100 Example Street",
+        "Testville, FL 00001",
+      ]);
+      expect(cell.textContent).not.toContain("Incomplete");
+    },
+  );
+
+  it("shows state and postal code exactly as stored", () => {
+    const cell = addressCell({ state: "Florida", postalCode: "00001-0002" });
+    expect(cell.textContent).toContain("Testville, Florida 00001-0002");
+  });
+
+  it("names the blank parts of an incomplete address and fills nothing in", () => {
+    const cell = addressCell({
+      addressLine1: "",
+      addressLine2: null,
+      postalCode: " ",
+    });
+    expect(lineTexts(cell)).toEqual([
+      "Testville, FL",
+      "Incomplete address: missing street, postal code",
+    ]);
+    expect(cell.textContent).not.toMatch(/undefined|null/);
+  });
+
+  it("says no address is stored when every address field is blank", () => {
+    const cell = addressCell({
+      addressLine1: "",
+      addressLine2: null,
+      city: "",
+      state: "",
+      postalCode: "",
+    });
+    expect(cell.textContent).toBe("No address stored");
+  });
+});
