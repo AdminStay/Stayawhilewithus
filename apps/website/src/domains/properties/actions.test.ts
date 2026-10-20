@@ -8,7 +8,9 @@ const {
   mockDeleteProperty,
   mockUpdatePropertyOccupancy,
   mockUpdatePropertyStatus,
+  mockSyncMaxGuests,
 } = vi.hoisted(() => ({
+  mockSyncMaxGuests: vi.fn(),
   mockRevalidatePath: vi.fn(),
   mockCreatePropertyFromOwnerRez: vi.fn(),
   mockConfirmOwnerRezLink: vi.fn(),
@@ -30,6 +32,10 @@ vi.mock("./services/ownerrez-link.service", () => ({
   confirmOwnerRezLink: mockConfirmOwnerRezLink,
 }));
 
+vi.mock("./services/ownerrez-max-guests-sync.service", () => ({
+  syncMaxGuestsFromOwnerRez: mockSyncMaxGuests,
+}));
+
 vi.mock("./services/ownerrez-onboarding.service", () => ({
   createPropertyFromOwnerRez: mockCreatePropertyFromOwnerRez,
 }));
@@ -41,7 +47,10 @@ vi.mock("./services/properties.service", () => ({
   updatePropertyStatus: mockUpdatePropertyStatus,
 }));
 
-import { createPropertyFromOwnerRezAction } from "./actions";
+import {
+  createPropertyFromOwnerRezAction,
+  syncMaxGuestsFromOwnerRezAction,
+} from "./actions";
 
 const IDLE = { status: "idle" as const };
 
@@ -181,5 +190,67 @@ describe("createPropertyFromOwnerRezAction", () => {
     await createPropertyFromOwnerRezAction(IDLE, formDataWith("480307"));
 
     expect(mockRevalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+describe("syncMaxGuestsFromOwnerRezAction (2026-10-21)", () => {
+  // FABRICATED TEST FIXTURE — not a real property.
+  const updated = {
+    propertyId: "p1",
+    propertyName: "FABRICATED Property 1",
+    outcome: "updated",
+    before: 12,
+    after: 14,
+  };
+
+  it("returns the per-property results and revalidates /properties when something changed", async () => {
+    mockRevalidatePath.mockClear();
+    mockSyncMaxGuests.mockResolvedValueOnce({
+      configured: true,
+      results: [updated],
+      counts: { updated: 1, unchanged: 0, skipped_blank: 0, failed: 0 },
+      rateLimited: false,
+    });
+    expect(await syncMaxGuestsFromOwnerRezAction({ status: "idle" })).toEqual({
+      status: "success",
+      results: [updated],
+      rateLimited: false,
+    });
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/properties");
+  });
+
+  it("doesn't revalidate when nothing changed", async () => {
+    mockRevalidatePath.mockClear();
+    mockSyncMaxGuests.mockResolvedValueOnce({
+      configured: true,
+      results: [],
+      counts: { updated: 0, unchanged: 0, skipped_blank: 0, failed: 0 },
+      rateLimited: false,
+    });
+    await syncMaxGuestsFromOwnerRezAction({ status: "idle" });
+    expect(mockRevalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("reports not configured", async () => {
+    mockSyncMaxGuests.mockResolvedValueOnce({ configured: false });
+    expect(await syncMaxGuestsFromOwnerRezAction({ status: "idle" })).toEqual({
+      status: "not_configured",
+    });
+  });
+
+  it("returns an authored error message, but hides Prisma error detail", async () => {
+    mockSyncMaxGuests.mockRejectedValueOnce(new Error("Forbidden"));
+    expect(await syncMaxGuestsFromOwnerRezAction({ status: "idle" })).toEqual({
+      status: "failure",
+      error: "Forbidden",
+    });
+
+    class PrismaClientKnownRequestError extends Error {}
+    mockSyncMaxGuests.mockRejectedValueOnce(
+      new PrismaClientKnownRequestError("raw query dump"),
+    );
+    const state = await syncMaxGuestsFromOwnerRezAction({ status: "idle" });
+    expect(state.status).toBe("failure");
+    expect(JSON.stringify(state)).not.toContain("raw query dump");
   });
 });

@@ -2,9 +2,11 @@ import { hasPermission } from "@stayw/auth";
 import { DialogTrigger, PageHeader } from "@stayw/ui";
 
 import { listCurrentCleanerSummaries } from "@/domains/cleaners/services/cleaner-assignments.service";
+import { syncMaxGuestsFromOwnerRezAction } from "@/domains/properties/actions";
 import { CreatePropertyForm } from "@/domains/properties/components/CreatePropertyForm";
 import { PropertyList } from "@/domains/properties/components/PropertyList";
 import { PropertyStatusFilterTabs } from "@/domains/properties/components/PropertyStatusFilterTabs";
+import { SyncMaxGuestsButton } from "@/domains/properties/components/SyncMaxGuestsButton";
 import {
   filterAndSortProperties,
   parsePropertyStatusFilter,
@@ -39,9 +41,10 @@ export default async function PropertiesPage({
 }) {
   const actor = await getCurrentUser();
   const filter = parsePropertyStatusFilter((await searchParams).status);
-  const [properties, canReadCleaners] = await Promise.all([
+  const [properties, canReadCleaners, canUpdateProperties] = await Promise.all([
     listProperties(actor),
     hasPermission(actor, "cleaners:read"),
+    hasPermission(actor, "properties:update"),
   ]);
   // The "Cleaner" column only exists for someone who can see cleaners.
   const cleanerSummaries = canReadCleaners
@@ -57,9 +60,15 @@ export default async function PropertiesPage({
         title="Properties"
         subtitle={`${counts.operational} operational ${counts.operational === 1 ? "property" : "properties"} under management`}
         actions={
-          <DialogTrigger label="Add property" title="Add property">
-            <CreatePropertyForm />
-          </DialogTrigger>
+          <div className="flex items-start gap-2">
+            {/* 2026-10-21: max guests comes from OwnerRez (Kenny). */}
+            {canUpdateProperties && (
+              <SyncMaxGuestsButton action={syncMaxGuestsFromOwnerRezAction} />
+            )}
+            <DialogTrigger label="Add property" title="Add property">
+              <CreatePropertyForm />
+            </DialogTrigger>
+          </div>
         }
       />
       <PropertyStatusFilterTabs current={filter} counts={counts} />
