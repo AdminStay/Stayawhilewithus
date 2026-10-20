@@ -238,6 +238,18 @@ describe("syncMaxGuestsFromOwnerRezAction (2026-10-21)", () => {
     });
   });
 
+  it("returns the admin-only refusal (e.g. ops_manager) as a failure, changing nothing", async () => {
+    mockRevalidatePath.mockClear();
+    mockSyncMaxGuests.mockRejectedValueOnce(
+      new Error("Only an admin can sync maximum guests from OwnerRez."),
+    );
+    expect(await syncMaxGuestsFromOwnerRezAction({ status: "idle" })).toEqual({
+      status: "failure",
+      error: "Only an admin can sync maximum guests from OwnerRez.",
+    });
+    expect(mockRevalidatePath).not.toHaveBeenCalled();
+  });
+
   it("returns an authored error message, but hides Prisma error detail", async () => {
     mockSyncMaxGuests.mockRejectedValueOnce(new Error("Forbidden"));
     expect(await syncMaxGuestsFromOwnerRezAction({ status: "idle" })).toEqual({

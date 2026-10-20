@@ -4,6 +4,7 @@ import { HttpRequestError } from "@stayw/integrations/core";
 import { OwnerrezRequestBudgetError } from "@stayw/integrations/ownerrez";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MAX_GUESTS_SYNC_ADMIN_ONLY_ERROR } from "./max-guests-sync-access";
 import {
   MAX_GUESTS_SYNC_AUDIT_ACTION,
   syncMaxGuestsFromOwnerRez,
@@ -11,6 +12,7 @@ import {
 } from "./ownerrez-max-guests-sync.service";
 
 import { recordAudit } from "@/platform/audit/record-audit";
+import { hasGlobalRole } from "@/platform/auth/is-global-admin";
 
 const m = vi.hoisted(() => ({
   getProperty: vi.fn(),
@@ -34,7 +36,14 @@ vi.mock("@stayw/database", () => ({
   },
 }));
 
-vi.mock("@stayw/auth", () => ({ assertPermission: vi.fn() }));
+vi.mock("@stayw/auth", () => ({
+  assertPermission: vi.fn(),
+  hasPermission: vi.fn(),
+}));
+
+// The real admin-only check (max-guests-sync-access.ts) runs; only the
+// global-role lookup is stubbed — true = global admin (the default here).
+vi.mock("@/platform/auth/is-global-admin", () => ({ hasGlobalRole: vi.fn() }));
 
 vi.mock("@/platform/audit/record-audit", () => ({ recordAudit: vi.fn() }));
 
@@ -108,6 +117,7 @@ beforeEach(() => {
   m.clientOptions.length = 0;
   process.env.OWNERREZ_USERNAME = "fabricated-user";
   process.env.OWNERREZ_API_TOKEN = "fabricated-token";
+  vi.mocked(hasGlobalRole).mockResolvedValue(true);
   m.tx.property.updateMany.mockResolvedValue({ count: 1 });
   vi.mocked(prisma.$transaction).mockImplementation((async (
     fn: (tx: unknown) => unknown,
@@ -143,6 +153,28 @@ describe("syncMaxGuestsFromOwnerRez", () => {
     expect(assertPermission).toHaveBeenCalledWith(actor, "properties:update");
     expect(prisma.property.findMany).not.toHaveBeenCalled();
     expect(m.getProperty).not.toHaveBeenCalled();
+  });
+
+  it("is admin only: refuses ops_manager (properties:update but no global admin role) before any read or OwnerRez client", async () => {
+    vi.mocked(hasGlobalRole).mockResolvedValueOnce(false);
+
+    await expect(syncMaxGuestsFromOwnerRez(actor)).rejects.toThrow(
+      MAX_GUESTS_SYNC_ADMIN_ONLY_ERROR,
+    );
+    expect(assertPermission).toHaveBeenCalledWith(actor, "properties:update");
+    expect(hasGlobalRole).toHaveBeenCalledWith(actor, ["admin"]);
+    expect(prisma.property.findMany).not.toHaveBeenCalled();
+    expect(m.clientOptions).toHaveLength(0);
+    expect(m.getProperty).not.toHaveBeenCalled();
+    expect(m.tx.property.updateMany).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+
+  it("runs for a global admin", async () => {
+    vi.mocked(prisma.property.findMany).mockResolvedValueOnce([]);
+    const result = await syncMaxGuestsFromOwnerRez(actor);
+    expect(hasGlobalRole).toHaveBeenCalledWith(actor, ["admin"]);
+    expect(result).toMatchObject({ configured: true, counts: ZERO_COUNTS });
   });
 
   it("returns not configured without credentials and makes no request", async () => {

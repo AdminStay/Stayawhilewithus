@@ -13,6 +13,7 @@ import {
   propertyStatusFilterCounts,
   type PropertyStatusFilter,
 } from "@/domains/properties/lib/property-status-filter";
+import { canSyncMaxGuests } from "@/domains/properties/services/max-guests-sync-access";
 import { listProperties } from "@/domains/properties/services/properties.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
@@ -41,10 +42,10 @@ export default async function PropertiesPage({
 }) {
   const actor = await getCurrentUser();
   const filter = parsePropertyStatusFilter((await searchParams).status);
-  const [properties, canReadCleaners, canUpdateProperties] = await Promise.all([
+  const [properties, canReadCleaners, canSyncMaxGuestsNow] = await Promise.all([
     listProperties(actor),
     hasPermission(actor, "cleaners:read"),
-    hasPermission(actor, "properties:update"),
+    canSyncMaxGuests(actor),
   ]);
   // The "Cleaner" column only exists for someone who can see cleaners.
   const cleanerSummaries = canReadCleaners
@@ -61,8 +62,9 @@ export default async function PropertiesPage({
         subtitle={`${counts.operational} operational ${counts.operational === 1 ? "property" : "properties"} under management`}
         actions={
           <div className="flex items-start gap-2">
-            {/* 2026-10-21: max guests comes from OwnerRez (Kenny). */}
-            {canUpdateProperties && (
+            {/* 2026-10-21: max guests comes from OwnerRez (Kenny). Admins
+                only — the sync service enforces the same rule. */}
+            {canSyncMaxGuestsNow && (
               <SyncMaxGuestsButton action={syncMaxGuestsFromOwnerRezAction} />
             )}
             <DialogTrigger label="Add property" title="Add property">

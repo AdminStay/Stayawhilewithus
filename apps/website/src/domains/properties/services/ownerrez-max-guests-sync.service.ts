@@ -1,12 +1,13 @@
 import "server-only";
 
-import { assertPermission, type AuthContext } from "@stayw/auth";
+import type { AuthContext } from "@stayw/auth";
 import { prisma } from "@stayw/database";
 import {
   OwnerrezClient,
   OwnerrezRequestBudgetError,
 } from "@stayw/integrations/ownerrez";
 
+import { assertCanSyncMaxGuests } from "./max-guests-sync-access";
 import { getOwnerRezCredentials } from "./ownerrez-match-report.service";
 
 import { recordAudit } from "@/platform/audit/record-audit";
@@ -98,8 +99,9 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
 /**
  * OwnerRez → StayWhile maximum-guest sync (2026-10-21). Kenny's rule:
  * maximum guest count comes from OwnerRez, because it changes over time.
- * Manually triggered by an admin from /properties; gated by
- * `properties:update`.
+ * Manually triggered by an admin from /properties. Admins only:
+ * `properties:update` AND the global admin role (assertCanSyncMaxGuests —
+ * ops_manager holds properties:update but can't run this).
  *
  * Scope is deliberately one field: for every non-deleted Property linked to
  * OwnerRez (exact `ownerRezPropertyId`), one `GET /properties/{id}`, then
@@ -128,7 +130,7 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
 export async function syncMaxGuestsFromOwnerRez(
   actor: AuthContext,
 ): Promise<MaxGuestsSyncResult> {
-  await assertPermission(actor, "properties:update");
+  await assertCanSyncMaxGuests(actor);
 
   const credentials = getOwnerRezCredentials();
   if (!credentials) return { configured: false };
