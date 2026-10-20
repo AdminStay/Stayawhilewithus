@@ -34,17 +34,26 @@ function renderWith(state: SyncMaxGuestsActionState, pending = false) {
 // FABRICATED TEST FIXTURES — not real StayWhile properties.
 const result = (
   n: number,
-  outcome: "updated" | "unchanged" | "skipped_blank" | "failed",
+  outcome:
+    | "updated"
+    | "unchanged"
+    | "skipped_blank"
+    | "failed"
+    | "not_checked"
+    | "changed_during_sync",
   before: number,
   after: number,
-  reason?: "rate_limited" | "request_failed",
+  extra: {
+    reason?: "rate_limited" | "request_failed";
+    ownerRezValue?: number;
+  } = {},
 ) => ({
   propertyId: `p${n}`,
   propertyName: `FABRICATED Property ${n}`,
   outcome,
   before,
   after,
-  ...(reason ? { reason } : {}),
+  ...extra,
 });
 
 describe("SyncMaxGuestsButton", () => {
@@ -72,12 +81,12 @@ describe("SyncMaxGuestsButton", () => {
         result(1, "updated", 12, 14),
         result(2, "unchanged", 8, 8),
         result(3, "skipped_blank", 10, 10),
-        result(4, "failed", 6, 6, "request_failed"),
+        result(4, "failed", 6, 6, { reason: "request_failed" }),
       ],
     });
     const summary = screen.getByRole("status").textContent ?? "";
     expect(summary).toContain(
-      "1 updated, 1 unchanged, 1 skipped (blank in OwnerRez), 1 failed",
+      "1 updated, 1 unchanged, 1 skipped (blank in OwnerRez), 1 failed, 0 not checked.",
     );
     expect(summary).toContain("FABRICATED Property 1: 12 → 14");
     expect(summary).toContain(
@@ -90,14 +99,54 @@ describe("SyncMaxGuestsButton", () => {
     expect(summary).not.toContain("FABRICATED Property 2");
   });
 
-  it("says when OwnerRez's request limit stopped the run", () => {
+  it("counts not-checked separately from failed, and says they weren't attempted", () => {
     renderWith({
       status: "success",
       rateLimited: true,
-      results: [result(1, "failed", 8, 8, "rate_limited")],
+      results: [
+        result(1, "updated", 8, 10),
+        result(2, "failed", 8, 8, { reason: "rate_limited" }),
+        result(3, "not_checked", 8, 8),
+        result(4, "not_checked", 6, 6),
+      ],
     });
-    expect(screen.getByRole("status").textContent).toContain(
-      "request limit was reached",
+    const summary = screen.getByRole("status").textContent ?? "";
+    expect(summary).toContain(
+      "1 updated, 0 unchanged, 0 skipped (blank in OwnerRez), 1 failed, 2 not checked.",
+    );
+    expect(summary).toContain(
+      "request limit stopped the run: 2 properties were not attempted and kept their current value",
+    );
+    expect(summary).toContain(
+      "FABRICATED Property 2: not changed — OwnerRez answered with its request limit (HTTP 429)",
+    );
+    expect(summary).toContain("FABRICATED Property 3: not checked — kept 8");
+    expect(summary).toContain("FABRICATED Property 4: not checked — kept 6");
+  });
+
+  it("only mentions not-attempted properties when there are some", () => {
+    renderWith({
+      status: "success",
+      rateLimited: true,
+      results: [result(1, "failed", 8, 8, { reason: "rate_limited" })],
+    });
+    expect(screen.getByRole("status").textContent).not.toContain(
+      "not attempted",
+    );
+  });
+
+  it("reports a property that changed during the sync, with OwnerRez's value", () => {
+    renderWith({
+      status: "success",
+      rateLimited: false,
+      results: [
+        result(1, "changed_during_sync", 12, 12, { ownerRezValue: 14 }),
+      ],
+    });
+    const summary = screen.getByRole("status").textContent ?? "";
+    expect(summary).toContain("0 not checked, 1 changed during sync.");
+    expect(summary).toContain(
+      "FABRICATED Property 1: not changed — it changed in StayWhile during the sync (OwnerRez has 14). Run the sync again.",
     );
   });
 

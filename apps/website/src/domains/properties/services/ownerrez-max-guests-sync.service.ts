@@ -22,11 +22,31 @@ export const MAX_GUESTS_SYNC_AUDIT_ACTION =
  * - `unchanged`: already equal; nothing written.
  * - `skipped_blank`: OwnerRez has no max_guests (or not a whole number ≥ 1);
  *   StayWhile's value is kept as-is.
- * - `failed`: OwnerRez couldn't be read for this property, the link id is
- *   invalid, or the write failed; nothing written for it.
+ * - `failed`: this property was actually requested (or its link id is
+ *   invalid) and the read or the save failed — including OwnerRez answering
+ *   it with HTTP 429; nothing written for it.
+ * - `not_checked`: never requested, because an earlier HTTP 429 stopped the
+ *   run; nothing written for it.
+ * - `changed_during_sync`: OwnerRez differed, but the property changed in
+ *   StayWhile (max guests, OwnerRez link, or deleted) after this run read
+ *   it, so nothing was written and nothing audited.
  */
 export type MaxGuestsSyncOutcome =
-  "updated" | "unchanged" | "skipped_blank" | "failed";
+  | "updated"
+  | "unchanged"
+  | "skipped_blank"
+  | "failed"
+  | "not_checked"
+  | "changed_during_sync";
+
+export const MAX_GUESTS_SYNC_OUTCOMES: readonly MaxGuestsSyncOutcome[] = [
+  "updated",
+  "unchanged",
+  "skipped_blank",
+  "failed",
+  "not_checked",
+  "changed_during_sync",
+];
 
 export type MaxGuestsSyncFailureReason =
   "invalid_link_id" | "rate_limited" | "request_failed" | "update_failed";
@@ -37,8 +57,10 @@ export interface MaxGuestsSyncPropertyResult {
   outcome: MaxGuestsSyncOutcome;
   /** StayWhile's maxOccupancy before this run. */
   before: number;
-  /** maxOccupancy after this run (equal to `before` unless updated). */
+  /** The value this run left in place: equal to `before` unless updated. */
   after: number;
+  /** OwnerRez's usable value, when one was read. */
+  ownerRezValue?: number;
   reason?: MaxGuestsSyncFailureReason;
 }
 
@@ -91,10 +113,17 @@ function chunk<T>(items: readonly T[], size: number): T[][] {
  * read, or an invalid link id leaves the property untouched. A property is
  * updated — and audited, with before/after — only when the value actually
  * differs. Reads run in batches of DETAIL_CONCURRENCY with a request budget
- * of one per property; after an HTTP 429 the client refuses every further
- * request, so the rest are reported as failed (rate limited), never retried.
+ * of one per property. Every request in a batch is sent together, so a
+ * property in the batch that received HTTP 429 is `failed` (rate limited);
+ * once a 429 is seen no further batch is requested, and those properties
+ * are `not_checked` — never retried.
+ *
  * Writes run one at a time after the reads, and one property's failure
- * never affects another's.
+ * never affects another's. Each save is conditional on the property being
+ * exactly as this run read it (still undeleted, same OwnerRez link, same
+ * maxOccupancy); otherwise it's `changed_during_sync`, with no write and
+ * no audit entry, so a concurrent change is never overwritten and no audit
+ * entry ever records a stale "before".
  */
 export async function syncMaxGuestsFromOwnerRez(
   actor: AuthContext,
@@ -128,9 +157,18 @@ export async function syncMaxGuestsFromOwnerRez(
   });
   const maxGuestsById = new Map<
     number,
-    { value: number | null } | { reason: MaxGuestsSyncFailureReason }
+    | { value: number | null }
+    | { reason: MaxGuestsSyncFailureReason }
+    | { notChecked: true }
   >();
   for (const batch of chunk(requestable, DETAIL_CONCURRENCY)) {
+    // 429 breaker: nothing further is requested once OwnerRez has asked us
+    // to slow down.
+    if (client.usage.rateLimited) {
+      for (const l of batch)
+        maxGuestsById.set(l.ownerRezId!, { notChecked: true });
+      continue;
+    }
     const settled = await Promise.allSettled(
       batch.map((l) => client.getProperty(l.ownerRezId!)),
     );
@@ -162,6 +200,10 @@ export async function syncMaxGuestsFromOwnerRez(
         ? ({ reason: "invalid_link_id" } as const)
         : maxGuestsById.get(ownerRezId)!;
 
+    if ("notChecked" in fetched) {
+      results.push({ ...base, outcome: "not_checked" });
+      continue;
+    }
     if ("reason" in fetched) {
       results.push({ ...base, outcome: "failed", reason: fetched.reason });
       continue;
@@ -171,18 +213,34 @@ export async function syncMaxGuestsFromOwnerRez(
       continue;
     }
     if (fetched.value === p.maxOccupancy) {
-      results.push({ ...base, outcome: "unchanged" });
+      results.push({
+        ...base,
+        ownerRezValue: fetched.value,
+        outcome: "unchanged",
+      });
       continue;
     }
 
     const value = fetched.value;
     try {
-      // Update + audit commit together, or neither does.
-      await prisma.$transaction(async (tx) => {
-        await tx.property.update({
-          where: { id: p.id },
+      // Update + audit commit together, or neither does. The update only
+      // matches the property exactly as read above; the audit is written
+      // only when exactly that one row changed.
+      const saved = await prisma.$transaction(async (tx) => {
+        const { count } = await tx.property.updateMany({
+          where: {
+            id: p.id,
+            deletedAt: null,
+            ownerRezPropertyId: p.ownerRezPropertyId,
+            maxOccupancy: p.maxOccupancy,
+          },
           data: { maxOccupancy: value },
         });
+        if (count === 0) return false;
+        if (count !== 1) {
+          // Unreachable (id is unique); roll back rather than audit it.
+          throw new Error(`Unexpected update count ${count}`);
+        }
         await recordAudit(
           {
             actorUserId: actor.userId,
@@ -198,19 +256,26 @@ export async function syncMaxGuestsFromOwnerRez(
           },
           tx,
         );
+        return true;
       });
-      results.push({ ...base, after: value, outcome: "updated" });
+      results.push(
+        saved
+          ? { ...base, after: value, ownerRezValue: value, outcome: "updated" }
+          : { ...base, ownerRezValue: value, outcome: "changed_during_sync" },
+      );
     } catch {
-      results.push({ ...base, outcome: "failed", reason: "update_failed" });
+      results.push({
+        ...base,
+        ownerRezValue: value,
+        outcome: "failed",
+        reason: "update_failed",
+      });
     }
   }
 
-  const counts: Record<MaxGuestsSyncOutcome, number> = {
-    updated: 0,
-    unchanged: 0,
-    skipped_blank: 0,
-    failed: 0,
-  };
+  const counts = Object.fromEntries(
+    MAX_GUESTS_SYNC_OUTCOMES.map((o) => [o, 0]),
+  ) as Record<MaxGuestsSyncOutcome, number>;
   for (const r of results) counts[r.outcome]++;
 
   // Counts only — no property names or values in logs.

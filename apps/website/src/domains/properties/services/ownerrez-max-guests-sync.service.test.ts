@@ -16,7 +16,7 @@ const m = vi.hoisted(() => ({
   getProperty: vi.fn(),
   usage: { rateLimited: false },
   clientOptions: [] as unknown[],
-  tx: { property: { update: vi.fn() }, auditLog: { create: vi.fn() } },
+  tx: { property: { updateMany: vi.fn() }, auditLog: { create: vi.fn() } },
 }));
 
 vi.mock("@stayw/database", () => ({
@@ -56,6 +56,15 @@ vi.mock("@stayw/integrations/ownerrez", async (importOriginal) => {
 });
 
 const actor = { userId: "user-1" };
+
+const ZERO_COUNTS = {
+  updated: 0,
+  unchanged: 0,
+  skipped_blank: 0,
+  failed: 0,
+  not_checked: 0,
+  changed_during_sync: 0,
+};
 const ORIGINAL_ENV = { ...process.env };
 let logSpy: ReturnType<typeof vi.spyOn>;
 
@@ -99,6 +108,7 @@ beforeEach(() => {
   m.clientOptions.length = 0;
   process.env.OWNERREZ_USERNAME = "fabricated-user";
   process.env.OWNERREZ_API_TOKEN = "fabricated-token";
+  m.tx.property.updateMany.mockResolvedValue({ count: 1 });
   vi.mocked(prisma.$transaction).mockImplementation((async (
     fn: (tx: unknown) => unknown,
   ) => fn(m.tx)) as never);
@@ -162,9 +172,15 @@ describe("syncMaxGuestsFromOwnerRez", () => {
 
     const result = await syncMaxGuestsFromOwnerRez(actor);
 
-    expect(m.tx.property.update).toHaveBeenCalledTimes(1);
-    expect(m.tx.property.update).toHaveBeenCalledWith({
-      where: { id: "00000000-0000-4000-8000-000000000001" },
+    expect(m.tx.property.updateMany).toHaveBeenCalledTimes(1);
+    // Conditional on the property being exactly as it was read.
+    expect(m.tx.property.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "00000000-0000-4000-8000-000000000001",
+        deletedAt: null,
+        ownerRezPropertyId: "900001",
+        maxOccupancy: 12,
+      },
       data: { maxOccupancy: 14 },
     });
     expect(recordAudit).toHaveBeenCalledWith(
@@ -180,10 +196,11 @@ describe("syncMaxGuestsFromOwnerRez", () => {
     );
     // Never written outside the transaction.
     expect(prisma.property.update).not.toHaveBeenCalled();
+    expect(prisma.property.updateMany).not.toHaveBeenCalled();
     expect(result).toEqual({
       configured: true,
       rateLimited: false,
-      counts: { updated: 1, unchanged: 0, skipped_blank: 0, failed: 0 },
+      counts: { ...ZERO_COUNTS, updated: 1 },
       results: [
         {
           propertyId: "00000000-0000-4000-8000-000000000001",
@@ -191,6 +208,7 @@ describe("syncMaxGuestsFromOwnerRez", () => {
           outcome: "updated",
           before: 12,
           after: 14,
+          ownerRezValue: 14,
         },
       ],
     });
@@ -207,7 +225,7 @@ describe("syncMaxGuestsFromOwnerRez", () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(recordAudit).not.toHaveBeenCalled();
     expect(result).toMatchObject({
-      counts: { updated: 0, unchanged: 1, skipped_blank: 0, failed: 0 },
+      counts: { ...ZERO_COUNTS, unchanged: 1 },
       results: [{ outcome: "unchanged", before: 10, after: 10 }],
     });
   });
@@ -244,10 +262,12 @@ describe("syncMaxGuestsFromOwnerRez", () => {
     const result = await syncMaxGuestsFromOwnerRez(actor);
 
     // The failure doesn't stop the other property's update.
-    expect(m.tx.property.update).toHaveBeenCalledTimes(1);
-    expect(m.tx.property.update).toHaveBeenCalledWith(
+    expect(m.tx.property.updateMany).toHaveBeenCalledTimes(1);
+    expect(m.tx.property.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: "00000000-0000-4000-8000-000000000002" },
+        where: expect.objectContaining({
+          id: "00000000-0000-4000-8000-000000000002",
+        }),
       }),
     );
     expect(result).toMatchObject({
@@ -259,13 +279,13 @@ describe("syncMaxGuestsFromOwnerRez", () => {
     });
   });
 
-  it("reports the rest as rate limited after a 429, without retrying", async () => {
+  it("a 429 in the final batch is failed (it was requested), with nothing marked not checked", async () => {
     vi.mocked(prisma.property.findMany).mockResolvedValueOnce([
       fabricatedProperty(1),
     ] as never);
-    m.usage.rateLimited = true;
-    detailsByOwnerRezId({
-      900001: new OwnerrezRequestBudgetError("RATE_LIMITED"),
+    m.getProperty.mockImplementation(async () => {
+      m.usage.rateLimited = true;
+      throw new OwnerrezRequestBudgetError("RATE_LIMITED");
     });
 
     const result = await syncMaxGuestsFromOwnerRez(actor);
@@ -274,7 +294,116 @@ describe("syncMaxGuestsFromOwnerRez", () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       rateLimited: true,
+      counts: { ...ZERO_COUNTS, failed: 1 },
       results: [{ outcome: "failed", reason: "rate_limited" }],
+    });
+  });
+
+  it("after a 429: in-flight requests in that batch are still applied, the 429'd one is failed, and later properties are not checked (never requested)", async () => {
+    // 7 properties = batch of 5 (1–5) + batch of 2 (6–7). All of batch 1 is
+    // in flight together; OwnerRez answers #3 with 429.
+    vi.mocked(prisma.property.findMany).mockResolvedValueOnce([
+      fabricatedProperty(1, { maxOccupancy: 8 }),
+      fabricatedProperty(2, { maxOccupancy: 8 }),
+      fabricatedProperty(3, { maxOccupancy: 8 }),
+      fabricatedProperty(4, { maxOccupancy: 8 }),
+      fabricatedProperty(5, { maxOccupancy: 8 }),
+      fabricatedProperty(6, { maxOccupancy: 8 }),
+      fabricatedProperty(7, { maxOccupancy: 8 }),
+    ] as never);
+    m.getProperty.mockImplementation(async (id: number) => {
+      if (id === 900003) {
+        m.usage.rateLimited = true;
+        throw new OwnerrezRequestBudgetError("RATE_LIMITED");
+      }
+      return fabricatedDetail(id - 900000, id === 900001 ? 10 : 8);
+    });
+
+    const result = await syncMaxGuestsFromOwnerRez(actor);
+
+    expect(m.getProperty.mock.calls.map(([id]) => id)).toEqual([
+      900001, 900002, 900003, 900004, 900005,
+    ]);
+    expect(m.tx.property.updateMany).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      rateLimited: true,
+      counts: {
+        ...ZERO_COUNTS,
+        updated: 1,
+        unchanged: 3,
+        failed: 1,
+        not_checked: 2,
+      },
+      results: [
+        { outcome: "updated", before: 8, after: 10 },
+        { outcome: "unchanged" },
+        { outcome: "failed", reason: "rate_limited" },
+        { outcome: "unchanged" },
+        { outcome: "unchanged" },
+        { outcome: "not_checked", before: 8, after: 8 },
+        { outcome: "not_checked", before: 8, after: 8 },
+      ],
+    });
+    const notChecked = (
+      result as { results: { reason?: string; outcome: string }[] }
+    ).results.filter((r) => r.outcome === "not_checked");
+    expect(notChecked.every((r) => r.reason === undefined)).toBe(true);
+  });
+
+  it("does not overwrite a concurrent change: no matching row means changed_during_sync, no audit", async () => {
+    vi.mocked(prisma.property.findMany).mockResolvedValueOnce([
+      fabricatedProperty(1, { maxOccupancy: 12 }),
+      fabricatedProperty(2, { maxOccupancy: 4 }),
+    ] as never);
+    detailsByOwnerRezId({
+      900001: fabricatedDetail(1, 14),
+      900002: fabricatedDetail(2, 6),
+    });
+    // #1 was changed (max guests edited, relinked or deleted) after the
+    // read, so the conditional update matches nothing.
+    m.tx.property.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    const result = await syncMaxGuestsFromOwnerRez(actor);
+
+    expect(recordAudit).toHaveBeenCalledTimes(1);
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityId: "00000000-0000-4000-8000-000000000002",
+      }),
+      m.tx,
+    );
+    expect(recordAudit).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityId: "00000000-0000-4000-8000-000000000001",
+      }),
+      expect.anything(),
+    );
+    expect(result).toMatchObject({
+      counts: { ...ZERO_COUNTS, updated: 1, changed_during_sync: 1 },
+      results: [
+        {
+          outcome: "changed_during_sync",
+          before: 12,
+          after: 12,
+          ownerRezValue: 14,
+        },
+        { outcome: "updated", before: 4, after: 6 },
+      ],
+    });
+  });
+
+  it("rolls back without an audit entry if the update ever matched more than one row", async () => {
+    vi.mocked(prisma.property.findMany).mockResolvedValueOnce([
+      fabricatedProperty(1, { maxOccupancy: 12 }),
+    ] as never);
+    detailsByOwnerRezId({ 900001: fabricatedDetail(1, 14) });
+    m.tx.property.updateMany.mockResolvedValueOnce({ count: 2 });
+
+    const result = await syncMaxGuestsFromOwnerRez(actor);
+
+    expect(recordAudit).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      results: [{ outcome: "failed", reason: "update_failed", after: 12 }],
     });
   });
 
@@ -307,7 +436,7 @@ describe("syncMaxGuestsFromOwnerRez", () => {
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({
-      counts: { updated: 1, failed: 1 },
+      counts: { ...ZERO_COUNTS, updated: 1, failed: 1 },
       results: [
         { outcome: "failed", reason: "update_failed", before: 8, after: 8 },
         { outcome: "updated", before: 8, after: 9 },
