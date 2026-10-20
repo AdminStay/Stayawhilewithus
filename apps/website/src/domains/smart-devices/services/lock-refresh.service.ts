@@ -9,6 +9,7 @@ import {
 } from "@stayw/integrations/august";
 import { HttpRequestError } from "@stayw/integrations/core";
 
+import { isAugustAuthFailure } from "../lib/august-auth";
 import { classifyAugustRequestError } from "../lib/august-command-diagnostics";
 import { buildLockHealthUpdate } from "../lib/lock-health";
 
@@ -211,6 +212,29 @@ export const AUGUST_RATE_LIMITED_MARKER = "AUGUST_RATE_LIMITED";
 export const AUGUST_NO_READINGS_MARKER = "AUGUST_NO_READINGS";
 
 /**
+ * Prefix of the errorMessage on a run August refused for authentication
+ * (2026-10-21) — after the expired-token outage of 2026-10-12 → 10-20,
+ * when every run kept requesting all 43 locks and getting HTTP 401.
+ *
+ * - Breaker: a batch with NO successful read and at least one account-auth
+ *   failure (isAugustAuthFailure(): a 401, or a 403 whose provider text
+ *   names a token/credential/session problem) stops the run; later batches
+ *   are not requested. A 403 without that text, or any failure in a batch
+ *   where another lock read fine, never stops it (device-specific).
+ * - Nothing is written for the failed reads: saved readings, status and
+ *   lastSeenAt stay as they were — no lock is marked offline.
+ * - Suppression: while the newest AUGUST_AUTH_FAILED run is newer than the
+ *   newest SUCCEEDED run, the AUTOMATIC paths (scheduled cron and
+ *   refresh-on-view) return `auth_required` without calling August.
+ *   Manual "Refresh all" still runs — that is the check after the login is
+ *   renewed — and costs at most one batch if the sign-in is still refused.
+ *   Recovery = any later SUCCEEDED run on the August connection.
+ * - 429 keeps priority: a batch that also saw a 429 is recorded as
+ *   AUGUST_RATE_LIMITED, exactly as before.
+ */
+export const AUGUST_AUTH_FAILED_MARKER = "AUGUST_AUTH_FAILED";
+
+/**
  * Sanitized count of failed lock reads per category (2026-10-14), e.g.
  * `{ http_401: 43 }`. Keys come only from readFailureCategory() — never an
  * error message, URL, lock id or provider text.
@@ -222,6 +246,10 @@ interface AugustRefreshRunResult extends AugustRefreshResult {
   rateLimited: boolean;
   /** Eligible locks never requested because the run stopped after a 429. */
   skippedAfterRateLimit: number;
+  /** True when a batch established an August sign-in failure (and no 429); later batches were not requested. */
+  authFailed: boolean;
+  /** Eligible locks never requested because the run stopped (429 or auth failure). */
+  notRequested: number;
   /** Enabled, mapped locks this run set out to refresh. */
   eligible: number;
   readFailures: AugustReadFailureCounts;
@@ -327,6 +355,8 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshRunResult> {
       notReturnedByProvider: 0,
       rateLimited: false,
       skippedAfterRateLimit: 0,
+      authFailed: false,
+      notRequested: 0,
       eligible: 0,
       readFailures: {},
     };
@@ -342,6 +372,7 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshRunResult> {
   let refreshed = 0;
   let notReturnedByProvider = 0;
   let rateLimited = false;
+  let authFailed = false;
   let requested = 0;
   const readFailures: AugustReadFailureCounts = {};
   const countFailure = (category: string) => {
@@ -351,8 +382,10 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshRunResult> {
   for (const batch of chunk(eligibleDevices, AUGUST_DETAIL_CONCURRENCY)) {
     // 429 breaker: once August has asked us to slow down, no further batch
     // is requested. The batch that saw the 429 still has its successful
-    // readings written below.
-    if (rateLimited) break;
+    // readings written below. Auth breaker (2026-10-21): same, once a batch
+    // established that August refuses the sign-in itself — see
+    // AUGUST_AUTH_FAILED_MARKER.
+    if (rateLimited || authFailed) break;
     requested += batch.length;
     // Each settled outcome carries its own `device` reference (captured
     // before the awaited call, inside the same async arrow) rather than
@@ -366,6 +399,18 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshRunResult> {
         detail: await client.getLockDetail(device.externalDeviceId),
       })),
     );
+
+    // Account-wide sign-in refusal: nothing in this batch read fine, and at
+    // least one read was refused for authentication. One lock's 403 next
+    // to a successful read is device-specific and never stops the run.
+    if (
+      !settled.some((o) => o.status === "fulfilled") &&
+      settled.some(
+        (o) => o.status === "rejected" && isAugustAuthFailure(o.reason),
+      )
+    ) {
+      authFailed = true;
+    }
 
     const writes: Prisma.PrismaPromise<unknown>[] = [];
     let batchRefreshed = 0;
@@ -465,7 +510,10 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshRunResult> {
     }
   }
 
-  const skippedAfterRateLimit = eligibleDevices.length - requested;
+  const notRequested = eligibleDevices.length - requested;
+  const skippedAfterRateLimit = rateLimited ? notRequested : 0;
+  // 429 keeps priority (its cooldown is the existing, tested behavior).
+  if (rateLimited) authFailed = false;
   logLockRefresh("august_refresh_completed", {
     eligible: eligibleDevices.length,
     refreshed,
@@ -473,6 +521,8 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshRunResult> {
     readFailures,
     rateLimited,
     skippedAfterRateLimit,
+    authFailed,
+    notRequested,
   });
 
   return {
@@ -480,6 +530,8 @@ async function runAugustTelemetryRefresh(): Promise<AugustRefreshRunResult> {
     notReturnedByProvider,
     rateLimited,
     skippedAfterRateLimit,
+    authFailed,
+    notRequested,
     eligible: eligibleDevices.length,
     readFailures,
   };
@@ -504,6 +556,19 @@ export type AugustRefreshOutcome =
     } & AugustRefreshResult)
   /** A recent 429 cooldown is active: August was not called. */
   | { status: "cooldown"; cooldownUntil: string }
+  /**
+   * August refused the sign-in this run (2026-10-21): the run stopped,
+   * `notRequested` locks weren't requested, nothing was written for the
+   * failed reads, and automatic refresh is suppressed until a refresh
+   * succeeds.
+   */
+  | ({
+      status: "auth_failed";
+      notRequested: number;
+      reason: string;
+    } & AugustRefreshResult)
+  /** Automatic paths only: the last run was AUGUST_AUTH_FAILED with no success since — August was not called. */
+  | { status: "auth_required"; authFailedAt: string }
   /** On-view only: a fleet refresh already started within the minimum interval. */
   | { status: "fresh"; lastStartedAt: string };
 
@@ -560,8 +625,43 @@ const INTEGRATION_SYNC_LOCK_NAME = "integration_sync";
  * the structural impossibility of reaching a lock/unlock/PIN endpoint from
  * this file (see this file's own dedicated source-level test).
  */
+/**
+ * When the August sign-in is currently known to be refused (2026-10-21):
+ * the finish time of the newest AUGUST_AUTH_FAILED run, if no run on the
+ * August connection has SUCCEEDED since; otherwise null. Read-only.
+ */
+async function findAugustAuthBlock(
+  db: Pick<Prisma.TransactionClient, "integrationSyncLog">,
+  connectionId: string,
+): Promise<Date | null> {
+  const authFailed = await db.integrationSyncLog.findFirst({
+    where: {
+      integrationConnectionId: connectionId,
+      status: "FAILED",
+      errorMessage: { startsWith: AUGUST_AUTH_FAILED_MARKER },
+      finishedAt: { not: null },
+    },
+    orderBy: { finishedAt: "desc" },
+    select: { finishedAt: true },
+  });
+  if (!authFailed?.finishedAt) return null;
+  const recovered = await db.integrationSyncLog.findFirst({
+    where: {
+      integrationConnectionId: connectionId,
+      status: "SUCCEEDED",
+      finishedAt: { gt: authFailed.finishedAt },
+    },
+    select: { id: true },
+  });
+  return recovered ? null : authFailed.finishedAt;
+}
+
 async function runGuardedAugustTelemetryRefresh(
-  options: { minIntervalMs?: number } = {},
+  options: {
+    minIntervalMs?: number;
+    /** Automatic paths (cron, refresh-on-view): don't call August while an AUGUST_AUTH_FAILED is unrecovered. */
+    suppressAfterAuthFailure?: boolean;
+  } = {},
 ): Promise<AugustRefreshOutcome> {
   await ensureConnectionRows();
   const connection = await prisma.integrationConnection.findUniqueOrThrow({
@@ -602,6 +702,18 @@ async function runGuardedAugustTelemetryRefresh(
     // are checked inside the same advisory-locked claim, so two viewers
     // arriving together can never both start a run.
     const now = Date.now();
+    if (options.suppressAfterAuthFailure) {
+      const authFailedAt = await findAugustAuthBlock(tx, connection.id);
+      if (authFailedAt) {
+        return {
+          proceeding: false,
+          outcome: {
+            status: "auth_required",
+            authFailedAt: authFailedAt.toISOString(),
+          },
+        } as const;
+      }
+    }
     const rateLimited = await tx.integrationSyncLog.findFirst({
       where: {
         integrationConnectionId: connection.id,
@@ -665,6 +777,8 @@ async function runGuardedAugustTelemetryRefresh(
     const {
       rateLimited,
       skippedAfterRateLimit,
+      authFailed,
+      notRequested,
       eligible,
       readFailures,
       ...result
@@ -699,6 +813,25 @@ async function runGuardedAugustTelemetryRefresh(
       };
     }
 
+    if (authFailed) {
+      const reason = `${AUGUST_AUTH_FAILED_MARKER}: August refused the sign-in (${formatReadFailures(readFailures)}); ${notRequested} lock(s) not requested. Saved readings were kept. Automatic refresh is paused until a refresh succeeds.`;
+      await prisma.integrationSyncLog.update({
+        where: { id: claim.logId },
+        data: {
+          status: "FAILED",
+          recordsProcessed: result.refreshed,
+          errorMessage: reason,
+          finishedAt: new Date(),
+        },
+      });
+      logLockRefresh("august_guarded_refresh_auth_failed", {
+        eligible,
+        notReturnedByProvider: result.notReturnedByProvider,
+        readFailures,
+        notRequested,
+      });
+      return { status: "auth_failed", ...result, notRequested, reason };
+    }
     if (eligible > 0 && result.refreshed === 0) {
       // No eligible lock returned a reading (2026-10-14): a FAILED run, not
       // a 0-record success. lastSyncedAt/status are left alone (nothing was
@@ -784,7 +917,8 @@ export async function refreshAugustTelemetry(
  * protection against every other August refresh/sync path.
  */
 export async function refreshAugustTelemetryAutomatic(): Promise<AugustRefreshOutcome> {
-  return runGuardedAugustTelemetryRefresh();
+  // 2026-10-21: no August call while a sign-in failure is unrecovered.
+  return runGuardedAugustTelemetryRefresh({ suppressAfterAuthFailure: true });
 }
 
 /**
@@ -803,6 +937,7 @@ export async function refreshAugustTelemetryIfStale(
   await assertPermission(actor, "smart_devices:read");
   return runGuardedAugustTelemetryRefresh({
     minIntervalMs: LOCK_REFRESH_ON_VIEW_MIN_INTERVAL_MS,
+    suppressAfterAuthFailure: true,
   });
 }
 
@@ -811,6 +946,8 @@ export interface AugustRefreshFreshness {
   lastSucceededAt: string | null;
   /** End of an active 429 cooldown, or null. */
   cooldownUntil: string | null;
+  /** When August last refused the sign-in, while no refresh has succeeded since (2026-10-21); null otherwise. */
+  authFailedAt: string | null;
 }
 
 /**
@@ -825,9 +962,11 @@ export async function getAugustRefreshFreshness(
     where: { provider: "AUGUST" },
     select: { id: true },
   });
-  if (!connection) return { lastSucceededAt: null, cooldownUntil: null };
+  if (!connection) {
+    return { lastSucceededAt: null, cooldownUntil: null, authFailedAt: null };
+  }
 
-  const [succeeded, rateLimited] = await Promise.all([
+  const [succeeded, rateLimited, authFailedAt] = await Promise.all([
     prisma.integrationSyncLog.findFirst({
       where: { integrationConnectionId: connection.id, status: "SUCCEEDED" },
       orderBy: { finishedAt: "desc" },
@@ -845,6 +984,7 @@ export async function getAugustRefreshFreshness(
       orderBy: { finishedAt: "desc" },
       select: { finishedAt: true },
     }),
+    findAugustAuthBlock(prisma, connection.id),
   ]);
   return {
     lastSucceededAt: succeeded?.finishedAt?.toISOString() ?? null,
@@ -853,5 +993,25 @@ export async function getAugustRefreshFreshness(
           rateLimited.finishedAt.getTime() + AUGUST_RATE_LIMIT_COOLDOWN_MS,
         ).toISOString()
       : null,
+    authFailedAt: authFailedAt?.toISOString() ?? null,
   };
+}
+
+/**
+ * For /integrations (2026-10-21): when August last refused the sign-in,
+ * if no refresh has succeeded since; otherwise null. Read-only, and never
+ * creates the connection row.
+ */
+export async function getAugustAuthFailedAt(
+  actor: AuthContext,
+): Promise<string | null> {
+  await assertPermission(actor, "integrations:read");
+  const connection = await prisma.integrationConnection.findUnique({
+    where: { provider: "AUGUST" },
+    select: { id: true },
+  });
+  if (!connection) return null;
+  return (
+    (await findAugustAuthBlock(prisma, connection.id))?.toISOString() ?? null
+  );
 }

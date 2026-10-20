@@ -4,6 +4,7 @@ import { Clock } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { AUGUST_AUTO_REFRESH_PAUSED_MESSAGE } from "../lib/august-reauthorization";
 import { formatTimestamp } from "../lib/format-timestamp";
 
 /** How often an open, visible /locks page asks the server whether a refresh is due. The server's own 10-minute gate decides. */
@@ -15,6 +16,8 @@ interface RefreshIfStaleResponse {
   status: string;
   lastSucceededAt: string | null;
   cooldownUntil: string | null;
+  /** Set while August's sign-in is refused and nothing has succeeded since (2026-10-21). */
+  authFailedAt?: string | null;
 }
 
 function formatAge(ms: number): string {
@@ -30,17 +33,22 @@ function formatAge(ms: number): string {
  * tab visible, asks POST /api/locks/refresh-if-stale on load and every
  * minute; the server starts a read-only fleet refresh only when none has
  * started in 10 minutes (global, whatever the number of viewers), and never
- * during a 429 cooldown. When a refresh completes, the page data reloads.
+ * during a 429 cooldown — nor, after August refused the sign-in, until a
+ * refresh succeeds (2026-10-21; the server returns `auth_required` and this
+ * shows the re-authorization message). When a refresh completes, the page
+ * data reloads.
  * Never part of the page render, never a command, no request body.
  */
 export function LockAutoRefresh({
   initialLastSucceededAt,
   initialCooldownUntil,
+  initialAuthFailedAt = null,
   endpoint = "/api/locks/refresh-if-stale",
   pollIntervalMs = LOCK_AUTO_REFRESH_POLL_MS,
 }: {
   initialLastSucceededAt: string | null;
   initialCooldownUntil: string | null;
+  initialAuthFailedAt?: string | null;
   endpoint?: string;
   pollIntervalMs?: number;
 }) {
@@ -49,6 +57,7 @@ export function LockAutoRefresh({
     initialLastSucceededAt,
   );
   const [cooldownUntil, setCooldownUntil] = useState(initialCooldownUntil);
+  const [authFailedAt, setAuthFailedAt] = useState(initialAuthFailedAt);
   // null until mounted: relative ages are client-only, so server and client
   // HTML match (the server renders the absolute time).
   const [now, setNow] = useState<number | null>(null);
@@ -65,7 +74,12 @@ export function LockAutoRefresh({
       const body = (await res.json()) as RefreshIfStaleResponse;
       setLastSucceededAt(body.lastSucceededAt);
       setCooldownUntil(body.cooldownUntil);
-      if (body.status === "completed" || body.status === "rate_limited") {
+      setAuthFailedAt(body.authFailedAt ?? null);
+      if (
+        body.status === "completed" ||
+        body.status === "rate_limited" ||
+        body.status === "auth_failed"
+      ) {
         router.refresh();
       }
     } catch {
@@ -114,7 +128,12 @@ export function LockAutoRefresh({
         {stale && " — may be out of date"}
       </span>
       {checking && <span className="text-ink-faint">· checking…</span>}
-      {cooling ? (
+      {authFailedAt !== null ? (
+        <span role="alert" className="font-medium text-error-500">
+          · {AUGUST_AUTO_REFRESH_PAUSED_MESSAGE} (Refused{" "}
+          {formatTimestamp(new Date(authFailedAt))}.)
+        </span>
+      ) : cooling ? (
         <span className="text-warning-600">
           · August asked us to slow down — auto-refresh paused until{" "}
           {formatTimestamp(new Date(cooldownUntil))}

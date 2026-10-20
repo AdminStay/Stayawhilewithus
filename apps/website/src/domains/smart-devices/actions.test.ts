@@ -544,6 +544,25 @@ describe("refreshAugustAction", () => {
     expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
   });
 
+  it("2026-10-21: August refused the sign-in → failure naming re-authorization and the not-requested count; /locks revalidated so the paused message shows", async () => {
+    mockRefreshAugustTelemetry.mockResolvedValueOnce({
+      status: "auth_failed",
+      refreshed: 0,
+      notReturnedByProvider: 5,
+      notRequested: 38,
+      reason: "AUGUST_AUTH_FAILED: …",
+    });
+
+    const result = await refreshAugustAction(IDLE_REFRESH);
+
+    expect(result).toEqual({
+      status: "failure",
+      error:
+        "August re-authorization required: August refused the sign-in. 38 locks were not requested. Saved lock readings were kept and automatic refresh is paused. Renew the August login, update the August settings in Vercel and redeploy, then press Refresh all on /locks.",
+    });
+    expect(mockRevalidatePath).toHaveBeenCalledWith("/locks");
+  });
+
   it("returns a failure state (not a thrown-error crash) when refreshAugustTelemetry() itself resolves with a sanitized failed outcome (e.g. August not configured), and does not revalidate", async () => {
     mockRefreshAugustTelemetry.mockResolvedValueOnce({
       status: "failed",

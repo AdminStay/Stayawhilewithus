@@ -320,6 +320,7 @@ export default async function LocksPage({
         <LockAutoRefresh
           initialLastSucceededAt={refreshFreshness.lastSucceededAt}
           initialCooldownUntil={refreshFreshness.cooldownUntil}
+          initialAuthFailedAt={refreshFreshness.authFailedAt}
         />
       </div>
       <div className="mb-4">
