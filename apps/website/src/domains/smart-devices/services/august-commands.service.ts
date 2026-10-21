@@ -11,6 +11,7 @@ import {
 } from "@stayw/integrations/august";
 import { HttpRequestError } from "@stayw/integrations/core";
 
+import { ACCOUNT_AUTH_HINT_PATTERN } from "../lib/august-auth";
 import {
   AUGUST_COMMAND_DIAGNOSTICS_VERSION,
   buildAckDiagnostics,
@@ -449,21 +450,9 @@ export function isAdminResetAvailable(
   return lastOutcome === "FAILED" || lastOutcome === "AMBIGUOUS";
 }
 
-/**
- * A 403 alone is ambiguous: August returns it both for a genuinely
- * unauthorized/expired connection AND for a specific device/operation it
- * refuses for other reasons (2026-09-18 incident: MJ - Front Door's
- * remote-operate LOCK returned 403 while the account's other locks and
- * MJ's own read-only status/capability calls kept working fine on the same
- * credential — see august-commands investigation notes). Collapsing every
- * 403 into "re-authorize the connection" is actively misleading in that
- * case: there is nothing to re-authorize account-wide, and telling an
- * operator to do so sends them chasing the wrong fix. Only escalate to the
- * account-wide message when the provider's own error body says something
- * that actually sounds like a credential/session problem; otherwise report
- * this as a device-specific refusal.
- */
-const ACCOUNT_AUTH_HINT_PATTERN = /token|credential|unauthor|session|re.?auth/i;
+// A 403 alone is ambiguous (account-wide vs device-specific) — see
+// ACCOUNT_AUTH_HINT_PATTERN in ../lib/august-auth.ts (moved there unchanged
+// 2026-10-21 so the bulk-refresh auth breaker uses the same rule).
 
 /**
  * Translates a raw provider/HTTP error into a message safe to show a user —

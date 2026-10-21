@@ -128,8 +128,10 @@ import { prisma } from "@stayw/database";
 import { HttpRequestError } from "@stayw/integrations/core";
 
 import {
+  AUGUST_AUTH_FAILED_MARKER,
   AUGUST_RATE_LIMIT_COOLDOWN_MS,
   AUGUST_RATE_LIMITED_MARKER,
+  getAugustAuthFailedAt,
   getAugustRefreshFreshness,
   LOCK_REFRESH_ON_VIEW_MIN_INTERVAL_MS,
   mergeAugustLockMetadata,
@@ -1273,7 +1275,7 @@ describe("refresh-on-view gate + 429 breaker/cooldown (2026-09-27)", () => {
     integrationConnectionId?: string;
     status?: string;
     errorMessage?: { startsWith: string };
-    finishedAt?: { gte: Date };
+    finishedAt?: { gte?: Date; gt?: Date; not?: null };
     startedAt?: { gte: Date };
   };
   interface Log {
@@ -1293,11 +1295,12 @@ describe("refresh-on-view gate + 429 breaker/cooldown (2026-09-27)", () => {
       !(log.errorMessage ?? "").startsWith(where.errorMessage.startsWith)
     )
       return false;
-    if (
-      where.finishedAt &&
-      !(log.finishedAt && log.finishedAt >= where.finishedAt.gte)
-    )
-      return false;
+    if (where.finishedAt) {
+      const { gte, gt } = where.finishedAt;
+      if (!log.finishedAt) return false;
+      if (gte && !(log.finishedAt >= gte)) return false;
+      if (gt && !(log.finishedAt > gt)) return false;
+    }
     if (where.startedAt && !(log.startedAt >= where.startedAt.gte))
       return false;
     return true;
@@ -1630,6 +1633,7 @@ describe("refresh-on-view gate + 429 breaker/cooldown (2026-09-27)", () => {
       cooldownUntil: new Date(
         limitedAt.getTime() + AUGUST_RATE_LIMIT_COOLDOWN_MS,
       ).toISOString(),
+      authFailedAt: null,
     });
     expect(mockEnsureConnectionRows).not.toHaveBeenCalled();
     expect(mockSyncLogCreate).not.toHaveBeenCalled();
@@ -1644,6 +1648,7 @@ describe("refresh-on-view gate + 429 breaker/cooldown (2026-09-27)", () => {
     expect(await getAugustRefreshFreshness(actor as never)).toEqual({
       lastSucceededAt: null,
       cooldownUntil: null,
+      authFailedAt: null,
     });
     expect(mockEnsureConnectionRows).not.toHaveBeenCalled();
   });
@@ -1662,16 +1667,18 @@ describe("refresh-on-view gate + 429 breaker/cooldown (2026-09-27)", () => {
     });
     afterEach(() => consoleLogSpy.mockRestore());
 
-    it("every read refused with 401 → FAILED with the no-readings marker and the category count; lastSyncedAt/CONNECTED not bumped; no device written", async () => {
+    it("every read refused with HTTP 500 → FAILED with the no-readings marker and the category count; lastSyncedAt/CONNECTED not bumped; no device written", async () => {
+      // (Until 2026-10-21 this case used 401; an all-401 batch now takes the
+      // AUGUST_AUTH_FAILED path — see the auth-expiry tests below.)
       useStatefulLogs(3);
       mockGetLockDetail.mockImplementation(async (id: string) => {
-        throw new HttpRequestError(`/locks/${id}`, 401);
+        throw new HttpRequestError(`/locks/${id}`, 500);
       });
 
       const outcome = await refreshAugustTelemetryAutomatic();
 
       const reason =
-        "AUGUST_NO_READINGS: August returned no lock readings (0 of 3 refreshed; http_401=3).";
+        "AUGUST_NO_READINGS: August returned no lock readings (0 of 3 refreshed; http_500=3).";
       expect(outcome).toEqual({ status: "failed", reason });
       expect(logs).toHaveLength(1);
       expect(logs[0]).toMatchObject({ status: "FAILED", errorMessage: reason });
@@ -1693,13 +1700,14 @@ describe("refresh-on-view gate + 429 breaker/cooldown (2026-09-27)", () => {
         eligible: 3,
         refreshed: 0,
         notReturnedByProvider: 3,
-        readFailures: { http_401: 3 },
+        readFailures: { http_500: 3 },
         rateLimited: false,
+        authFailed: false,
       });
       expect(event("august_guarded_refresh_no_readings")).toMatchObject({
         eligible: 3,
         notReturnedByProvider: 3,
-        readFailures: { http_401: 3 },
+        readFailures: { http_500: 3 },
       });
       expect(event("august_guarded_refresh_completed")).toBeUndefined();
     });
@@ -1707,8 +1715,8 @@ describe("refresh-on-view gate + 429 breaker/cooldown (2026-09-27)", () => {
     it("mixed failures are counted per category: http status, timeout, network, other", async () => {
       useStatefulLogs(6);
       const failures: Record<string, unknown> = {
-        "ext-0": new HttpRequestError("/locks/ext-0", 401),
-        "ext-1": new HttpRequestError("/locks/ext-1", 401),
+        "ext-0": new HttpRequestError("/locks/ext-0", 500),
+        "ext-1": new HttpRequestError("/locks/ext-1", 500),
         "ext-2": new HttpRequestError("/locks/ext-2", 404),
         "ext-3": new DOMException("The operation was aborted.", "AbortError"),
         "ext-4": new TypeError("fetch failed"),
@@ -1723,10 +1731,10 @@ describe("refresh-on-view gate + 429 breaker/cooldown (2026-09-27)", () => {
       expect(outcome).toEqual({
         status: "failed",
         reason:
-          "AUGUST_NO_READINGS: August returned no lock readings (0 of 6 refreshed; http_401=2, http_404=1, network=1, other=1, timeout=1).",
+          "AUGUST_NO_READINGS: August returned no lock readings (0 of 6 refreshed; http_500=2, http_404=1, network=1, other=1, timeout=1).",
       });
       expect(event("august_refresh_completed")!.readFailures).toEqual({
-        http_401: 2,
+        http_500: 2,
         http_404: 1,
         timeout: 1,
         network: 1,
@@ -1800,7 +1808,7 @@ describe("refresh-on-view gate + 429 breaker/cooldown (2026-09-27)", () => {
     it("a zero-read FAILED run starts no cooldown and no extra retries: on-view is still gated for 10 min, the next scheduled run proceeds as before", async () => {
       useStatefulLogs(2);
       mockGetLockDetail.mockImplementation(async (id: string) => {
-        throw new HttpRequestError(`/locks/${id}`, 401);
+        throw new HttpRequestError(`/locks/${id}`, 500);
       });
       await refreshAugustTelemetryAutomatic();
       expect(mockGetLockDetail).toHaveBeenCalledTimes(2);
@@ -1820,13 +1828,14 @@ describe("refresh-on-view gate + 429 breaker/cooldown (2026-09-27)", () => {
     it("freshness does not advance after a zero-read run (no SUCCEEDED row is written)", async () => {
       useStatefulLogs(2);
       mockGetLockDetail.mockImplementation(async (id: string) => {
-        throw new HttpRequestError(`/locks/${id}`, 401);
+        throw new HttpRequestError(`/locks/${id}`, 500);
       });
       await refreshAugustTelemetryAutomatic();
 
       expect(await getAugustRefreshFreshness(actor as never)).toEqual({
         lastSucceededAt: null,
         cooldownUntil: null,
+        authFailedAt: null,
       });
     });
 
@@ -1876,11 +1885,244 @@ describe("refresh-on-view gate + 429 breaker/cooldown (2026-09-27)", () => {
           expect(text).not.toContain(secret);
         }
       }
-      expect(outcome).toEqual({
-        status: "failed",
+      // ext-0's 401 with nothing read in the batch = auth failure (2026-10-21).
+      expect(outcome).toMatchObject({
+        status: "auth_failed",
+        notRequested: 0,
         reason:
-          "AUGUST_NO_READINGS: August returned no lock readings (0 of 3 refreshed; http_401=1, network=1, other=1).",
+          "AUGUST_AUTH_FAILED: August refused the sign-in (http_401=1, network=1, other=1); 0 lock(s) not requested. Saved readings were kept. Automatic refresh is paused until a refresh succeeds.",
       });
+    });
+  });
+
+  describe("August sign-in failure: breaker, suppression, recovery (2026-10-21)", () => {
+    let t: number;
+    let logSpy: ReturnType<typeof vi.spyOn>;
+    /** Each run gets a distinct, later clock time (finishedAt comparisons). */
+    const tick = (ms = 60_000) => {
+      t += ms;
+      vi.setSystemTime(new Date(t));
+    };
+    const all = (status: number, extra?: Record<string, string>) =>
+      mockGetLockDetail.mockImplementation(async (id: string) => {
+        throw new HttpRequestError(`/locks/${id}`, status, extra);
+      });
+    const succeedAll = () =>
+      mockGetLockDetail.mockImplementation(async (id: string) =>
+        augustLockDetail(id),
+      );
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      t = Date.parse("2026-11-19T12:00:00.000Z");
+      vi.setSystemTime(new Date(t));
+      mockConnectionFindUnique.mockResolvedValue({ id: "conn-august-1" });
+      logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      logSpy.mockRestore();
+    });
+
+    it("401 stops the run after the first batch: no further requests, AUGUST_AUTH_FAILED with the not-requested count, nothing written, connection untouched", async () => {
+      useStatefulLogs(12);
+      all(401);
+
+      const outcome = await refreshAugustTelemetryAutomatic();
+
+      // AUGUST_DETAIL_CONCURRENCY = 5: one batch requested, 7 never requested.
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(5);
+      const reason = `${AUGUST_AUTH_FAILED_MARKER}: August refused the sign-in (http_401=5); 7 lock(s) not requested. Saved readings were kept. Automatic refresh is paused until a refresh succeeds.`;
+      expect(outcome).toEqual({
+        status: "auth_failed",
+        refreshed: 0,
+        notReturnedByProvider: 5,
+        notRequested: 7,
+        reason,
+      });
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toMatchObject({ status: "FAILED", errorMessage: reason });
+      // Saved readings kept, nothing marked offline, lastSyncedAt not bumped.
+      expect(prisma.smartDevice.update).not.toHaveBeenCalled();
+      expect(prisma.providerDevice.update).not.toHaveBeenCalled();
+      expect(prisma.smartDeviceEvent.createMany).not.toHaveBeenCalled();
+      expect(mockConnectionUpdate).not.toHaveBeenCalled();
+    });
+
+    it("a sign-in failure in a later batch stops there: earlier readings are kept, later batches never requested", async () => {
+      useStatefulLogs(12);
+      mockGetLockDetail.mockImplementation(async (id: string) => {
+        const n = Number(id.slice(4));
+        if (n < 5) return augustLockDetail(id);
+        throw new HttpRequestError(`/locks/${id}`, 401);
+      });
+
+      const outcome = await refreshAugustTelemetryAutomatic();
+
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(10);
+      expect(outcome).toMatchObject({
+        status: "auth_failed",
+        refreshed: 5,
+        notRequested: 2,
+      });
+      expect(prisma.smartDevice.update).toHaveBeenCalledTimes(5);
+      expect(logs[0]!.errorMessage).toMatch(/^AUGUST_AUTH_FAILED:/);
+    });
+
+    it("an isolated 403 next to successful reads never stops the run", async () => {
+      useStatefulLogs(7);
+      mockGetLockDetail.mockImplementation(async (id: string) => {
+        if (id === "ext-0") throw new HttpRequestError(`/locks/${id}`, 403);
+        return augustLockDetail(id);
+      });
+
+      const outcome = await refreshAugustTelemetryAutomatic();
+
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(7);
+      expect(outcome).toEqual({
+        status: "completed",
+        refreshed: 6,
+        notReturnedByProvider: 1,
+      });
+      expect(logs[0]!.status).toBe("SUCCEEDED");
+    });
+
+    it("one 401 next to successful reads never stops the run either", async () => {
+      useStatefulLogs(7);
+      mockGetLockDetail.mockImplementation(async (id: string) => {
+        if (id === "ext-0") throw new HttpRequestError(`/locks/${id}`, 401);
+        return augustLockDetail(id);
+      });
+
+      expect(await refreshAugustTelemetryAutomatic()).toMatchObject({
+        status: "completed",
+        refreshed: 6,
+      });
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(7);
+    });
+
+    it("a whole batch of plain 403s (no sign-in text) is device-specific: no stop, no AUGUST_AUTH_FAILED, no suppression", async () => {
+      useStatefulLogs(7);
+      all(403, {
+        providerErrorCode: "device_not_authorized",
+        providerMessage: "no bridge registered for this lock",
+      });
+
+      const outcome = await refreshAugustTelemetryAutomatic();
+
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(7);
+      expect(outcome).toMatchObject({ status: "failed" });
+      expect(logs[0]!.errorMessage).toMatch(/^AUGUST_NO_READINGS:/);
+
+      tick(7 * 60 * 60 * 1000);
+      await refreshAugustTelemetryAutomatic();
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(14);
+    });
+
+    it("a batch of 403s whose provider text names the session/token stops like a 401 (existing command rule)", async () => {
+      useStatefulLogs(7);
+      all(403, {
+        providerMessage: "session token expired, please re-authenticate",
+      });
+
+      const outcome = await refreshAugustTelemetryAutomatic();
+
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(5);
+      expect(outcome).toMatchObject({ status: "auth_failed", notRequested: 2 });
+      // The provider text itself is never stored.
+      expect(logs[0]!.errorMessage).not.toContain("session token");
+      expect(logs[0]!.errorMessage).toContain("http_403=5");
+    });
+
+    it("suppression → manual check → recovery: scheduled and on-view refreshes don't call August until a refresh succeeds", async () => {
+      useStatefulLogs(7);
+      all(401);
+      await refreshAugustTelemetryAutomatic();
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(5);
+      const authFailedAt = logs[0]!.finishedAt!.toISOString();
+
+      // Hours later: the scheduled run and the open /locks page are both
+      // suppressed (on-view's 10-min gate alone would have let it run).
+      tick(6 * 60 * 60 * 1000);
+      expect(await refreshAugustTelemetryAutomatic()).toEqual({
+        status: "auth_required",
+        authFailedAt,
+      });
+      expect(await refreshAugustTelemetryIfStale(actor as never)).toEqual({
+        status: "auth_required",
+        authFailedAt,
+      });
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(5);
+      expect(logs).toHaveLength(1); // no run row for a suppressed attempt
+      expect(await getAugustRefreshFreshness(actor as never)).toMatchObject({
+        authFailedAt,
+      });
+
+      // Manual Refresh all is the check after renewing. Still refused: it
+      // costs one batch and the pause continues.
+      tick();
+      expect(await refreshAugustTelemetry(actor as never)).toMatchObject({
+        status: "auth_failed",
+        notRequested: 2,
+      });
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(10);
+      tick();
+      expect(await refreshAugustTelemetryAutomatic()).toMatchObject({
+        status: "auth_required",
+      });
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(10);
+
+      // Login renewed: a manual refresh succeeds → recovery.
+      succeedAll();
+      tick();
+      expect(await refreshAugustTelemetry(actor as never)).toMatchObject({
+        status: "completed",
+        refreshed: 7,
+      });
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(17);
+      expect(await getAugustRefreshFreshness(actor as never)).toMatchObject({
+        authFailedAt: null,
+      });
+
+      // Automatic refresh resumes.
+      tick(6 * 60 * 60 * 1000);
+      expect(await refreshAugustTelemetryAutomatic()).toMatchObject({
+        status: "completed",
+      });
+      expect(mockGetLockDetail).toHaveBeenCalledTimes(24);
+    });
+
+    it("a 429 in the same batch keeps the existing rate-limit path (no AUGUST_AUTH_FAILED, no suppression)", async () => {
+      useStatefulLogs(7);
+      mockGetLockDetail.mockImplementation(async (id: string) => {
+        throw new HttpRequestError(`/locks/${id}`, id === "ext-1" ? 429 : 401);
+      });
+
+      expect(await refreshAugustTelemetryAutomatic()).toMatchObject({
+        status: "rate_limited",
+        skippedAfterRateLimit: 2,
+      });
+      expect(logs[0]!.errorMessage).toMatch(/^AUGUST_RATE_LIMITED:/);
+      expect(await getAugustRefreshFreshness(actor as never)).toMatchObject({
+        authFailedAt: null,
+      });
+    });
+
+    it("getAugustAuthFailedAt (for /integrations) requires integrations:read and is read-only", async () => {
+      useStatefulLogs(7);
+      all(401);
+      await refreshAugustTelemetryAutomatic();
+      mockSyncLogCreate.mockClear();
+      vi.mocked(assertPermission).mockClear();
+
+      expect(await getAugustAuthFailedAt(actor as never)).toBe(
+        logs[0]!.finishedAt!.toISOString(),
+      );
+      expect(assertPermission).toHaveBeenCalledWith(actor, "integrations:read");
+      expect(mockSyncLogCreate).not.toHaveBeenCalled();
+
+      mockConnectionFindUnique.mockResolvedValue(null);
+      expect(await getAugustAuthFailedAt(actor as never)).toBeNull();
     });
   });
 });

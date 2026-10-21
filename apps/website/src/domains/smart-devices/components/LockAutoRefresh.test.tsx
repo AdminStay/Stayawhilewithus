@@ -173,3 +173,86 @@ describe("LockAutoRefresh (2026-09-27 refresh-on-view)", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("LockAutoRefresh — August sign-in refused (2026-10-21)", () => {
+  beforeEach(() => {
+    mockRefresh.mockReset();
+    setVisibility("visible");
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("shows the re-authorization message (not the auto-refresh line) while the server reports auth_required", async () => {
+    const failedAt = minutesAgo(90);
+    vi.stubGlobal(
+      "fetch",
+      respond({
+        status: "auth_required",
+        lastSucceededAt: minutesAgo(120),
+        cooldownUntil: null,
+        authFailedAt: failedAt,
+      }),
+    );
+    render(
+      <LockAutoRefresh
+        initialLastSucceededAt={minutesAgo(120)}
+        initialCooldownUntil={null}
+        initialAuthFailedAt={failedAt}
+      />,
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("August re-authorization required");
+    expect(alert.textContent).toContain("automatic lock refresh is paused");
+    expect(alert.textContent).toContain("press Refresh all");
+    expect(screen.queryByText(/Auto-refreshes about every 10 min/)).toBeNull();
+    // A suppressed check reloads nothing.
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  it("reloads the page when this check's own run hit the sign-in failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      respond({
+        status: "auth_failed",
+        lastSucceededAt: minutesAgo(30),
+        cooldownUntil: null,
+        authFailedAt: minutesAgo(0),
+      }),
+    );
+    render(
+      <LockAutoRefresh
+        initialLastSucceededAt={minutesAgo(30)}
+        initialCooldownUntil={null}
+      />,
+    );
+    await waitFor(() => expect(mockRefresh).toHaveBeenCalledTimes(1));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "re-authorization required",
+    );
+  });
+
+  it("clears the message once the server reports recovery (authFailedAt null)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      respond({
+        status: "completed",
+        lastSucceededAt: minutesAgo(0),
+        cooldownUntil: null,
+        authFailedAt: null,
+      }),
+    );
+    render(
+      <LockAutoRefresh
+        initialLastSucceededAt={minutesAgo(200)}
+        initialCooldownUntil={null}
+        initialAuthFailedAt={minutesAgo(100)}
+      />,
+    );
+    expect(await screen.findByText("Updated just now")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByText(/Auto-refreshes about every 10 min/)).toBeTruthy();
+  });
+});

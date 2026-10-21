@@ -3,6 +3,7 @@
 import type { AuthContext } from "@stayw/auth";
 import { revalidatePath } from "next/cache";
 
+import { augustReauthorizationMessage } from "./lib/august-reauthorization";
 import { fahrenheitToCelsius } from "./lib/temperature";
 import {
   clearLockOperationalHoldSchema,
@@ -793,6 +794,24 @@ export async function refreshAugustAction(
         status: "failure",
         error: `August is rate-limiting requests; fleet refresh is paused until ${until}. Nothing was retried.`,
       };
+    }
+    if (result.status === "auth_failed") {
+      // 2026-10-21: August refused the sign-in; the run stopped and
+      // automatic refresh is now paused. Revalidate so /locks shows it.
+      logLockRefresh("action_auth_failed", {
+        actorUserId: actor.userId,
+        notRequested: result.notRequested,
+      });
+      revalidatePath(LOCKS_PAGE_PATH);
+      return {
+        status: "failure",
+        error: augustReauthorizationMessage(result.notRequested),
+      };
+    }
+    if (result.status === "auth_required") {
+      // Not reachable for manual Refresh all (it never suppresses — it is
+      // the check after renewing), kept so the union stays exhaustive.
+      return { status: "failure", error: augustReauthorizationMessage(0) };
     }
     if (result.status === "fresh") {
       // Not reachable for manual Refresh all (no minimum interval is

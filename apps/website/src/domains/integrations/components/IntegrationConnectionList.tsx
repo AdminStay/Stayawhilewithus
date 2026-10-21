@@ -10,6 +10,8 @@ import type { IntegrationConnection } from "../services/integrations.service";
 
 import { SyncNowButton } from "./SyncNowButton";
 
+import { AUGUST_AUTO_REFRESH_PAUSED_MESSAGE } from "@/domains/smart-devices/lib/august-reauthorization";
+
 /** Only these two providers currently have a real, credential-gated device sync — see smart-devices.service.ts. Every other "real" provider (Notion, OwnerRez, Slack, Asana) is read-only-on-render, with nothing to trigger from this page. */
 const SYNC_ACTIONS = {
   AUGUST: syncAugustDevicesAction,
@@ -39,8 +41,11 @@ function formatDate(date: Date | null): string {
 
 export function IntegrationConnectionList({
   connections,
+  augustAuthFailedAt = null,
 }: {
   connections: ConnectionWithLogs[];
+  /** When August last refused the sign-in, if nothing has succeeded since (2026-10-21). */
+  augustAuthFailedAt?: string | null;
 }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -68,6 +73,15 @@ export function IntegrationConnectionList({
             <p className="mt-3 text-xs text-ink-muted">
               Last synced {formatDate(c.lastSyncedAt)}
             </p>
+            {c.provider === "AUGUST" && augustAuthFailedAt && (
+              <p
+                role="alert"
+                className="mt-1 text-xs font-medium text-error-500"
+              >
+                {AUGUST_AUTO_REFRESH_PAUSED_MESSAGE} (Refused{" "}
+                {formatDate(new Date(augustAuthFailedAt))}.)
+              </p>
+            )}
             {c.syncLogs[0]?.status === "FAILED" && (
               <p className="mt-0.5 text-xs text-error-500">
                 Last attempt failed {formatDate(c.syncLogs[0].startedAt)}
