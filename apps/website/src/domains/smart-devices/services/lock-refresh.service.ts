@@ -583,6 +583,37 @@ export type AugustRefreshOutcome =
 const INTEGRATION_SYNC_LOCK_NAME = "integration_sync";
 
 /**
+ * When the August sign-in is currently known to be refused (2026-10-21):
+ * the finish time of the newest AUGUST_AUTH_FAILED run, if no run on the
+ * August connection has SUCCEEDED since; otherwise null. Read-only.
+ */
+async function findAugustAuthBlock(
+  db: Pick<Prisma.TransactionClient, "integrationSyncLog">,
+  connectionId: string,
+): Promise<Date | null> {
+  const authFailed = await db.integrationSyncLog.findFirst({
+    where: {
+      integrationConnectionId: connectionId,
+      status: "FAILED",
+      errorMessage: { startsWith: AUGUST_AUTH_FAILED_MARKER },
+      finishedAt: { not: null },
+    },
+    orderBy: { finishedAt: "desc" },
+    select: { finishedAt: true },
+  });
+  if (!authFailed?.finishedAt) return null;
+  const recovered = await db.integrationSyncLog.findFirst({
+    where: {
+      integrationConnectionId: connectionId,
+      status: "SUCCEEDED",
+      finishedAt: { gt: authFailed.finishedAt },
+    },
+    select: { id: true },
+  });
+  return recovered ? null : authFailed.finishedAt;
+}
+
+/**
  * The single, shared claim-run-finish implementation behind EVERY August
  * telemetry refresh entry point — human-clicked (refreshAugustTelemetry)
  * and scheduler-triggered (refreshAugustTelemetryAutomatic) alike. Neither
@@ -625,37 +656,6 @@ const INTEGRATION_SYNC_LOCK_NAME = "integration_sync";
  * the structural impossibility of reaching a lock/unlock/PIN endpoint from
  * this file (see this file's own dedicated source-level test).
  */
-/**
- * When the August sign-in is currently known to be refused (2026-10-21):
- * the finish time of the newest AUGUST_AUTH_FAILED run, if no run on the
- * August connection has SUCCEEDED since; otherwise null. Read-only.
- */
-async function findAugustAuthBlock(
-  db: Pick<Prisma.TransactionClient, "integrationSyncLog">,
-  connectionId: string,
-): Promise<Date | null> {
-  const authFailed = await db.integrationSyncLog.findFirst({
-    where: {
-      integrationConnectionId: connectionId,
-      status: "FAILED",
-      errorMessage: { startsWith: AUGUST_AUTH_FAILED_MARKER },
-      finishedAt: { not: null },
-    },
-    orderBy: { finishedAt: "desc" },
-    select: { finishedAt: true },
-  });
-  if (!authFailed?.finishedAt) return null;
-  const recovered = await db.integrationSyncLog.findFirst({
-    where: {
-      integrationConnectionId: connectionId,
-      status: "SUCCEEDED",
-      finishedAt: { gt: authFailed.finishedAt },
-    },
-    select: { id: true },
-  });
-  return recovered ? null : authFailed.finishedAt;
-}
-
 async function runGuardedAugustTelemetryRefresh(
   options: {
     minIntervalMs?: number;
