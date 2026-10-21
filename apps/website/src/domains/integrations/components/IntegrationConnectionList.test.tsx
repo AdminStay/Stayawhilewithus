@@ -64,13 +64,15 @@ describe("IntegrationConnectionList — August login expiry (2026-10-21)", () =>
     expiresAt: "2026-11-19T11:32:00.000Z",
     renewBy: "2026-11-18T11:32:00.000Z",
     msLeft: 5 * 24 * 60 * 60 * 1000,
+    renewByPassed: false,
   } as const;
 
-  it("shows the expiry warning on the August card only", () => {
+  it("admin: the expiry warning, with the renewal steps, on the August card only", () => {
     const { container } = render(
       <IntegrationConnectionList
         connections={[connection("AUGUST"), connection("CIELO")]}
         augustTokenExpiry={expiringSoon}
+        augustShowRenewalSteps
       />,
     );
     const alerts = screen.getAllByRole("alert");
@@ -79,9 +81,23 @@ describe("IntegrationConnectionList — August login expiry (2026-10-21)", () =>
     expect(alerts[0]!.textContent).toContain(
       "Renew by Nov 18, 2026, 11:32 UTC",
     );
+    expect(alerts[0]!.textContent).toContain("AUGUST_TOKEN_EXPIRES_AT");
     expect(
       container.querySelectorAll("[data-august-token-expiry]"),
     ).toHaveLength(1);
+  });
+
+  it("non-admin (the default): the same warning without steps or setting names", () => {
+    render(
+      <IntegrationConnectionList
+        connections={[connection("AUGUST")]}
+        augustTokenExpiry={expiringSoon}
+      />,
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toBe(
+      "August login expires in 5 days (Nov 19, 2026, 11:32 UTC). An admin needs to renew it by Nov 18, 2026, 11:32 UTC.",
+    );
   });
 
   it("keeps the sign-in-refused alert alongside the expiry warning", () => {
@@ -93,6 +109,7 @@ describe("IntegrationConnectionList — August login expiry (2026-10-21)", () =>
           state: "expired",
           expiresAt: "2026-11-19T11:32:00.000Z",
         }}
+        augustShowRenewalSteps
       />,
     );
     const texts = screen.getAllByRole("alert").map((a) => a.textContent);
@@ -101,15 +118,27 @@ describe("IntegrationConnectionList — August login expiry (2026-10-21)", () =>
     expect(texts[1]).toContain("August login expired");
   });
 
-  it("shows 'expiry date not configured' when the setting is missing", () => {
-    const { container } = render(
+  it("missing setting: the full message for admins, 'Expiry date not configured.' for everyone else", () => {
+    const { container, rerender } = render(
       <IntegrationConnectionList
         connections={[connection("AUGUST")]}
         augustTokenExpiry={{ state: "not_configured", reason: "missing" }}
+        augustShowRenewalSteps
       />,
     );
     expect(container.textContent).toContain(
       "August login expiry date not configured.",
     );
+    expect(container.textContent).toContain("YYYY-MM-DDTHH:MM:SSZ");
+
+    rerender(
+      <IntegrationConnectionList
+        connections={[connection("AUGUST")]}
+        augustTokenExpiry={{ state: "not_configured", reason: "missing" }}
+        augustShowRenewalSteps={false}
+      />,
+    );
+    expect(container.textContent).toContain("Expiry date not configured.");
+    expect(container.textContent).not.toContain("AUGUST_TOKEN_EXPIRES_AT");
   });
 });

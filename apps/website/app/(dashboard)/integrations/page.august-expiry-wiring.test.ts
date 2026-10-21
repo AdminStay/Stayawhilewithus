@@ -30,6 +30,29 @@ describe("August login expiry wiring (2026-10-21)", () => {
     );
   });
 
+  it("renewal steps are decided by isGlobalAdmin(actor) on both pages; page permissions are unchanged", () => {
+    expect(integrations).toContain(
+      "const showAugustRenewalSteps = await isGlobalAdmin(actor);",
+    );
+    expect(integrations).toContain(
+      "augustShowRenewalSteps={showAugustRenewalSteps}",
+    );
+    expect(integrations).toContain(
+      "const connections = await listIntegrationConnections(actor);",
+    );
+
+    expect(locks).toContain(
+      "const showAugustRenewalSteps = await isGlobalAdmin(actor);",
+    );
+    const banner = locks.slice(locks.indexOf("<AugustTokenExpiryNotice"));
+    expect(banner.slice(0, 300)).toContain(
+      "showRenewalSteps={showAugustRenewalSteps}",
+    );
+    expect(locks).toContain(
+      "const refreshFreshness = await getAugustRefreshFreshness(actor);",
+    );
+  });
+
   it("neither page reads settings directly or names an August credential", () => {
     for (const source of [integrations, locks]) {
       expect(source).not.toContain("process.env");

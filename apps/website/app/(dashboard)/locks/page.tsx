@@ -64,6 +64,7 @@ import {
 } from "@/domains/smart-devices/services/smart-devices.service";
 import { listUnmappedAugustDevices } from "@/domains/smart-devices/services/unmapped-august-devices.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
+import { isGlobalAdmin } from "@/platform/auth/is-global-admin";
 
 /**
  * Explicit hosting function limit (seconds) for this route, which also hosts
@@ -139,6 +140,8 @@ export default async function LocksPage({
     actor,
     "smart_devices:read",
   );
+  // Renewal steps name Vercel settings only an admin can change.
+  const showAugustRenewalSteps = await isGlobalAdmin(actor);
 
   // Fully dynamic per-lock eligibility (2026-09-25, "enable all locks"):
   // mapped + enabled + ONLINE + verified history + kill switch ON. No env
@@ -332,6 +335,7 @@ export default async function LocksPage({
         <AugustTokenExpiryNotice
           status={augustTokenExpiry}
           variant="banner"
+          showRenewalSteps={showAugustRenewalSteps}
           className="mt-1"
         />
       </div>

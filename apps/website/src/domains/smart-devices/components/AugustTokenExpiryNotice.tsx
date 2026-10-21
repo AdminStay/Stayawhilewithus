@@ -15,14 +15,19 @@ const TONE_CLASS = {
  *   configured" and the quiet "expires on …" line.
  * - "banner" (/locks): only when action is needed — expiring soon or
  *   expired — so the page isn't cluttered otherwise.
+ * - showRenewalSteps: global admins only. Others see the same dates and
+ *   urgency with "an admin needs to renew it" and no setting names.
  */
 export function AugustTokenExpiryNotice({
   status,
   variant,
+  showRenewalSteps,
   className = "",
 }: {
   status: AugustTokenExpiry;
   variant: "card" | "banner";
+  /** True only for global admins (isGlobalAdmin). */
+  showRenewalSteps: boolean;
   className?: string;
 }) {
   if (
@@ -32,7 +37,9 @@ export function AugustTokenExpiryNotice({
   ) {
     return null;
   }
-  const { tone, text } = describeAugustTokenExpiry(status);
+  const { tone, text } = describeAugustTokenExpiry(status, {
+    showRenewalSteps,
+  });
   return (
     <p
       role={tone === "neutral" ? undefined : "alert"}

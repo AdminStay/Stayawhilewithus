@@ -5,6 +5,7 @@ import { listIntegrationConnections } from "@/domains/integrations/services/inte
 import { getAugustTokenExpiry } from "@/domains/smart-devices/services/august-token-expiry.service";
 import { getAugustAuthFailedAt } from "@/domains/smart-devices/services/lock-refresh.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
+import { isGlobalAdmin } from "@/platform/auth/is-global-admin";
 
 export default async function IntegrationsPage() {
   const actor = await getCurrentUser();
@@ -16,6 +17,8 @@ export default async function IntegrationsPage() {
     actor,
     "integrations:read",
   );
+  // Renewal steps name Vercel settings only an admin can change.
+  const showAugustRenewalSteps = await isGlobalAdmin(actor);
   const connectedCount = connections.filter(
     (c) => c.status === "CONNECTED",
   ).length;
@@ -30,6 +33,7 @@ export default async function IntegrationsPage() {
         connections={connections}
         augustAuthFailedAt={augustAuthFailedAt}
         augustTokenExpiry={augustTokenExpiry}
+        augustShowRenewalSteps={showAugustRenewalSteps}
       />
     </div>
   );

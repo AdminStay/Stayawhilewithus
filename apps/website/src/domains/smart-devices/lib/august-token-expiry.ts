@@ -24,8 +24,13 @@ export const AUGUST_TOKEN_RENEWAL_BUFFER_MS = 1 * DAY_MS;
 export const AUGUST_TOKEN_RENEWAL_STEPS =
   "Renew the August login with the August login script, update AUGUST_ACCESS_TOKEN and AUGUST_TOKEN_EXPIRES_AT in the August settings in Vercel, and redeploy.";
 
+/** Admin wording: names the setting and uses a format placeholder, never a realistic date. */
 export const AUGUST_TOKEN_EXPIRY_NOT_CONFIGURED_MESSAGE =
-  "August login expiry date not configured. Set AUGUST_TOKEN_EXPIRES_AT in Vercel to the expiry time the August login script prints (e.g. 2026-11-19T11:32:00Z) to get a warning before the login expires.";
+  "August login expiry date not configured. Set AUGUST_TOKEN_EXPIRES_AT in Vercel to the expiry time the August login script prints (format YYYY-MM-DDTHH:MM:SSZ) to get a warning before the login expires.";
+
+/** Non-admin wording for a missing or invalid setting. */
+export const AUGUST_TOKEN_EXPIRY_NOT_CONFIGURED_VIEWER_MESSAGE =
+  "Expiry date not configured.";
 
 export type AugustTokenExpiry =
   | { state: "not_configured"; reason: "missing" | "invalid" }
@@ -36,6 +41,8 @@ export type AugustTokenExpiry =
       renewBy: string;
       /** Milliseconds until expiry at evaluation time (> 0). */
       msLeft: number;
+      /** True from the renew-by time (inclusive) until expiry: "renew now", not "renew by". */
+      renewByPassed: boolean;
     }
   | { state: "expired"; expiresAt: string };
 
@@ -87,7 +94,13 @@ export function getAugustTokenExpiryStatus(
     expiresMs - AUGUST_TOKEN_RENEWAL_BUFFER_MS,
   ).toISOString();
   if (msLeft <= AUGUST_TOKEN_EXPIRY_WARNING_MS) {
-    return { state: "expiring_soon", expiresAt, renewBy, msLeft };
+    return {
+      state: "expiring_soon",
+      expiresAt,
+      renewBy,
+      msLeft,
+      renewByPassed: msLeft <= AUGUST_TOKEN_RENEWAL_BUFFER_MS,
+    };
   }
   return {
     state: "ok",
@@ -122,13 +135,28 @@ function formatTimeLeft(msLeft: number): string {
   return days === 1 ? "in 1 day" : `in ${days} days`;
 }
 
-/** The text and tone to show for a status. */
-export function describeAugustTokenExpiry(status: AugustTokenExpiry): {
+/**
+ * The text and tone to show for a status. Renewal steps and setting names
+ * are for global admins only (2026-10-21): everyone else who can see
+ * /locks or /integrations gets the same dates and urgency with "an admin
+ * needs to renew it" instead. Defaults to the non-admin wording, so a
+ * caller that forgets the option never shows the steps.
+ */
+export function describeAugustTokenExpiry(
+  status: AugustTokenExpiry,
+  { showRenewalSteps = false }: { showRenewalSteps?: boolean } = {},
+): {
   tone: "neutral" | "warning" | "error";
   text: string;
 } {
   switch (status.state) {
     case "not_configured":
+      if (!showRenewalSteps) {
+        return {
+          tone: "neutral",
+          text: AUGUST_TOKEN_EXPIRY_NOT_CONFIGURED_VIEWER_MESSAGE,
+        };
+      }
       return {
         tone: "neutral",
         text:
@@ -141,15 +169,27 @@ export function describeAugustTokenExpiry(status: AugustTokenExpiry): {
         tone: "neutral",
         text: `August login expires ${formatAugustExpiryTime(status.expiresAt)}. A renewal warning will appear from ${formatAugustExpiryTime(status.warnFrom)}.`,
       };
-    case "expiring_soon":
-      return {
-        tone: "warning",
-        text: `August login expires ${formatTimeLeft(status.msLeft)} (${formatAugustExpiryTime(status.expiresAt)}). Renew by ${formatAugustExpiryTime(status.renewBy)}: ${AUGUST_TOKEN_RENEWAL_STEPS}`,
-      };
+    case "expiring_soon": {
+      const expires = `August login expires ${formatTimeLeft(status.msLeft)} (${formatAugustExpiryTime(status.expiresAt)}).`;
+      const renewBy = formatAugustExpiryTime(status.renewBy);
+      let text: string;
+      if (showRenewalSteps) {
+        text = status.renewByPassed
+          ? `${expires} Renew now — the recommended renew-by time (${renewBy}) has passed. ${AUGUST_TOKEN_RENEWAL_STEPS}`
+          : `${expires} Renew by ${renewBy}: ${AUGUST_TOKEN_RENEWAL_STEPS}`;
+      } else {
+        text = status.renewByPassed
+          ? `${expires} An admin needs to renew it now — the recommended renew-by time has passed.`
+          : `${expires} An admin needs to renew it by ${renewBy}.`;
+      }
+      return { tone: "warning", text };
+    }
     case "expired":
       return {
         tone: "error",
-        text: `August login expired ${formatAugustExpiryTime(status.expiresAt)}. August refuses the old login after this time, so lock readings stop updating until it's renewed. ${AUGUST_TOKEN_RENEWAL_STEPS} If you already renewed it, update AUGUST_TOKEN_EXPIRES_AT too.`,
+        text: showRenewalSteps
+          ? `August login expired ${formatAugustExpiryTime(status.expiresAt)}. August refuses the old login after this time, so lock readings stop updating until it's renewed. ${AUGUST_TOKEN_RENEWAL_STEPS} If you already renewed it, update AUGUST_TOKEN_EXPIRES_AT too.`
+          : `August login expired ${formatAugustExpiryTime(status.expiresAt)}. Lock readings stop updating until an admin renews it.`,
       };
   }
 }

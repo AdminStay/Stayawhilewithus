@@ -45,12 +45,15 @@ export function IntegrationConnectionList({
   connections,
   augustAuthFailedAt = null,
   augustTokenExpiry = null,
+  augustShowRenewalSteps = false,
 }: {
   connections: ConnectionWithLogs[];
   /** When August last refused the sign-in, if nothing has succeeded since (2026-10-21). */
   augustAuthFailedAt?: string | null;
   /** August login expiry, from AUGUST_TOKEN_EXPIRES_AT (2026-10-21). */
   augustTokenExpiry?: AugustTokenExpiry | null;
+  /** Global admins only: show the August renewal steps (2026-10-21). */
+  augustShowRenewalSteps?: boolean;
 }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -91,6 +94,7 @@ export function IntegrationConnectionList({
               <AugustTokenExpiryNotice
                 status={augustTokenExpiry}
                 variant="card"
+                showRenewalSteps={augustShowRenewalSteps}
                 className="mt-1"
               />
             )}
