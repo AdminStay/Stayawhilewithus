@@ -2,7 +2,15 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 
 // vi.mock factories are hoisted above every top-level statement — any value
 // a factory dereferences directly must go through vi.hoisted() to exist in
@@ -829,6 +837,13 @@ describe("refreshAugustTelemetryAutomatic", () => {
 
   it("CROSS-PATH THRESHOLD SYMMETRY: treats a row 1ms younger than the shared 10-minute threshold as fresh (skip) — the exact boundary beginDeviceSync() itself uses, imported rather than redefined, so the two paths can never disagree about the same row's staleness", async () => {
     const STALE_RUNNING_THRESHOLD_MS = 10 * 60 * 1000;
+    // Frozen clock: the row's age must be exactly 1ms off the threshold
+    // when the service reads Date.now(), however slow the machine is.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-21T12:00:00.000Z"));
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     mockSyncLogFindFirst.mockResolvedValueOnce(
       runningLog({
         startedAt: new Date(Date.now() - (STALE_RUNNING_THRESHOLD_MS - 1)),
@@ -843,6 +858,13 @@ describe("refreshAugustTelemetryAutomatic", () => {
 
   it("CROSS-PATH THRESHOLD SYMMETRY: treats a row 1ms older than the shared 10-minute threshold as stale (recover), at the exact same boundary", async () => {
     const STALE_RUNNING_THRESHOLD_MS = 10 * 60 * 1000;
+    // Frozen clock: the row's age must be exactly 1ms off the threshold
+    // when the service reads Date.now(), however slow the machine is.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-21T12:00:00.000Z"));
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     mockSyncLogFindFirst.mockResolvedValueOnce(
       runningLog({
         id: "log-just-over",
