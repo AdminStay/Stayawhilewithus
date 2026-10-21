@@ -10,7 +10,9 @@ import type { IntegrationConnection } from "../services/integrations.service";
 
 import { SyncNowButton } from "./SyncNowButton";
 
+import { AugustTokenExpiryNotice } from "@/domains/smart-devices/components/AugustTokenExpiryNotice";
 import { AUGUST_AUTO_REFRESH_PAUSED_MESSAGE } from "@/domains/smart-devices/lib/august-reauthorization";
+import type { AugustTokenExpiry } from "@/domains/smart-devices/lib/august-token-expiry";
 
 /** Only these two providers currently have a real, credential-gated device sync — see smart-devices.service.ts. Every other "real" provider (Notion, OwnerRez, Slack, Asana) is read-only-on-render, with nothing to trigger from this page. */
 const SYNC_ACTIONS = {
@@ -42,10 +44,16 @@ function formatDate(date: Date | null): string {
 export function IntegrationConnectionList({
   connections,
   augustAuthFailedAt = null,
+  augustTokenExpiry = null,
+  augustShowRenewalSteps = false,
 }: {
   connections: ConnectionWithLogs[];
   /** When August last refused the sign-in, if nothing has succeeded since (2026-10-21). */
   augustAuthFailedAt?: string | null;
+  /** August login expiry, from AUGUST_TOKEN_EXPIRES_AT (2026-10-21). */
+  augustTokenExpiry?: AugustTokenExpiry | null;
+  /** Global admins only: show the August renewal steps (2026-10-21). */
+  augustShowRenewalSteps?: boolean;
 }) {
   return (
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -81,6 +89,14 @@ export function IntegrationConnectionList({
                 {AUGUST_AUTO_REFRESH_PAUSED_MESSAGE} (Refused{" "}
                 {formatDate(new Date(augustAuthFailedAt))}.)
               </p>
+            )}
+            {c.provider === "AUGUST" && augustTokenExpiry && (
+              <AugustTokenExpiryNotice
+                status={augustTokenExpiry}
+                variant="card"
+                showRenewalSteps={augustShowRenewalSteps}
+                className="mt-1"
+              />
             )}
             {c.syncLogs[0]?.status === "FAILED" && (
               <p className="mt-0.5 text-xs text-error-500">

@@ -387,6 +387,9 @@ async function main(): Promise<void> {
     `\nThe access token expires ${body.expiresAt} — after that, just re-run this script (the saved installId will skip the verification-code step).`,
   );
   console.log(
+    `Set AUGUST_TOKEN_EXPIRES_AT=${body.expiresAt} in Vercel (not a secret) alongside the new token, so /integrations and /locks warn before it expires.`,
+  );
+  console.log(
     "\nDon't share the contents of .env.local or paste the access token anywhere — it's a bearer credential, same as a password.",
   );
 }
