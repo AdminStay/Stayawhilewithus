@@ -24,6 +24,8 @@ pnpm --filter @stayw/integrations exec tsx src/august/scripts/login.ts
 
 (`packages/integrations/src/august/scripts/login.ts`.) It asks for your August email/phone and password (password input is masked, never echoed or logged), sends the request, and — if this is the first login for this install — prompts for the 6-digit code August just texted/emailed you. On success it writes `AUGUST_IDENTIFIER`, `AUGUST_INSTALL_ID`, and `AUGUST_ACCESS_TOKEN` directly into `apps/website/.env.local`. It never prints the access token back out — only confirms it was written. When the token eventually expires, just re-run the same script; the saved `installId` means you won't be asked for the verification code again.
 
+**Expiry warning.** The token lasts about 30 days and the app can't ask August when it ends, so set the non-secret `AUGUST_TOKEN_EXPIRES_AT` to the `expiresAt` the login script prints (an ISO 8601 date-time with a time zone). `/integrations` shows it on the August card, and both `/integrations` and `/locks` warn from 7 days before expiry with a renew-by time one day before it. Empty or invalid shows "expiry date not configured". After each renewal, update `AUGUST_ACCESS_TOKEN` and `AUGUST_TOKEN_EXPIRES_AT` in Vercel and redeploy.
+
 `AugustCredentials` (`./types.ts`) models the result of that flow — `identifier` + `installId` + `accessToken`, not a single static key.
 
 **After running the login script, verify it actually worked** with a real, read-only connectivity check (validates credentials, lists locks, fetches each lock's battery/online status — never locks/unlocks anything, never prints the token):

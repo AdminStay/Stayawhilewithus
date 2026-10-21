@@ -13,6 +13,7 @@ import {
   setLockControlEnabledAction,
   setLockOperationalHoldAction,
 } from "@/domains/smart-devices/actions";
+import { AugustTokenExpiryNotice } from "@/domains/smart-devices/components/AugustTokenExpiryNotice";
 import { BulkRefreshDialog } from "@/domains/smart-devices/components/BulkRefreshDialog";
 import { LockAutoRefresh } from "@/domains/smart-devices/components/LockAutoRefresh";
 import { LockControlKillSwitch } from "@/domains/smart-devices/components/LockControlKillSwitch";
@@ -49,6 +50,7 @@ import {
   getLatestAugustLockCommandOutcomes,
   isAdminResetAvailable,
 } from "@/domains/smart-devices/services/august-commands.service";
+import { getAugustTokenExpiry } from "@/domains/smart-devices/services/august-token-expiry.service";
 import { getLockControlSetting } from "@/domains/smart-devices/services/lock-control-settings.service";
 import { getRecentUnknownTransitionCounts } from "@/domains/smart-devices/services/lock-health.service";
 import { getActiveOperationalHolds } from "@/domains/smart-devices/services/lock-operational-hold.service";
@@ -132,6 +134,11 @@ export default async function LocksPage({
   // ago". The render never starts a refresh; LockAutoRefresh asks the
   // gated /api/locks/refresh-if-stale endpoint after the page loads.
   const refreshFreshness = await getAugustRefreshFreshness(actor);
+  // 2026-10-21: shown only when the August login expires soon or has expired.
+  const augustTokenExpiry = await getAugustTokenExpiry(
+    actor,
+    "smart_devices:read",
+  );
 
   // Fully dynamic per-lock eligibility (2026-09-25, "enable all locks"):
   // mapped + enabled + ONLINE + verified history + kill switch ON. No env
@@ -321,6 +328,11 @@ export default async function LocksPage({
           initialLastSucceededAt={refreshFreshness.lastSucceededAt}
           initialCooldownUntil={refreshFreshness.cooldownUntil}
           initialAuthFailedAt={refreshFreshness.authFailedAt}
+        />
+        <AugustTokenExpiryNotice
+          status={augustTokenExpiry}
+          variant="banner"
+          className="mt-1"
         />
       </div>
       <div className="mb-4">
