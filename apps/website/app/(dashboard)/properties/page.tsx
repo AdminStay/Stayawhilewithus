@@ -2,15 +2,18 @@ import { hasPermission } from "@stayw/auth";
 import { DialogTrigger, PageHeader } from "@stayw/ui";
 
 import { listCurrentCleanerSummaries } from "@/domains/cleaners/services/cleaner-assignments.service";
+import { syncMaxGuestsFromOwnerRezAction } from "@/domains/properties/actions";
 import { CreatePropertyForm } from "@/domains/properties/components/CreatePropertyForm";
 import { PropertyList } from "@/domains/properties/components/PropertyList";
 import { PropertyStatusFilterTabs } from "@/domains/properties/components/PropertyStatusFilterTabs";
+import { SyncMaxGuestsButton } from "@/domains/properties/components/SyncMaxGuestsButton";
 import {
   filterAndSortProperties,
   parsePropertyStatusFilter,
   propertyStatusFilterCounts,
   type PropertyStatusFilter,
 } from "@/domains/properties/lib/property-status-filter";
+import { canSyncMaxGuests } from "@/domains/properties/services/max-guests-sync-access";
 import { listProperties } from "@/domains/properties/services/properties.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
@@ -39,9 +42,10 @@ export default async function PropertiesPage({
 }) {
   const actor = await getCurrentUser();
   const filter = parsePropertyStatusFilter((await searchParams).status);
-  const [properties, canReadCleaners] = await Promise.all([
+  const [properties, canReadCleaners, canSyncMaxGuestsNow] = await Promise.all([
     listProperties(actor),
     hasPermission(actor, "cleaners:read"),
+    canSyncMaxGuests(actor),
   ]);
   // The "Cleaner" column only exists for someone who can see cleaners.
   const cleanerSummaries = canReadCleaners
@@ -57,9 +61,16 @@ export default async function PropertiesPage({
         title="Properties"
         subtitle={`${counts.operational} operational ${counts.operational === 1 ? "property" : "properties"} under management`}
         actions={
-          <DialogTrigger label="Add property" title="Add property">
-            <CreatePropertyForm />
-          </DialogTrigger>
+          <div className="flex items-start gap-2">
+            {/* 2026-10-21: max guests comes from OwnerRez (Kenny). Admins
+                only — the sync service enforces the same rule. */}
+            {canSyncMaxGuestsNow && (
+              <SyncMaxGuestsButton action={syncMaxGuestsFromOwnerRezAction} />
+            )}
+            <DialogTrigger label="Add property" title="Add property">
+              <CreatePropertyForm />
+            </DialogTrigger>
+          </div>
         }
       />
       <PropertyStatusFilterTabs current={filter} counts={counts} />

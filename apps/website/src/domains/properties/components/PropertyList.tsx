@@ -39,6 +39,20 @@ import { ownerRezPropertyUrl } from "@/domains/integrations/lib/ownerrez-links";
 const STATUSES = ["ACTIVE", "INACTIVE", "ONBOARDING", "OFFBOARDED"] as const;
 
 /**
+ * A linked property's maximum guests comes from OwnerRez (2026-10-21), so
+ * it's shown read-only here; updatePropertyOccupancy() refuses a manual
+ * edit for it too. Unlinked properties keep the manual control.
+ */
+function MaxGuestsFromOwnerRez({ value }: { value: number }) {
+  return (
+    <div title="Change it in OwnerRez, then use “Sync max guests from OwnerRez”.">
+      <span className="font-medium text-ink">{value}</span>
+      <div className="text-xs text-ink-muted">From OwnerRez</div>
+    </div>
+  );
+}
+
+/**
  * Full stored address (2026-10-20), exactly as stored — display only. A
  * blank required part is named, never filled in.
  */
@@ -132,22 +146,26 @@ export function PropertyList({
               </TableCell>
             )}
             <TableCell>
-              <form
-                action={updatePropertyOccupancyAction}
-                className="flex items-center gap-1.5"
-              >
-                <input type="hidden" name="propertyId" value={p.id} />
-                <Input
-                  type="number"
-                  name="maxOccupancy"
-                  min={1}
-                  defaultValue={p.maxOccupancy}
-                  className="w-16 py-1.5 text-xs"
-                />
-                <Button type="submit" variant="secondary" size="sm">
-                  Update
-                </Button>
-              </form>
+              {p.ownerRezPropertyId ? (
+                <MaxGuestsFromOwnerRez value={p.maxOccupancy} />
+              ) : (
+                <form
+                  action={updatePropertyOccupancyAction}
+                  className="flex items-center gap-1.5"
+                >
+                  <input type="hidden" name="propertyId" value={p.id} />
+                  <Input
+                    type="number"
+                    name="maxOccupancy"
+                    min={1}
+                    defaultValue={p.maxOccupancy}
+                    className="w-16 py-1.5 text-xs"
+                  />
+                  <Button type="submit" variant="secondary" size="sm">
+                    Update
+                  </Button>
+                </form>
+              )}
             </TableCell>
             <TableCell>
               <div className="flex items-center justify-end gap-2">

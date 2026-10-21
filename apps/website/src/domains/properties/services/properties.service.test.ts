@@ -4,6 +4,7 @@ vi.mock("@stayw/database", () => ({
   prisma: {
     property: {
       findMany: vi.fn(),
+      findUnique: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
     },
@@ -30,6 +31,7 @@ import {
   createProperty,
   deleteProperty,
   listProperties,
+  OWNERREZ_OWNS_MAX_OCCUPANCY_ERROR,
   updatePropertyOccupancy,
   updatePropertyStatus,
 } from "./properties.service";
@@ -158,8 +160,26 @@ describe("updatePropertyStatus", () => {
 });
 
 describe("updatePropertyOccupancy", () => {
+  it("refuses a manual edit for a property linked to OwnerRez, with no write or audit (2026-10-21)", async () => {
+    vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.property.findUnique).mockResolvedValueOnce({
+      ownerRezPropertyId: "900001",
+    } as never);
+    vi.mocked(prisma.property.update).mockClear();
+    vi.mocked(recordAudit).mockClear();
+
+    await expect(
+      updatePropertyOccupancy(actor, "p1", { maxOccupancy: 10 }),
+    ).rejects.toThrow(OWNERREZ_OWNS_MAX_OCCUPANCY_ERROR);
+    expect(prisma.property.update).not.toHaveBeenCalled();
+    expect(recordAudit).not.toHaveBeenCalled();
+  });
+
   it("updates maxOccupancy and audits it, independent of any other field", async () => {
     vi.mocked(assertPermission).mockResolvedValueOnce(undefined);
+    vi.mocked(prisma.property.findUnique).mockResolvedValueOnce({
+      ownerRezPropertyId: null,
+    } as never);
     const updated = { id: "p1", maxOccupancy: 10 };
     vi.mocked(prisma.property.update).mockResolvedValueOnce(updated as never);
 
@@ -168,8 +188,9 @@ describe("updatePropertyOccupancy", () => {
     });
 
     expect(assertPermission).toHaveBeenCalledWith(actor, "properties:update");
+    // The write itself only matches an unlinked property.
     expect(prisma.property.update).toHaveBeenCalledWith({
-      where: { id: "p1" },
+      where: { id: "p1", AND: [{ ownerRezPropertyId: null }] },
       data: { maxOccupancy: 10 },
     });
     expect(recordAudit).toHaveBeenCalledWith(

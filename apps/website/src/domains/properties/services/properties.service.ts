@@ -80,6 +80,17 @@ export async function updatePropertyStatus(
   return property;
 }
 
+export const OWNERREZ_OWNS_MAX_OCCUPANCY_ERROR =
+  "Maximum guests for this property comes from OwnerRez. Change it in OwnerRez, then use “Sync max guests from OwnerRez” on the Properties page.";
+
+/**
+ * Manual maxOccupancy edit — for properties NOT linked to OwnerRez only
+ * (2026-10-21). A linked property's maximum guests comes from OwnerRez
+ * (Kenny's rule; see syncMaxGuestsFromOwnerRez()), so a manual edit there
+ * is refused rather than allowed to drift silently from OwnerRez. The
+ * update's own `ownerRezPropertyId: null` condition keeps that true even if
+ * the property is linked between the check and the write.
+ */
 export async function updatePropertyOccupancy(
   actor: AuthContext,
   propertyId: string,
@@ -87,8 +98,16 @@ export async function updatePropertyOccupancy(
 ) {
   await assertPermission(actor, "properties:update");
 
-  const property = await prisma.property.update({
+  const existing = await prisma.property.findUnique({
     where: { id: propertyId },
+    select: { ownerRezPropertyId: true },
+  });
+  if (existing?.ownerRezPropertyId) {
+    throw new Error(OWNERREZ_OWNS_MAX_OCCUPANCY_ERROR);
+  }
+
+  const property = await prisma.property.update({
+    where: { id: propertyId, AND: [{ ownerRezPropertyId: null }] },
     data: { maxOccupancy: input.maxOccupancy },
   });
 

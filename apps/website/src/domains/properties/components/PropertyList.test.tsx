@@ -196,3 +196,29 @@ describe("PropertyList — full stored address (2026-10-20)", () => {
     expect(cell.textContent).toBe("No address stored");
   });
 });
+
+describe("PropertyList — max guests from OwnerRez (2026-10-21)", () => {
+  it("shows a linked property's value read-only, marked From OwnerRez, with no edit control", () => {
+    const { container } = render(
+      <PropertyList properties={[property({ maxOccupancy: 14 })] as never} />,
+    );
+    expect(screen.getByText("From OwnerRez")).toBeTruthy();
+    expect(screen.getByText("14")).toBeTruthy();
+    expect(container.querySelector('input[name="maxOccupancy"]')).toBeNull();
+  });
+
+  it("keeps the manual control for a property not linked to OwnerRez", () => {
+    const { container } = render(
+      <PropertyList
+        properties={
+          [property({ ownerRezPropertyId: null, maxOccupancy: 6 })] as never
+        }
+      />,
+    );
+    const input = container.querySelector(
+      'input[name="maxOccupancy"]',
+    ) as HTMLInputElement | null;
+    expect(input?.defaultValue).toBe("6");
+    expect(screen.queryByText("From OwnerRez")).toBeNull();
+  });
+});

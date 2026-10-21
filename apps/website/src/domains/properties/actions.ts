@@ -10,6 +10,10 @@ import {
   updatePropertyStatusSchema,
 } from "./schemas/properties.schema";
 import { confirmOwnerRezLink } from "./services/ownerrez-link.service";
+import {
+  syncMaxGuestsFromOwnerRez,
+  type MaxGuestsSyncPropertyResult,
+} from "./services/ownerrez-max-guests-sync.service";
 import { createPropertyFromOwnerRez } from "./services/ownerrez-onboarding.service";
 import {
   createProperty,
@@ -178,6 +182,51 @@ export async function createPropertyFromOwnerRezAction(
         !isPrismaClientError(err) && err instanceof Error
           ? err.message
           : GENERIC_CREATE_ERROR,
+    };
+  }
+}
+
+export type SyncMaxGuestsActionState =
+  | { status: "idle" }
+  | { status: "not_configured" }
+  | {
+      status: "success";
+      results: MaxGuestsSyncPropertyResult[];
+      rateLimited: boolean;
+    }
+  | { status: "failure"; error: string };
+
+const GENERIC_SYNC_ERROR =
+  "Something went wrong syncing maximum guests from OwnerRez. Nothing further was changed; try again later.";
+
+/**
+ * "Sync max guests from OwnerRez" on /properties (2026-10-21). Takes no
+ * input: which properties and which values are decided entirely
+ * server-side by syncMaxGuestsFromOwnerRez() (linked properties only,
+ * OwnerRez max_guests → maxOccupancy, nothing else). Per-property failures
+ * come back in `results`; only an unexpected top-level error (RBAC denial,
+ * database failure) lands here, rendered without Prisma/HTTP detail.
+ */
+export async function syncMaxGuestsFromOwnerRezAction(
+  _prevState: SyncMaxGuestsActionState,
+): Promise<SyncMaxGuestsActionState> {
+  try {
+    const actor = await getCurrentUser();
+    const result = await syncMaxGuestsFromOwnerRez(actor);
+    if (!result.configured) return { status: "not_configured" };
+    if (result.counts.updated > 0) revalidatePath("/properties");
+    return {
+      status: "success",
+      results: result.results,
+      rateLimited: result.rateLimited,
+    };
+  } catch (err) {
+    return {
+      status: "failure",
+      error:
+        !isPrismaClientError(err) && err instanceof Error
+          ? err.message
+          : GENERIC_SYNC_ERROR,
     };
   }
 }
