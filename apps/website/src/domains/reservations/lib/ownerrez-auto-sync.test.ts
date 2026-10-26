@@ -42,13 +42,15 @@ describe("vercel.json cron entry", () => {
     ),
   ) as { crons: Array<{ path: string; schedule: string }> };
 
-  it("has exactly one cron: the OwnerRez route, hourly at the shared minute", () => {
-    expect(vercelJson.crons).toEqual([
-      {
-        path: "/api/cron/ownerrez-reservation-sync",
-        schedule: OWNERREZ_AUTO_SYNC_SCHEDULE,
-      },
-    ]);
+  it("has exactly one OwnerRez cron, hourly at the shared minute", () => {
+    expect(vercelJson.crons.filter((c) => c.path.includes("ownerrez"))).toEqual(
+      [
+        {
+          path: "/api/cron/ownerrez-reservation-sync",
+          schedule: OWNERREZ_AUTO_SYNC_SCHEDULE,
+        },
+      ],
+    );
     expect(OWNERREZ_AUTO_SYNC_SCHEDULE).toBe("17 * * * *");
   });
 });

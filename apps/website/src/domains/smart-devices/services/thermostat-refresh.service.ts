@@ -9,13 +9,29 @@ import { NestClient, NestOAuthRefreshError } from "@stayw/integrations/nest";
 import {
   formatNestRefreshFailure,
   NEST_REFRESH_LOG_ENTITY,
+  parseNestRefreshFailure,
   type NestRefreshAttempt,
 } from "../lib/nest-health";
+import {
+  CIELO_REFRESH_LOG_ENTITY,
+  type CieloAutoDecision,
+  decideCieloAutoRefresh,
+  decideNestAutoRefresh,
+  formatCieloRefreshFailure,
+  isThermostatAutoRefreshEnabled,
+  type NestAutoDecision,
+  THERMOSTAT_AUTO_REFRESH_ENTITY,
+} from "../lib/thermostat-auto-refresh";
 
 import {
   toCieloSmartDeviceMetadata,
   toSmartDeviceMetadata,
 } from "./provider-devices.service";
+
+import {
+  ensureConnectionRows,
+  STALE_RUNNING_THRESHOLD_MS,
+} from "@/domains/integrations/services/integrations.service";
 
 /**
  * Manual "Refresh" for /thermostats — a pure read-from-provider,
@@ -106,7 +122,17 @@ export async function refreshNestTelemetry(
   actor: AuthContext,
 ): Promise<NestRefreshResult> {
   await assertPermission(actor, "smart_devices:update");
+  return runNestTelemetryRefresh(actor.userId);
+}
 
+/**
+ * refreshNestTelemetry()'s body, without the RBAC check — reached only
+ * through refreshNestTelemetry() (RBAC-checked) or the automatic, CRON_SECRET-
+ * protected refreshThermostatsAutomatic() below. Deliberately not exported.
+ */
+async function runNestTelemetryRefresh(
+  actorUserId: string,
+): Promise<NestRefreshResult> {
   // Configuration is validated unconditionally, before checking whether
   // there's anything to refresh — same as every other provider sync
   // function in this codebase (discoverNestDevices/syncCieloDevices). A VA
@@ -124,13 +150,13 @@ export async function refreshNestTelemetry(
     select: { id: true, externalDeviceId: true, smartDeviceId: true },
   });
   logThermostatRefresh("nest_eligible_rows", {
-    actorUserId: actor.userId,
+    actorUserId,
     eligibleCount: enabledDevices.length,
   });
 
   if (enabledDevices.length === 0) {
     logThermostatRefresh("nest_no_eligible_rows", {
-      actorUserId: actor.userId,
+      actorUserId,
     });
     return { refreshed: 0, notReturnedByProvider: 0 };
   }
@@ -140,7 +166,7 @@ export async function refreshNestTelemetry(
   // method is imported into this file).
   const freshDevices = await client.listDevices();
   logThermostatRefresh("nest_devices_returned", {
-    actorUserId: actor.userId,
+    actorUserId,
     returnedCount: freshDevices.length,
   });
   const freshByExternalId = new Map(
@@ -196,14 +222,14 @@ export async function refreshNestTelemetry(
     // externalDeviceId — worth telling apart from "provider returned
     // nothing at all" or "provider call failed."
     logThermostatRefresh("nest_zero_matched", {
-      actorUserId: actor.userId,
+      actorUserId,
       eligibleCount: enabledDevices.length,
       returnedCount: freshDevices.length,
     });
   }
 
   logThermostatRefresh("nest_refresh_completed", {
-    actorUserId: actor.userId,
+    actorUserId,
     refreshed: writes.length / 2,
     notReturnedByProvider,
   });
@@ -242,7 +268,13 @@ export async function refreshCieloTelemetry(
   actor: AuthContext,
 ): Promise<CieloRefreshResult> {
   await assertPermission(actor, "smart_devices:update");
+  return runCieloTelemetryRefresh(actor.userId);
+}
 
+/** refreshCieloTelemetry()'s body, without the RBAC check — same reachability rule as runNestTelemetryRefresh(). Not exported. */
+async function runCieloTelemetryRefresh(
+  actorUserId: string,
+): Promise<CieloRefreshResult> {
   const username = process.env.CIELO_USERNAME;
   const password = process.env.CIELO_PASSWORD;
   if (!username || !password) {
@@ -259,13 +291,13 @@ export async function refreshCieloTelemetry(
     select: { id: true, externalDeviceId: true },
   });
   logThermostatRefresh("cielo_eligible_rows", {
-    actorUserId: actor.userId,
+    actorUserId,
     eligibleCount: existingDevices.length,
   });
 
   if (existingDevices.length === 0) {
     logThermostatRefresh("cielo_no_eligible_rows", {
-      actorUserId: actor.userId,
+      actorUserId,
     });
     return { refreshed: 0, notReturnedByProvider: 0 };
   }
@@ -273,7 +305,7 @@ export async function refreshCieloTelemetry(
   const client = new CieloClient({ username, password });
   const freshDevices = await client.listDevices();
   logThermostatRefresh("cielo_devices_returned", {
-    actorUserId: actor.userId,
+    actorUserId,
     returnedCount: freshDevices.length,
   });
   const freshByExternalId = new Map(
@@ -313,14 +345,14 @@ export async function refreshCieloTelemetry(
     await prisma.$transaction(writes);
   } else {
     logThermostatRefresh("cielo_zero_matched", {
-      actorUserId: actor.userId,
+      actorUserId,
       eligibleCount: existingDevices.length,
       returnedCount: freshDevices.length,
     });
   }
 
   logThermostatRefresh("cielo_refresh_completed", {
-    actorUserId: actor.userId,
+    actorUserId,
     refreshed: writes.length,
     notReturnedByProvider,
   });
@@ -388,15 +420,28 @@ export function classifyNestRefreshFailure(err: unknown): string {
  * existing Nest connection row — never creates one. A logging failure is
  * reported in the server log and never changes the refresh's own outcome.
  */
-async function recordNestRefreshAttempt(args: {
+async function recordNestRefreshAttempt(
+  args: RefreshAttemptRecord,
+): Promise<void> {
+  await recordRefreshAttempt("NEST", NEST_REFRESH_LOG_ENTITY, args);
+}
+
+interface RefreshAttemptRecord {
   startedAt: Date;
   status: "SUCCEEDED" | "FAILED";
   recordsProcessed?: number;
   errorMessage?: string;
-}): Promise<void> {
+}
+
+/** Shared by the Nest and (automatic) Cielo attempt records — same rules: finished rows only, existing connection only, never throws. */
+async function recordRefreshAttempt(
+  provider: "NEST" | "CIELO",
+  entityType: string,
+  args: RefreshAttemptRecord,
+): Promise<void> {
   try {
     const connection = await prisma.integrationConnection.findUnique({
-      where: { provider: "NEST" },
+      where: { provider },
       select: { id: true },
     });
     if (!connection) return;
@@ -404,7 +449,7 @@ async function recordNestRefreshAttempt(args: {
       data: {
         integrationConnectionId: connection.id,
         direction: "INBOUND",
-        entityType: NEST_REFRESH_LOG_ENTITY,
+        entityType,
         status: args.status,
         startedAt: args.startedAt,
         finishedAt: new Date(),
@@ -413,10 +458,34 @@ async function recordNestRefreshAttempt(args: {
       },
     });
   } catch (logErr) {
-    logThermostatRefresh("nest_refresh_log_write_failed", {
-      error: logErr instanceof Error ? logErr.name : "unknown",
-    });
+    logThermostatRefresh(
+      provider === "NEST"
+        ? "nest_refresh_log_write_failed"
+        : "cielo_refresh_log_write_failed",
+      { error: logErr instanceof Error ? logErr.name : "unknown" },
+    );
   }
+}
+
+/**
+ * Sanitized, stable classification of a Cielo refresh failure (2026-10-27,
+ * automatic refresh) — the Cielo counterpart of classifyNestRefreshFailure().
+ * Only an HTTP status number is ever kept, never Cielo's own message text
+ * (CieloClient's login error carries it).
+ */
+export function classifyCieloRefreshFailure(err: unknown): string {
+  if (isNotConfiguredError(err)) {
+    return formatCieloRefreshFailure("CIELO_NOT_CONFIGURED");
+  }
+  if (err instanceof HttpRequestError) {
+    return err.status === 401 || err.status === 403
+      ? formatCieloRefreshFailure("CIELO_AUTH_FAILED", err.status)
+      : formatCieloRefreshFailure("CIELO_PROVIDER_ERROR", err.status);
+  }
+  if (err instanceof Error && err.message.startsWith("Cielo login failed")) {
+    return formatCieloRefreshFailure("CIELO_AUTH_FAILED");
+  }
+  return formatCieloRefreshFailure("CIELO_REFRESH_FAILED");
 }
 
 export interface NestRefreshHealthRecord {
@@ -462,16 +531,28 @@ export async function getNestRefreshHealthRecord(
   };
 }
 
+/**
+ * One provider's refresh: the outcome the dashboard shows, plus — on any
+ * failure — the sanitized stored form (formatNestRefreshFailure /
+ * formatCieloRefreshFailure: a fixed code and sentence, never provider text)
+ * that the automatic run reports and alerts on.
+ */
+interface ProviderAttempt {
+  outcome: ProviderRefreshOutcome;
+  failure: string | null;
+}
+
 async function refreshNestProvider(
-  actor: AuthContext,
-): Promise<ProviderRefreshOutcome> {
+  actorUserId: string,
+  run: () => Promise<NestRefreshResult>,
+): Promise<ProviderAttempt> {
   logThermostatRefresh("provider_start", {
-    actorUserId: actor.userId,
+    actorUserId,
     provider: "NEST",
   });
   const startedAt = new Date();
   try {
-    const result = await refreshNestTelemetry(actor);
+    const result = await run();
     await recordNestRefreshAttempt({
       startedAt,
       status: "SUCCEEDED",
@@ -484,23 +565,27 @@ async function refreshNestProvider(
       notReturnedByProvider: result.notReturnedByProvider,
     };
     logThermostatRefresh("provider_outcome", {
-      actorUserId: actor.userId,
+      actorUserId,
       ...outcome,
     });
-    return outcome;
+    return { outcome, failure: null };
   } catch (err) {
+    const failure = classifyNestRefreshFailure(err);
     await recordNestRefreshAttempt({
       startedAt,
       status: "FAILED",
-      errorMessage: classifyNestRefreshFailure(err),
+      errorMessage: failure,
     });
     if (isNotConfiguredError(err)) {
       logThermostatRefresh("provider_outcome", {
-        actorUserId: actor.userId,
+        actorUserId,
         provider: "NEST",
         status: "not_configured",
       });
-      return { provider: "NEST", status: "not_configured" };
+      return {
+        outcome: { provider: "NEST", status: "not_configured" },
+        failure,
+      };
     }
     // A failed OAuth token refresh carries a much richer, still-fully-
     // sanitized diagnostic (HTTP status, Google's own short error code/
@@ -513,7 +598,7 @@ async function refreshNestProvider(
     // a safe/generic UI error, so it stays log-only.
     if (err instanceof NestOAuthRefreshError) {
       logThermostatRefresh("nest_oauth_error_diagnostic", {
-        actorUserId: actor.userId,
+        actorUserId,
         ...err.diagnostic,
       });
     }
@@ -527,12 +612,12 @@ async function refreshNestProvider(
     // the diagnostic addition above).
     const error = err instanceof Error ? err.message : String(err);
     logThermostatRefresh("provider_outcome", {
-      actorUserId: actor.userId,
+      actorUserId,
       provider: "NEST",
       status: "failure",
       error,
     });
-    return { provider: "NEST", status: "failure", error };
+    return { outcome: { provider: "NEST", status: "failure", error }, failure };
   }
 }
 
@@ -543,14 +628,24 @@ async function refreshNestProvider(
  * "Refresh" must never do.
  */
 async function refreshCieloProvider(
-  actor: AuthContext,
-): Promise<ProviderRefreshOutcome> {
+  actorUserId: string,
+  run: () => Promise<CieloRefreshResult>,
+  options: { recordAttempt?: boolean } = {},
+): Promise<ProviderAttempt> {
   logThermostatRefresh("provider_start", {
-    actorUserId: actor.userId,
+    actorUserId,
     provider: "CIELO",
   });
+  const startedAt = new Date();
   try {
-    const result = await refreshCieloTelemetry(actor);
+    const result = await run();
+    if (options.recordAttempt) {
+      await recordRefreshAttempt("CIELO", CIELO_REFRESH_LOG_ENTITY, {
+        startedAt,
+        status: "SUCCEEDED",
+        recordsProcessed: result.refreshed,
+      });
+    }
     const outcome: ProviderRefreshOutcome = {
       provider: "CIELO",
       status: "success",
@@ -558,27 +653,41 @@ async function refreshCieloProvider(
       notReturnedByProvider: result.notReturnedByProvider,
     };
     logThermostatRefresh("provider_outcome", {
-      actorUserId: actor.userId,
+      actorUserId,
       ...outcome,
     });
-    return outcome;
+    return { outcome, failure: null };
   } catch (err) {
+    const failure = classifyCieloRefreshFailure(err);
+    if (options.recordAttempt) {
+      await recordRefreshAttempt("CIELO", CIELO_REFRESH_LOG_ENTITY, {
+        startedAt,
+        status: "FAILED",
+        errorMessage: failure,
+      });
+    }
     if (isNotConfiguredError(err)) {
       logThermostatRefresh("provider_outcome", {
-        actorUserId: actor.userId,
+        actorUserId,
         provider: "CIELO",
         status: "not_configured",
       });
-      return { provider: "CIELO", status: "not_configured" };
+      return {
+        outcome: { provider: "CIELO", status: "not_configured" },
+        failure,
+      };
     }
     const error = err instanceof Error ? err.message : String(err);
     logThermostatRefresh("provider_outcome", {
-      actorUserId: actor.userId,
+      actorUserId,
       provider: "CIELO",
       status: "failure",
       error,
     });
-    return { provider: "CIELO", status: "failure", error };
+    return {
+      outcome: { provider: "CIELO", status: "failure", error },
+      failure,
+    };
   }
 }
 
@@ -626,8 +735,13 @@ export async function refreshThermostats(
   });
 
   const providers: ProviderRefreshOutcome[] = [
-    await refreshNestProvider(actor),
-    await refreshCieloProvider(actor),
+    (await refreshNestProvider(actor.userId, () => refreshNestTelemetry(actor)))
+      .outcome,
+    (
+      await refreshCieloProvider(actor.userId, () =>
+        refreshCieloTelemetry(actor),
+      )
+    ).outcome,
   ];
 
   logThermostatRefresh("refresh_completed", {
@@ -639,4 +753,275 @@ export async function refreshThermostats(
   });
 
   return { providers, refreshedAt: new Date().toISOString() };
+}
+
+/** What one automatic run did for one provider — counts and fixed codes only, never a device id or provider text. */
+export type AutomaticProviderResult =
+  | { status: "success"; refreshed: number; notReturnedByProvider: number }
+  | { status: "failed"; code: string }
+  | { status: "not_configured" }
+  | {
+      status: "skipped";
+      reason: NestAutoDecision | CieloAutoDecision;
+    };
+
+export type AutomaticThermostatRefreshOutcome =
+  | { status: "disabled" }
+  | { status: "already_running" }
+  | {
+      status: "completed";
+      nest: AutomaticProviderResult;
+      cielo: AutomaticProviderResult;
+    };
+
+/** A provider attempt as the automatic run reports it: a failure becomes only the code part of its stored "CODE: sentence (HTTP n)" text. */
+function toAutomaticResult(attempt: ProviderAttempt): AutomaticProviderResult {
+  const { outcome } = attempt;
+  if (outcome.status === "success") {
+    return {
+      status: "success",
+      refreshed: outcome.refreshed,
+      notReturnedByProvider: outcome.notReturnedByProvider,
+    };
+  }
+  if (outcome.status === "not_configured") return { status: "not_configured" };
+  return {
+    status: "failed",
+    code: attempt.failure?.split(":", 1)[0] ?? "REFRESH_FAILED",
+  };
+}
+
+const AUTO_REFRESH_ACTOR = "system:thermostat-auto-refresh";
+/** Advisory-lock namespace of the automatic run's claim — its own, so it never contends with the August/Cielo `integration_sync` lock. */
+const AUTO_REFRESH_LOCK_NAME = "thermostat_auto_refresh";
+const RECENT_ATTEMPTS = 10;
+
+const attemptSelect = {
+  status: true,
+  startedAt: true,
+  finishedAt: true,
+  errorMessage: true,
+} as const;
+
+function isNestAuthFailure(errorMessage: string | null): boolean {
+  return parseNestRefreshFailure(errorMessage) === "NEST_AUTH_EXPIRED";
+}
+
+/**
+ * Automatic, scheduled thermostat refresh (2026-10-27) — the
+ * CRON_SECRET-protected counterpart of the /thermostats Refresh button, run
+ * by /api/cron/thermostat-refresh. There is no signed-in user: the route's
+ * bearer check is the authorization boundary (same as the August and
+ * OwnerRez scheduled jobs), and the provider work is the same read-only
+ * runNestTelemetryRefresh()/runCieloTelemetryRefresh() the button uses —
+ * existing rows only, never a create/map/delete, never a command.
+ *
+ * 1. THERMOSTAT_AUTO_REFRESH_ENABLED must be exactly "true", checked before
+ *    any database or provider call.
+ * 2. Claim (one short transaction, no network inside): a transaction-scoped
+ *    advisory lock, then the overlap check — a RUNNING
+ *    THERMOSTAT_AUTO_REFRESH_ENTITY row younger than
+ *    STALE_RUNNING_THRESHOLD_MS means another run is working (skip); an
+ *    older one is a crashed run, closed as FAILED. The per-provider
+ *    decisions (thermostat-auto-refresh.ts) are read inside the same claim.
+ * 3. Providers run one at a time, outside the transaction. Nest records its
+ *    attempt exactly like a manual refresh (so the /thermostats banner
+ *    reflects automatic runs too); Cielo's automatic attempts are recorded
+ *    as CIELO_REFRESH_LOG_ENTITY rows.
+ * 4. The run row is closed SUCCEEDED / PARTIAL / FAILED with a summary made
+ *    only of provider names, statuses, counts and fixed codes.
+ *
+ * The manual button deliberately stays outside this claim: its behavior is
+ * unchanged, and a manual refresh overlapping an automatic one only writes
+ * the same provider data twice.
+ */
+export async function refreshThermostatsAutomatic(
+  now: Date = new Date(),
+): Promise<AutomaticThermostatRefreshOutcome> {
+  if (!isThermostatAutoRefreshEnabled()) {
+    logThermostatRefresh("auto_refresh_disabled", {});
+    return { status: "disabled" };
+  }
+
+  await ensureConnectionRows();
+  const [nestConnection, cieloConnection] = await Promise.all([
+    prisma.integrationConnection.findUniqueOrThrow({
+      where: { provider: "NEST" },
+      select: { id: true },
+    }),
+    prisma.integrationConnection.findUniqueOrThrow({
+      where: { provider: "CIELO" },
+      select: { id: true },
+    }),
+  ]);
+
+  type Claim =
+    | { proceeding: false }
+    | {
+        proceeding: true;
+        runId: string;
+        nest: NestAutoDecision;
+        cielo: CieloAutoDecision;
+      };
+  const claim = await prisma.$transaction(async (tx): Promise<Claim> => {
+    const lockRows = await tx.$queryRaw<{ locked: boolean }[]>`
+      SELECT pg_try_advisory_xact_lock(hashtext(${AUTO_REFRESH_LOCK_NAME}), hashtext(${nestConnection.id})) AS locked
+    `;
+    if (!lockRows[0]?.locked) return { proceeding: false };
+
+    const running = await tx.integrationSyncLog.findFirst({
+      where: {
+        integrationConnectionId: nestConnection.id,
+        entityType: THERMOSTAT_AUTO_REFRESH_ENTITY,
+        status: "RUNNING",
+      },
+      orderBy: { startedAt: "desc" },
+    });
+    if (running) {
+      if (
+        now.getTime() - running.startedAt.getTime() <
+        STALE_RUNNING_THRESHOLD_MS
+      ) {
+        return { proceeding: false };
+      }
+      await tx.integrationSyncLog.update({
+        where: { id: running.id },
+        data: {
+          status: "FAILED",
+          errorMessage:
+            "Automatic thermostat refresh timed out or the process terminated unexpectedly.",
+          finishedAt: now,
+        },
+      });
+    }
+
+    const [nestAttempts, cieloAttempts] = await Promise.all([
+      tx.integrationSyncLog.findMany({
+        where: {
+          integrationConnectionId: nestConnection.id,
+          entityType: NEST_REFRESH_LOG_ENTITY,
+        },
+        orderBy: { startedAt: "desc" },
+        take: RECENT_ATTEMPTS,
+        select: attemptSelect,
+      }),
+      tx.integrationSyncLog.findMany({
+        where: {
+          integrationConnectionId: cieloConnection.id,
+          entityType: CIELO_REFRESH_LOG_ENTITY,
+        },
+        orderBy: { startedAt: "desc" },
+        take: 1,
+        select: attemptSelect,
+      }),
+    ]);
+
+    const run = await tx.integrationSyncLog.create({
+      data: {
+        integrationConnectionId: nestConnection.id,
+        direction: "INBOUND",
+        entityType: THERMOSTAT_AUTO_REFRESH_ENTITY,
+        status: "RUNNING",
+        startedAt: now,
+      },
+    });
+    return {
+      proceeding: true,
+      runId: run.id,
+      nest: decideNestAutoRefresh(nestAttempts, now, isNestAuthFailure),
+      cielo: decideCieloAutoRefresh(cieloAttempts, now),
+    };
+  });
+
+  if (!claim.proceeding) {
+    logThermostatRefresh("auto_refresh_skipped_already_running", {});
+    return { status: "already_running" };
+  }
+
+  logThermostatRefresh("auto_refresh_started", {
+    nest: claim.nest,
+    cielo: claim.cielo,
+  });
+
+  let nest: AutomaticProviderResult = { status: "skipped", reason: claim.nest };
+  let cielo: AutomaticProviderResult = {
+    status: "skipped",
+    reason: claim.cielo,
+  };
+  try {
+    if (claim.nest === "run") {
+      nest = toAutomaticResult(
+        await refreshNestProvider(AUTO_REFRESH_ACTOR, () =>
+          runNestTelemetryRefresh(AUTO_REFRESH_ACTOR),
+        ),
+      );
+    }
+    if (claim.cielo === "run") {
+      cielo = toAutomaticResult(
+        await refreshCieloProvider(
+          AUTO_REFRESH_ACTOR,
+          () => runCieloTelemetryRefresh(AUTO_REFRESH_ACTOR),
+          { recordAttempt: true },
+        ),
+      );
+    }
+  } finally {
+    await finishAutomaticRun(claim.runId, nest, cielo);
+  }
+
+  logThermostatRefresh("auto_refresh_completed", { nest, cielo });
+  return { status: "completed", nest, cielo };
+}
+
+function summarizeAutomaticResult(
+  provider: string,
+  result: AutomaticProviderResult,
+): string {
+  switch (result.status) {
+    case "success":
+      return `${provider}=success(${result.refreshed})`;
+    case "failed":
+      return `${provider}=failed(${result.code})`;
+    case "not_configured":
+      return `${provider}=not_configured`;
+    case "skipped":
+      return `${provider}=skipped(${result.reason})`;
+  }
+}
+
+/** Closes the run row. Never throws — a failed close is logged, and the RUNNING row then ages out through the stale-claim path. */
+async function finishAutomaticRun(
+  runId: string,
+  nest: AutomaticProviderResult,
+  cielo: AutomaticProviderResult,
+): Promise<void> {
+  const attempted = [nest, cielo].filter((r) => r.status !== "skipped");
+  const failed = attempted.filter(
+    (r) => r.status === "failed" || r.status === "not_configured",
+  ).length;
+  const status =
+    failed === 0
+      ? "SUCCEEDED"
+      : failed === attempted.length
+        ? "FAILED"
+        : "PARTIAL";
+  const refreshed = [nest, cielo].reduce(
+    (sum, r) => sum + (r.status === "success" ? r.refreshed : 0),
+    0,
+  );
+  try {
+    await prisma.integrationSyncLog.update({
+      where: { id: runId },
+      data: {
+        status,
+        finishedAt: new Date(),
+        recordsProcessed: refreshed,
+        errorMessage: `${summarizeAutomaticResult("nest", nest)} ${summarizeAutomaticResult("cielo", cielo)}`,
+      },
+    });
+  } catch (err) {
+    logThermostatRefresh("auto_refresh_finish_failed", {
+      error: err instanceof Error ? err.name : "unknown",
+    });
+  }
 }

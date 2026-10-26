@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/ownerrez-reservation-sync",
       "schedule": "17 * * * *"
+    },
+    {
+      "path": "/api/cron/thermostat-refresh",
+      "schedule": "*/30 * * * *"
     }
   ]
 }
