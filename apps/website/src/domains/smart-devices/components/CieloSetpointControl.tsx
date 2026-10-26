@@ -102,7 +102,9 @@ export function CieloSetpointControl({
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-2">
+      {/* flex-wrap: in a narrow /thermostats Controls column the button drops
+          under the input instead of widening the whole table. */}
+      <div className="flex flex-wrap items-center gap-2">
         <Input
           type="number"
           aria-label={`New setpoint for ${deviceName} (°F)`}
