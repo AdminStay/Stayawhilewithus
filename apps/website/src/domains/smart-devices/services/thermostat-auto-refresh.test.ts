@@ -87,6 +87,7 @@ import { formatCieloRefreshFailure } from "../lib/thermostat-auto-refresh";
 
 import {
   classifyCieloRefreshFailure,
+  NoDevicesReturnedError,
   refreshThermostatsAutomatic,
 } from "./thermostat-refresh.service";
 
@@ -448,6 +449,66 @@ describe("refreshThermostatsAutomatic — authorization expiry", () => {
 });
 
 describe("refreshThermostatsAutomatic — provider failures", () => {
+  it("Nest returns none of the enabled devices → failed NEST_NO_DEVICES_RETURNED, recorded FAILED — never a 0-device success", async () => {
+    db.listNest.mockResolvedValue([
+      { externalDeviceId: "someone-elses", connectivity: "ONLINE" },
+    ]);
+
+    const outcome = await refreshThermostatsAutomatic(NOW);
+
+    expect(outcome).toMatchObject({
+      nest: { status: "failed", code: "NEST_NO_DEVICES_RETURNED" },
+      cielo: { status: "success", refreshed: 1 },
+    });
+    expect(createdRows("NestTelemetryRefresh")).toEqual([
+      expect.objectContaining({
+        status: "FAILED",
+        recordsProcessed: 0,
+        errorMessage: formatNestRefreshFailure("NEST_NO_DEVICES_RETURNED"),
+      }),
+    ]);
+    expect(db.smartDeviceUpdate).toHaveBeenCalledTimes(1); // Cielo's only
+    expect(db.providerDeviceUpdate).not.toHaveBeenCalled();
+    expect(runRowClose()).toEqual(
+      expect.objectContaining({
+        status: "PARTIAL",
+        errorMessage: "nest=failed(NEST_NO_DEVICES_RETURNED) cielo=success(1)",
+      }),
+    );
+  });
+
+  it("Cielo returns none of the existing devices → failed CIELO_NO_DEVICES_RETURNED, recorded FAILED", async () => {
+    db.listCielo.mockResolvedValue([]);
+
+    const outcome = await refreshThermostatsAutomatic(NOW);
+
+    expect(outcome).toMatchObject({
+      nest: { status: "success" },
+      cielo: { status: "failed", code: "CIELO_NO_DEVICES_RETURNED" },
+    });
+    expect(createdRows("CieloTelemetryRefresh")).toEqual([
+      expect.objectContaining({
+        status: "FAILED",
+        errorMessage: formatCieloRefreshFailure("CIELO_NO_DEVICES_RETURNED"),
+      }),
+    ]);
+  });
+
+  it("no eligible devices at all → a legitimate no-op success for both providers (no provider call)", async () => {
+    db.providerDeviceFindMany.mockResolvedValue([]);
+    db.smartDeviceFindMany.mockResolvedValue([]);
+
+    const outcome = await refreshThermostatsAutomatic(NOW);
+
+    expect(outcome).toMatchObject({
+      nest: { status: "success", refreshed: 0, notReturnedByProvider: 0 },
+      cielo: { status: "success", refreshed: 0, notReturnedByProvider: 0 },
+    });
+    expect(db.listNest).not.toHaveBeenCalled();
+    expect(db.listCielo).not.toHaveBeenCalled();
+    expect(runRowClose()?.status).toBe("SUCCEEDED");
+  });
+
   it("Nest API error → failed NEST_PROVIDER_ERROR; Cielo still runs and succeeds", async () => {
     db.listNest.mockRejectedValue(
       new HttpRequestError("/enterprises/secret-project/devices", 503),
@@ -558,6 +619,7 @@ describe("classifyCieloRefreshFailure", () => {
     [new HttpRequestError("/user/login", 403), "CIELO_AUTH_FAILED"],
     [new HttpRequestError("/web/devices", 502), "CIELO_PROVIDER_ERROR"],
     [new Error("boom"), "CIELO_REFRESH_FAILED"],
+    [new NoDevicesReturnedError("CIELO", 3), "CIELO_NO_DEVICES_RETURNED"],
     ["not even an error", "CIELO_REFRESH_FAILED"],
   ])("%s → %s", (err, code) => {
     expect(classifyCieloRefreshFailure(err).startsWith(`${code}:`)).toBe(true);

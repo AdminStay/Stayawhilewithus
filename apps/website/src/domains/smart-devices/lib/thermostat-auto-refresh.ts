@@ -45,12 +45,15 @@ export type CieloRefreshFailureCode =
   | "CIELO_AUTH_FAILED"
   | "CIELO_PROVIDER_ERROR"
   | "CIELO_NOT_CONFIGURED"
+  | "CIELO_NO_DEVICES_RETURNED"
   | "CIELO_REFRESH_FAILED";
 
 const CIELO_FAILURE_TEXT: Record<CieloRefreshFailureCode, string> = {
   CIELO_AUTH_FAILED: "Cielo refused the sign-in.",
   CIELO_PROVIDER_ERROR: "The Cielo API request failed.",
   CIELO_NOT_CONFIGURED: "Cielo credentials are not configured on the server.",
+  CIELO_NO_DEVICES_RETURNED:
+    "Cielo returned none of the existing Cielo thermostats, so nothing was refreshed.",
   CIELO_REFRESH_FAILED:
     "The Cielo refresh failed for an unexpected reason (details are in the server logs).",
 };

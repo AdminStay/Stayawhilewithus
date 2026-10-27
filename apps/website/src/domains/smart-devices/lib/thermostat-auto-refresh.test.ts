@@ -162,6 +162,23 @@ describe("decideNestAutoRefresh", () => {
     ).toBe("run");
   });
 
+  it("a 'no devices returned' failure after an auth failure does not lift the pause — only a success does (2026-10-28)", () => {
+    expect(
+      decideNestAutoRefresh(
+        [
+          attempt(
+            "FAILED",
+            30,
+            formatNestRefreshFailure("NEST_NO_DEVICES_RETURNED"),
+          ),
+          attempt("FAILED", 60, NEST_AUTH),
+        ],
+        NOW,
+        isNestAuth,
+      ),
+    ).toBe("auth_required");
+  });
+
   it("an ordinary provider failure does not pause it", () => {
     expect(
       decideNestAutoRefresh([attempt("FAILED", 30, NEST_API)], NOW, isNestAuth),

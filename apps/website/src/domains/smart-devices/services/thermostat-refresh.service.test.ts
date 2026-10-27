@@ -81,6 +81,7 @@ import { NestOAuthRefreshError } from "@stayw/integrations/nest";
 
 import {
   getNestRefreshHealthRecord,
+  NoDevicesReturnedError,
   refreshCieloTelemetry,
   refreshNestTelemetry,
   refreshThermostats,
@@ -1194,5 +1195,126 @@ describe("Nest refresh health — durable, sanitized IntegrationSyncLog per atte
     }
     expect(mockSyncLogCreate).not.toHaveBeenCalled();
     expect(mockListDevices).not.toHaveBeenCalled();
+  });
+});
+
+describe("eligible devices but none returned — a failure, never a 0-device success (2026-10-28)", () => {
+  beforeEach(() => {
+    setNestEnv();
+    setCieloEnv();
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.providerDevice.findMany)
+      .mockReset()
+      .mockResolvedValue([
+        enabledProviderDevice("pd-1", "ext-1", "sd-1"),
+        enabledProviderDevice("pd-2", "ext-2", "sd-2"),
+      ] as never);
+    vi.mocked(prisma.smartDevice.findMany)
+      .mockReset()
+      .mockResolvedValue([existingCieloSmartDevice("sd-c1", "mac-1")]);
+    vi.mocked(prisma.smartDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    vi.mocked(prisma.providerDevice.update)
+      .mockReset()
+      .mockResolvedValue({} as never);
+    mockListDevices.mockReset().mockResolvedValue([]);
+    mockListCieloDevices.mockReset().mockResolvedValue([]);
+    mockTransaction
+      .mockReset()
+      .mockImplementation(async (arg) =>
+        Array.isArray(arg) ? Promise.all(arg) : arg,
+      );
+    mockConnectionFindUnique.mockReset().mockResolvedValue({ id: "conn-nest" });
+    mockSyncLogCreate.mockReset().mockResolvedValue({});
+  });
+  afterEach(() => {
+    restoreEnv();
+    mockConnectionFindUnique.mockReset();
+  });
+
+  it("Nest: Google returns no devices at all → NoDevicesReturnedError; nothing is written", async () => {
+    await expect(refreshNestTelemetry(actor)).rejects.toBeInstanceOf(
+      NoDevicesReturnedError,
+    );
+    expect(mockTransaction).not.toHaveBeenCalled();
+    expect(prisma.smartDevice.update).not.toHaveBeenCalled();
+    expect(prisma.providerDevice.update).not.toHaveBeenCalled();
+  });
+
+  it("Nest: Google returns only devices StayWhile doesn't have enabled (e.g. another account) → same failure", async () => {
+    mockListDevices.mockResolvedValue([
+      nestDevice("other-1"),
+      nestDevice("other-2"),
+    ]);
+    await expect(refreshNestTelemetry(actor)).rejects.toThrow(
+      "Nest returned none of the 2 enabled thermostats — nothing was refreshed.",
+    );
+  });
+
+  it("Nest: one of two returned is still a (partial) success with the not-returned count — unchanged", async () => {
+    mockListDevices.mockResolvedValue([nestDevice("ext-1")]);
+    await expect(refreshNestTelemetry(actor)).resolves.toEqual({
+      refreshed: 1,
+      notReturnedByProvider: 1,
+    });
+  });
+
+  it("Nest: no eligible devices stays a legitimate no-op success, without calling Google", async () => {
+    vi.mocked(prisma.providerDevice.findMany).mockResolvedValue([]);
+    await expect(refreshNestTelemetry(actor)).resolves.toEqual({
+      refreshed: 0,
+      notReturnedByProvider: 0,
+    });
+    expect(mockListDevices).not.toHaveBeenCalled();
+  });
+
+  it("Cielo: existing devices, none returned → NoDevicesReturnedError; nothing is written", async () => {
+    mockListCieloDevices.mockResolvedValue([cieloDevice("mac-unknown")]);
+    await expect(refreshCieloTelemetry(actor)).rejects.toThrow(
+      "Cielo returned none of the 1 existing thermostat — nothing was refreshed.",
+    );
+    expect(prisma.smartDevice.update).not.toHaveBeenCalled();
+  });
+
+  it("Cielo: no existing devices stays a legitimate no-op success", async () => {
+    vi.mocked(prisma.smartDevice.findMany).mockResolvedValue([]);
+    await expect(refreshCieloTelemetry(actor)).resolves.toEqual({
+      refreshed: 0,
+      notReturnedByProvider: 0,
+    });
+  });
+
+  it("manual Refresh: both providers report failure (not '0 refreshed'), with the safe count-only message", async () => {
+    const result = await refreshThermostats(actor);
+
+    expect(result.providers).toEqual([
+      {
+        provider: "NEST",
+        status: "failure",
+        error:
+          "Nest returned none of the 2 enabled thermostats — nothing was refreshed.",
+      },
+      {
+        provider: "CIELO",
+        status: "failure",
+        error:
+          "Cielo returned none of the 1 existing thermostat — nothing was refreshed.",
+      },
+    ]);
+  });
+
+  it("manual Refresh: the Nest attempt is recorded FAILED with NEST_NO_DEVICES_RETURNED, so the banner shows a failed refresh", async () => {
+    await refreshThermostats(actor);
+
+    expect(mockSyncLogCreate).toHaveBeenCalledTimes(1);
+    const row = mockSyncLogCreate.mock.calls[0]![0].data;
+    expect(row).toMatchObject({
+      entityType: "NestTelemetryRefresh",
+      status: "FAILED",
+      recordsProcessed: 0,
+    });
+    expect(row.errorMessage).toMatch(/^NEST_NO_DEVICES_RETURNED: /);
+    expect(row.errorMessage).not.toContain("ext-");
   });
 });

@@ -90,7 +90,20 @@ async function checkProvider(
       errorMessage: true,
     },
   });
-  const lastSuccess = attempts.find((a) => a.status === "SUCCEEDED");
+  // The incident starts after the provider's latest success — looked up on
+  // its own, however far back (2026-10-28). Taking it from the recent
+  // attempts above missed a success older than RECENT_ATTEMPTS, and then an
+  // alert from an earlier, resolved incident suppressed the new one. With no
+  // success ever, every earlier alert belongs to the same unresolved incident.
+  const lastSuccess = await prisma.integrationSyncLog.findFirst({
+    where: {
+      integrationConnectionId: connection.id,
+      entityType,
+      status: "SUCCEEDED",
+    },
+    orderBy: { startedAt: "desc" },
+    select: { startedAt: true, finishedAt: true },
+  });
   const existing = await prisma.notification.findMany({
     where: {
       relatedEntityType: {

@@ -94,6 +94,27 @@ describe("nest-health (2026-09-27, Nest Phase 1)", () => {
     expect(h.headline).toMatch(/last Nest refresh failed/);
   });
 
+  it("a 'no devices returned' attempt is a failed refresh, never ok (2026-10-28)", () => {
+    const h = summarizeNestHealth({
+      ...base,
+      lastAttempt: {
+        status: "FAILED",
+        finishedAt: ago(60_000),
+        errorMessage: formatNestRefreshFailure("NEST_NO_DEVICES_RETURNED"),
+      },
+    });
+    expect(h.lastAttemptOk).toBe(false);
+    expect(
+      parseNestRefreshFailure(
+        formatNestRefreshFailure("NEST_NO_DEVICES_RETURNED"),
+      ),
+    ).toBe("NEST_NO_DEVICES_RETURNED");
+    expect(h.state).toBe("refresh_failing");
+    expect(h.headline).toBe(
+      "The last Nest refresh failed (Google returned none of the enabled Nest thermostats, so nothing was refreshed. Check that the Nest authorization is for the right Google account). Nest readings may be out of date.",
+    );
+  });
+
   it("a successful last attempt with old readings is still stale", () => {
     expect(
       summarizeNestHealth({

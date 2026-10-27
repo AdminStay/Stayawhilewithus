@@ -77,6 +77,26 @@ export function logThermostatRefresh(
   );
 }
 
+/**
+ * Thrown when a provider read succeeded but returned NONE of the eligible
+ * devices (2026-10-28) — e.g. a Nest authorization for a Google account that
+ * can't see this fleet. Nothing was refreshed, so it must never be recorded
+ * or shown as a successful refresh. Only counts go into the message (it is
+ * shown on /thermostats), never an id or provider text. Not thrown when there
+ * is nothing eligible, or when at least one device was refreshed.
+ */
+export class NoDevicesReturnedError extends Error {
+  constructor(
+    readonly provider: "NEST" | "CIELO",
+    eligibleCount: number,
+  ) {
+    super(
+      `${provider === "NEST" ? "Nest returned none of the" : "Cielo returned none of the"} ${eligibleCount} ${provider === "NEST" ? "enabled" : "existing"} thermostat${eligibleCount === 1 ? "" : "s"} — nothing was refreshed.`,
+    );
+    this.name = "NoDevicesReturnedError";
+  }
+}
+
 function getNestClientFromEnv(): NestClient {
   const clientId = process.env.NEST_CLIENT_ID;
   const clientSecret = process.env.NEST_CLIENT_SECRET;
@@ -226,6 +246,11 @@ async function runNestTelemetryRefresh(
       eligibleCount: enabledDevices.length,
       returnedCount: freshDevices.length,
     });
+    // Eligible devices exist but Google returned none of them: nothing was
+    // refreshed, so this is a failure, not "0 refreshed" (2026-10-28).
+    if (notReturnedByProvider > 0) {
+      throw new NoDevicesReturnedError("NEST", notReturnedByProvider);
+    }
   }
 
   logThermostatRefresh("nest_refresh_completed", {
@@ -349,6 +374,10 @@ async function runCieloTelemetryRefresh(
       eligibleCount: existingDevices.length,
       returnedCount: freshDevices.length,
     });
+    // Same rule as Nest: existing devices, none returned → a failure.
+    if (notReturnedByProvider > 0) {
+      throw new NoDevicesReturnedError("CIELO", notReturnedByProvider);
+    }
   }
 
   logThermostatRefresh("cielo_refresh_completed", {
@@ -398,6 +427,9 @@ function isNotConfiguredError(err: unknown): boolean {
 export function classifyNestRefreshFailure(err: unknown): string {
   if (isNotConfiguredError(err)) {
     return formatNestRefreshFailure("NEST_NOT_CONFIGURED");
+  }
+  if (err instanceof NoDevicesReturnedError) {
+    return formatNestRefreshFailure("NEST_NO_DEVICES_RETURNED");
   }
   if (err instanceof NestOAuthRefreshError) {
     return err.diagnostic.oauthError === "invalid_grant"
@@ -476,6 +508,9 @@ async function recordRefreshAttempt(
 export function classifyCieloRefreshFailure(err: unknown): string {
   if (isNotConfiguredError(err)) {
     return formatCieloRefreshFailure("CIELO_NOT_CONFIGURED");
+  }
+  if (err instanceof NoDevicesReturnedError) {
+    return formatCieloRefreshFailure("CIELO_NO_DEVICES_RETURNED");
   }
   if (err instanceof HttpRequestError) {
     return err.status === 401 || err.status === 403
