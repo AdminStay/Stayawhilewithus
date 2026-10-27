@@ -19,6 +19,7 @@ export type NestRefreshFailureCode =
   | "NEST_AUTH_EXPIRED"
   | "NEST_PROVIDER_ERROR"
   | "NEST_NOT_CONFIGURED"
+  | "NEST_NO_DEVICES_RETURNED"
   | "NEST_REFRESH_FAILED";
 
 const FAILURE_TEXT: Record<NestRefreshFailureCode, string> = {
@@ -26,6 +27,8 @@ const FAILURE_TEXT: Record<NestRefreshFailureCode, string> = {
     "Google authorization for Nest has expired or been revoked. Nest must be reauthorized before any Nest data can refresh.",
   NEST_PROVIDER_ERROR: "The Google Nest API request failed.",
   NEST_NOT_CONFIGURED: "Nest credentials are not configured on the server.",
+  NEST_NO_DEVICES_RETURNED:
+    "Google returned none of the enabled Nest thermostats, so nothing was refreshed. Check that the Nest authorization is for the right Google account.",
   NEST_REFRESH_FAILED:
     "The Nest refresh failed for an unexpected reason (details are in the server logs).",
 };
