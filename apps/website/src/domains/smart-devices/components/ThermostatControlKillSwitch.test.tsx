@@ -42,4 +42,10 @@ describe("ThermostatControlKillSwitch (2026-09-27, Nest Phase 1)", () => {
       screen.getByRole("button", { name: "Turn off remote control" }),
     ).toBeTruthy();
   });
+
+  it("ON (2026-10-28): says control is limited to the live-test list, setpoint only", () => {
+    render(<ThermostatControlKillSwitch enabled canToggle action={vi.fn()} />);
+    expect(screen.getByText(/thermostats on the live-test list/)).toBeTruthy();
+    expect(screen.getByText(/Mode and fan are disabled/)).toBeTruthy();
+  });
 });

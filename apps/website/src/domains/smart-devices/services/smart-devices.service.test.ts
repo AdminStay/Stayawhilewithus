@@ -227,6 +227,7 @@ describe("canRenderNestControls", () => {
         hasRawTraits: true,
         canManage: true,
         controlEnabled: false,
+        onLiveTestList: true,
       }),
     ).toBe(false);
   });
@@ -237,6 +238,7 @@ describe("canRenderNestControls", () => {
         hasRawTraits: true,
         canManage: true,
         controlEnabled: true,
+        onLiveTestList: true,
       }),
     ).toBe(true);
   });
@@ -247,6 +249,7 @@ describe("canRenderNestControls", () => {
         hasRawTraits: true,
         canManage: false,
         controlEnabled: true,
+        onLiveTestList: true,
       }),
     ).toBe(false);
   });
@@ -257,6 +260,7 @@ describe("canRenderNestControls", () => {
         hasRawTraits: false,
         canManage: true,
         controlEnabled: true,
+        onLiveTestList: true,
       }),
     ).toBe(false);
   });
@@ -267,6 +271,17 @@ describe("canRenderNestControls", () => {
         hasRawTraits: false,
         canManage: false,
         controlEnabled: true,
+        onLiveTestList: true,
+      }),
+    ).toBe(false);
+  });
+  it("2026-10-28: never renders for a thermostat that isn't on the Nest live-test list, even with the switch ON for a manager", () => {
+    expect(
+      canRenderNestControls({
+        hasRawTraits: true,
+        canManage: true,
+        controlEnabled: true,
+        onLiveTestList: false,
       }),
     ).toBe(false);
   });

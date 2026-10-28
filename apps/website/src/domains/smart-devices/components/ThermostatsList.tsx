@@ -25,8 +25,12 @@ import {
 } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 
-import type { CieloSetpointActionState } from "../actions";
+import type {
+  CieloSetpointActionState,
+  SetNestLiveTestDeviceActionState,
+} from "../actions";
 import { formatTimestamp } from "../lib/format-timestamp";
+import { NEST_LIVE_TEST_SETPOINT_ONLY } from "../lib/nest-live-test";
 import { getProviderDisplayName } from "../lib/provider-display-name";
 import {
   DEFAULT_THERMOSTAT_FILTER_STATE,
@@ -44,6 +48,7 @@ import {
 import type { SmartDevice } from "../services/smart-devices.service";
 
 import { CieloSetpointControl } from "./CieloSetpointControl";
+import { NestLiveTestToggle } from "./NestLiveTestToggle";
 import { NestThermostatControls } from "./NestThermostatControls";
 
 type ThermostatWithProperty = SmartDevice & {
@@ -130,6 +135,9 @@ export function ThermostatsList({
   cieloControlEnabled = false,
   cieloControllableIds = [],
   cieloSetpointAction,
+  nestLiveTestIds = [],
+  canManageNestLiveTest = false,
+  nestLiveTestAction,
 }: {
   thermostats: ThermostatWithProperty[];
   /** Resolved server-side per property — see /thermostats/page.tsx. */
@@ -146,12 +154,24 @@ export function ThermostatsList({
     prevState: CieloSetpointActionState,
     formData: FormData,
   ) => Promise<CieloSetpointActionState>;
+  /** Nest thermostats on the live-test list (2026-10-28); only these ever show controls. */
+  nestLiveTestIds?: string[];
+  /** Global thermostats:manage — shows the per-row live-test add/remove control. */
+  canManageNestLiveTest?: boolean;
+  nestLiveTestAction?: (
+    prevState: SetNestLiveTestDeviceActionState,
+    formData: FormData,
+  ) => Promise<SetNestLiveTestDeviceActionState>;
 }) {
   const cieloControllable = useMemo(
     () => new Set(cieloControllableIds),
     [cieloControllableIds],
   );
   const staleIds = useMemo(() => new Set(staleReadingIds), [staleReadingIds]);
+  const nestLiveTest = useMemo(
+    () => new Set(nestLiveTestIds),
+    [nestLiveTestIds],
+  );
   const [filters, setFilters] = useState<ThermostatFilterState>(
     DEFAULT_THERMOSTAT_FILTER_STATE,
   );
@@ -307,6 +327,7 @@ export function ThermostatsList({
                 const canManage =
                   canManageByPropertyId[thermostat.propertyId] ?? false;
                 const label = connectivityLabel(thermostat.status);
+                const onLiveTestList = nestLiveTest.has(thermostat.id);
                 // The only case that ever renders NestThermostatControls' own
                 // (potentially 5-form) stack — everything else in this column
                 // is already a single short line, so only this case needs a
@@ -317,6 +338,7 @@ export function ThermostatsList({
                     hasRawTraits: true,
                     canManage,
                     controlEnabled,
+                    onLiveTestList,
                   });
                 const readingStale = staleIds.has(thermostat.id);
                 const isExpanded = expandedIds.has(thermostat.id);
@@ -483,6 +505,10 @@ export function ThermostatsList({
                           <span className="text-ink-faint">
                             Remote control is OFF
                           </span>
+                        ) : rawTraits && canManage && !onLiveTestList ? (
+                          <span className="text-ink-faint">
+                            Not on the Nest live-test list
+                          </span>
                         ) : rawTraits ? (
                           <span className="text-ink-faint">
                             View only — no permission to control this device
@@ -490,6 +516,16 @@ export function ThermostatsList({
                         ) : (
                           <span className="text-ink-faint">—</span>
                         )}
+                        {rawTraits &&
+                          canManageNestLiveTest &&
+                          nestLiveTestAction && (
+                            <NestLiveTestToggle
+                              smartDeviceId={thermostat.id}
+                              deviceLabel={`${thermostat.property.name} — ${thermostat.name}`}
+                              onList={onLiveTestList}
+                              action={nestLiveTestAction}
+                            />
+                          )}
                       </TableCell>
                     </TableRow>
                     {hasLiveControls && isExpanded && (
@@ -512,6 +548,7 @@ export function ThermostatsList({
                               humidity !== null ? `${humidity}%` : undefined
                             }
                             onClose={() => toggleExpanded(thermostat.id)}
+                            setpointOnly={NEST_LIVE_TEST_SETPOINT_ONLY}
                           />
                         </TableCell>
                       </TableRow>

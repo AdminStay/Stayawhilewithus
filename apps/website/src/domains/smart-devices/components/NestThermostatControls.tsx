@@ -142,6 +142,7 @@ export function NestThermostatControls({
   modeLabel,
   humidityLabel,
   onClose,
+  setpointOnly = false,
 }: {
   smartDeviceId: string;
   rawTraits: Record<string, Record<string, unknown>>;
@@ -155,6 +156,11 @@ export function NestThermostatControls({
   humidityLabel?: string;
   /** Optional convenience so the panel can offer its own "Close" affordance in addition to the row-level toggle that renders this component at all. Purely local UI state in the parent — never touches command/mapping logic. */
   onClose?: () => void;
+  /**
+   * Live-test phase (2026-10-28): hide the mode and fan forms. UX only —
+   * sendNestThermostatCommand() refuses mode/fan commands server-side.
+   */
+  setpointOnly?: boolean;
 }) {
   const capabilities = computeNestDeviceCapabilities(rawTraits);
   const availability = getSupportedNestControls(capabilities);
@@ -162,6 +168,8 @@ export function NestThermostatControls({
   const showHeat = availability.canSetHeat && currentMode === "HEAT";
   const showCool = availability.canSetCool && currentMode === "COOL";
   const showRange = availability.canSetRange && currentMode === "HEATCOOL";
+  const showMode = !setpointOnly && availability.availableModes.length > 0;
+  const showFan = !setpointOnly && availability.canUseFan;
 
   const [heatState, heatAction, heatPending] = useActionState(
     setNestHeatSetpointAction,
@@ -185,11 +193,7 @@ export function NestThermostatControls({
   );
 
   const hasAnyControl =
-    showHeat ||
-    showCool ||
-    showRange ||
-    availability.availableModes.length > 0 ||
-    availability.canUseFan;
+    showHeat || showCool || showRange || showMode || showFan;
 
   const summaryItems = [
     currentTemperatureLabel && `Current ${currentTemperatureLabel}`,
@@ -229,7 +233,7 @@ export function NestThermostatControls({
             </p>
           )}
 
-          {availability.availableModes.length > 0 && (
+          {showMode && (
             <ControlRow label="Mode">
               <form
                 action={modeAction}
@@ -386,7 +390,7 @@ export function NestThermostatControls({
             </ControlRow>
           )}
 
-          {availability.canUseFan && (
+          {showFan && (
             <ControlRow label="Fan">
               <form
                 action={fanAction}

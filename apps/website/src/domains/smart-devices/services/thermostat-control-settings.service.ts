@@ -3,6 +3,15 @@ import "server-only";
 import { assertPermission, type AuthContext } from "@stayw/auth";
 import { prisma, type Prisma } from "@stayw/database";
 
+import {
+  checkNestLiveTestEligibility,
+  NEST_LIVE_TEST_MAX_DEVICES,
+  parseNestLiveTestList,
+  type NestLiveTestList,
+} from "../lib/nest-live-test";
+
+import { lockNestConnectionRow } from "./nest-connection-row-lock";
+
 import { recordAudit } from "@/platform/audit/record-audit";
 
 /**
@@ -95,6 +104,9 @@ export async function setThermostatControlEnabled(
   await assertPermission(actor, "thermostats:manage");
 
   return prisma.$transaction(async (tx) => {
+    // Serializes with setNestLiveTestDevice() — both rewrite this row's
+    // metadata, and neither may drop the other's key.
+    await lockNestConnectionRow(tx);
     const connection = await tx.integrationConnection.findUnique({
       where: { provider: "NEST" },
       select: { id: true, metadata: true },
@@ -130,5 +142,119 @@ export async function setThermostatControlEnabled(
       tx,
     );
     return { status: "success", enabled } as const;
+  });
+}
+
+/**
+ * Nest live-test list (2026-10-28) — see lib/nest-live-test.ts. Internal,
+ * unauthenticated read for the command path (sendNestThermostatCommand()
+ * has passed RBAC first). Always a fresh read, never cached; missing or
+ * malformed data reads as an empty list.
+ */
+export async function readNestLiveTestList(): Promise<NestLiveTestList> {
+  const connection = await prisma.integrationConnection.findUnique({
+    where: { provider: "NEST" },
+    select: { metadata: true },
+  });
+  return parseNestLiveTestList(connection?.metadata ?? null);
+}
+
+/** Dashboard read — same audience as the switch itself. */
+export async function getNestLiveTestList(
+  actor: AuthContext,
+): Promise<NestLiveTestList> {
+  await assertPermission(actor, "smart_devices:read");
+  return readNestLiveTestList();
+}
+
+export type SetNestLiveTestDeviceResult =
+  | { status: "success"; onList: boolean; smartDeviceIds: string[] }
+  | { status: "rejected"; reason: string };
+
+/**
+ * Adds a thermostat to, or removes it from, the Nest live-test list.
+ * Admin-only (GLOBAL thermostats:manage, like the switch). Adding requires
+ * an eligible device (checkNestLiveTestEligibility) and room under
+ * NEST_LIVE_TEST_MAX_DEVICES; removing always works, whatever the device's
+ * state. Holds the NEST row lock, merges into the existing metadata (the
+ * switch is never touched), and audits every change with the list before
+ * and after. A request that changes nothing writes nothing.
+ */
+export async function setNestLiveTestDevice(
+  actor: AuthContext,
+  smartDeviceId: string,
+  onList: boolean,
+): Promise<SetNestLiveTestDeviceResult> {
+  await assertPermission(actor, "thermostats:manage");
+
+  return prisma.$transaction(async (tx) => {
+    await lockNestConnectionRow(tx);
+    const connection = await tx.integrationConnection.findUnique({
+      where: { provider: "NEST" },
+      select: { id: true, metadata: true },
+    });
+    if (!connection) {
+      return {
+        status: "rejected",
+        reason:
+          "Nest isn't connected, so there is no live-test list to change.",
+      } as const;
+    }
+
+    const before = parseNestLiveTestList(connection.metadata).smartDeviceIds;
+    const alreadyOnList = before.includes(smartDeviceId);
+    if (alreadyOnList === onList) {
+      return { status: "success", onList, smartDeviceIds: before } as const;
+    }
+
+    if (onList) {
+      const device = await tx.smartDevice.findUnique({
+        where: { id: smartDeviceId },
+        include: { providerDevice: true, property: true },
+      });
+      const eligibility = checkNestLiveTestEligibility(device);
+      if (!eligibility.eligible) {
+        return { status: "rejected", reason: eligibility.reason } as const;
+      }
+      if (before.length >= NEST_LIVE_TEST_MAX_DEVICES) {
+        return {
+          status: "rejected",
+          reason: `The live-test list already has ${NEST_LIVE_TEST_MAX_DEVICES} thermostats. Remove one first.`,
+        } as const;
+      }
+    }
+
+    const after = onList
+      ? [...before, smartDeviceId]
+      : before.filter((id) => id !== smartDeviceId);
+    const nextMetadata = {
+      ...((connection.metadata as Record<string, unknown> | null) ?? {}),
+      nestLiveTest: {
+        smartDeviceIds: after,
+        updatedAt: new Date().toISOString(),
+        updatedByUserId: actor.userId,
+      },
+    };
+    await tx.integrationConnection.update({
+      where: { id: connection.id },
+      data: { metadata: nextMetadata as Prisma.InputJsonValue },
+    });
+    await recordAudit(
+      {
+        actorUserId: actor.userId,
+        actorType: "USER",
+        action: "nest.thermostat_control.live_test_device_set",
+        entityType: "IntegrationConnection",
+        entityId: connection.id,
+        beforeState: { smartDeviceIds: before } as Prisma.InputJsonValue,
+        afterState: {
+          smartDeviceIds: after,
+          smartDeviceId,
+          onList,
+        } as Prisma.InputJsonValue,
+      },
+      tx,
+    );
+    return { status: "success", onList, smartDeviceIds: after } as const;
   });
 }

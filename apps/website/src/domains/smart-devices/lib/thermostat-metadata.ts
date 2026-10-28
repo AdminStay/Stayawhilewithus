@@ -77,6 +77,16 @@ export function canRenderNestControls(input: {
    * it is OFF. sendNestThermostatCommand() enforces it server-side anyway.
    */
   controlEnabled: boolean;
+  /**
+   * On the Nest live-test list (2026-10-28). Required: only listed devices
+   * ever show controls; sendNestThermostatCommand() enforces it server-side.
+   */
+  onLiveTestList: boolean;
 }): boolean {
-  return input.hasRawTraits && input.canManage && input.controlEnabled;
+  return (
+    input.hasRawTraits &&
+    input.canManage &&
+    input.controlEnabled &&
+    input.onLiveTestList
+  );
 }

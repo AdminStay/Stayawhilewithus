@@ -10,8 +10,10 @@ const {
   mockGetDevice,
   mockRecordAudit,
   mockReadControl,
+  mockReadLiveTest,
 } = vi.hoisted(() => ({
   mockReadControl: vi.fn(),
+  mockReadLiveTest: vi.fn(),
   mockTransaction: vi.fn(),
   mockSetHeatSetpoint: vi.fn(),
   mockSetCoolSetpoint: vi.fn(),
@@ -60,6 +62,9 @@ vi.mock("@stayw/integrations/nest", async (importOriginal) => {
 // the dedicated "kill switch OFF" block at the bottom covers the default.
 vi.mock("./thermostat-control-settings.service", () => ({
   readThermostatControlSetting: mockReadControl,
+  // Nest live-test list (2026-10-28): the tests below model the device
+  // being ON the list unless they say otherwise.
+  readNestLiveTestList: mockReadLiveTest,
   THERMOSTAT_CONTROL_OFF_REASON:
     "Remote Nest thermostat control is OFF. No thermostat command can be sent until an admin turns it on.",
 }));
@@ -76,6 +81,10 @@ import { NestClient } from "@stayw/integrations/nest";
 import { sendNestThermostatCommand } from "./nest-commands.service";
 
 const actor = { userId: "user-1" };
+
+function liveTestList(smartDeviceIds: string[]) {
+  return { smartDeviceIds, updatedAt: null, updatedByUserId: null };
+}
 const mockSleep = vi.fn().mockResolvedValue(undefined);
 
 /** Every call skips the real read-back delay. */
@@ -185,6 +194,9 @@ describe("sendNestThermostatCommand", () => {
     mockSetFanTimer.mockReset().mockResolvedValue(undefined);
     mockRecordAudit.mockClear();
     mockSleep.mockClear();
+    mockReadLiveTest
+      .mockReset()
+      .mockResolvedValue(liveTestList([SMART_DEVICE_ID]));
     mockReadControl.mockReset().mockResolvedValue({
       enabled: true,
       updatedAt: null,
@@ -406,49 +418,45 @@ describe("sendNestThermostatCommand", () => {
     expect(mockSetCoolSetpoint).not.toHaveBeenCalled();
   });
 
-  it("unsupported mode rejected using the fresh read", async () => {
-    const heatCoolAndCoolOnly = {
-      "sdm.devices.traits.ThermostatMode": {
-        mode: "HEAT",
-        availableModes: ["HEAT", "COOL", "OFF"],
-      },
-    };
-    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
-      mappedEnabledDevice(heatCoolAndCoolOnly) as never,
-    );
-    mockGetDevice.mockResolvedValueOnce(freshDevice(heatCoolAndCoolOnly));
-    allowTransaction();
+  it.each([
+    { type: "SET_MODE", mode: "OFF" },
+    { type: "SET_MODE", mode: "HEAT" },
+    { type: "SET_MODE", mode: "HEATCOOL" },
+    { type: "SET_FAN", timerMode: "ON", durationSeconds: 900 },
+    { type: "SET_FAN", timerMode: "OFF" },
+  ] as const)(
+    "setpoint-only (2026-10-28): $type is refused for a listed device with the switch ON — before the lock, the Nest client or any Google call",
+    async (command) => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice(FULLY_CAPABLE_TRAITS) as never,
+      );
+      vi.mocked(NestClient).mockClear();
 
-    const result = await send({
-      smartDeviceId: SMART_DEVICE_ID,
-      command: { type: "SET_MODE", mode: "HEATCOOL" },
-    });
+      const result = await send({
+        smartDeviceId: SMART_DEVICE_ID,
+        command: command as never,
+      });
 
-    expect(result.status).toBe("rejected");
-    expect(mockSetThermostatMode).not.toHaveBeenCalled();
-  });
-
-  it("fan unavailable rejected using the fresh read", async () => {
-    const noFanTraits = {
-      "sdm.devices.traits.ThermostatMode": {
-        mode: "COOL",
-        availableModes: ["COOL", "OFF"],
-      },
-    };
-    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
-      mappedEnabledDevice(noFanTraits) as never,
-    );
-    mockGetDevice.mockResolvedValueOnce(freshDevice(noFanTraits));
-    allowTransaction();
-
-    const result = await send({
-      smartDeviceId: SMART_DEVICE_ID,
-      command: { type: "SET_FAN", timerMode: "ON" },
-    });
-
-    expect(result.status).toBe("rejected");
-    expect(mockSetFanTimer).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({
+        status: "rejected",
+        reason: expect.stringMatching(/Only setpoint changes are allowed/),
+      });
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(NestClient).not.toHaveBeenCalled();
+      expect(mockGetDevice).not.toHaveBeenCalled();
+      expect(mockSetThermostatMode).not.toHaveBeenCalled();
+      expect(mockSetFanTimer).not.toHaveBeenCalled();
+      expect(mockRecordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "smart_device.nest_command",
+          afterState: expect.objectContaining({
+            result: "REJECTED",
+            commandSent: false,
+          }),
+        }),
+      );
+    },
+  );
 
   it("duplicate-command prevention (concurrent): a second command is rejected while the advisory lock is held by the first", async () => {
     vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
@@ -463,12 +471,12 @@ describe("sendNestThermostatCommand", () => {
 
     const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
-      command: { type: "SET_MODE", mode: "OFF" },
+      command: { type: "SET_HEAT", heatCelsius: 20 },
     });
 
     expect(result).toEqual({ status: "already_running" });
     expect(mockGetDevice).not.toHaveBeenCalled();
-    expect(mockSetThermostatMode).not.toHaveBeenCalled();
+    expect(mockSetHeatSetpoint).not.toHaveBeenCalled();
   });
 
   it("duplicate-command prevention: a fresh (non-stale) in-progress marker read INSIDE the lock blocks the command", async () => {
@@ -482,7 +490,7 @@ describe("sendNestThermostatCommand", () => {
 
     const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
-      command: { type: "SET_MODE", mode: "OFF" },
+      command: { type: "SET_HEAT", heatCelsius: 20 },
     });
 
     expect(result).toEqual({ status: "already_running" });
@@ -498,16 +506,16 @@ describe("sendNestThermostatCommand", () => {
     mockGetDevice
       .mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS))
       .mockResolvedValueOnce(
-        freshDevice(FULLY_CAPABLE_TRAITS, { thermostatMode: "OFF" }),
+        freshDevice(FULLY_CAPABLE_TRAITS, { heatCelsius: 20 }),
       );
 
     const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
-      command: { type: "SET_MODE", mode: "OFF" },
+      command: { type: "SET_HEAT", heatCelsius: 20 },
     });
 
     expect(result).toEqual({ status: "success" });
-    expect(mockSetThermostatMode).toHaveBeenCalled();
+    expect(mockSetHeatSetpoint).toHaveBeenCalled();
   });
 
   it("marker is cleared even when the provider call throws (finally runs on the error path)", async () => {
@@ -516,11 +524,11 @@ describe("sendNestThermostatCommand", () => {
     );
     allowTransaction();
     mockGetDevice.mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS));
-    mockSetThermostatMode.mockRejectedValueOnce(new Error("network error"));
+    mockSetHeatSetpoint.mockRejectedValueOnce(new Error("network error"));
 
     await send({
       smartDeviceId: SMART_DEVICE_ID,
-      command: { type: "SET_MODE", mode: "OFF" },
+      command: { type: "SET_HEAT", heatCelsius: 20 },
     });
 
     expect(prisma.smartDevice.update).toHaveBeenCalledWith({
@@ -538,7 +546,7 @@ describe("sendNestThermostatCommand", () => {
 
     await send({
       smartDeviceId: SMART_DEVICE_ID,
-      command: { type: "SET_MODE", mode: "OFF" },
+      command: { type: "SET_HEAT", heatCelsius: 20 },
     });
 
     expect(prisma.smartDevice.update).toHaveBeenCalledWith({
@@ -553,13 +561,13 @@ describe("sendNestThermostatCommand", () => {
     );
     allowTransaction();
     mockGetDevice.mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS));
-    mockSetThermostatMode.mockRejectedValueOnce(
+    mockSetHeatSetpoint.mockRejectedValueOnce(
       new HttpRequestError("/enterprises/x/devices/y:executeCommand", 403),
     );
 
     const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
-      command: { type: "SET_MODE", mode: "OFF" },
+      command: { type: "SET_HEAT", heatCelsius: 20 },
     });
 
     expect(result.status).toBe("failure");
@@ -722,7 +730,7 @@ describe("sendNestThermostatCommand", () => {
 
     await send({
       smartDeviceId: SMART_DEVICE_ID,
-      command: { type: "SET_MODE", mode: "OFF" },
+      command: { type: "SET_HEAT", heatCelsius: 20 },
     });
 
     const auditCall = mockRecordAudit.mock.calls[0]![0];
@@ -747,6 +755,9 @@ describe("sendNestThermostatCommand — command safety (2026-10-28)", () => {
     mockSetCoolSetpoint.mockReset().mockResolvedValue(undefined);
     mockRecordAudit.mockClear();
     mockSleep.mockClear();
+    mockReadLiveTest
+      .mockReset()
+      .mockResolvedValue(liveTestList([SMART_DEVICE_ID]));
     mockReadControl.mockReset().mockResolvedValue({
       enabled: true,
       updatedAt: null,
@@ -960,6 +971,133 @@ describe("sendNestThermostatCommand — command safety (2026-10-28)", () => {
   });
 });
 
+describe("sendNestThermostatCommand — Nest live-test list (2026-10-28)", () => {
+  beforeEach(() => {
+    process.env.NEST_CLIENT_ID = "test-client-id";
+    process.env.NEST_CLIENT_SECRET = "test-client-secret";
+    process.env.NEST_PROJECT_ID = "test-project-id";
+    process.env.NEST_REFRESH_TOKEN = "test-refresh-token";
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.smartDevice.findUnique)
+      .mockReset()
+      .mockResolvedValue(mappedEnabledDevice(FULLY_CAPABLE_TRAITS) as never);
+    vi.mocked(NestClient).mockClear();
+    mockTransaction.mockReset();
+    mockGetDevice.mockReset();
+    mockSetHeatSetpoint.mockReset().mockResolvedValue(undefined);
+    mockRecordAudit.mockClear();
+    mockSleep.mockClear();
+    mockReadLiveTest.mockReset();
+    mockReadControl.mockReset().mockResolvedValue({
+      enabled: true,
+      updatedAt: null,
+      updatedByUserId: null,
+    });
+  });
+
+  it.each([
+    ["another device is on the list", ["33333333-3333-3333-3333-333333333333"]],
+    ["the list is empty", []],
+  ])(
+    "a setpoint is refused when %s — before the lock, the Nest client or any Google call",
+    async (_label, ids) => {
+      mockReadLiveTest.mockResolvedValue(liveTestList(ids));
+
+      const result = await send({
+        smartDeviceId: SMART_DEVICE_ID,
+        command: { type: "SET_HEAT", heatCelsius: 20 },
+      });
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason: expect.stringMatching(/isn't on the Nest live-test list/),
+      });
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(NestClient).not.toHaveBeenCalled();
+      expect(mockGetDevice).not.toHaveBeenCalled();
+      expect(mockSetHeatSetpoint).not.toHaveBeenCalled();
+      expect(mockRecordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          afterState: expect.objectContaining({
+            result: "REJECTED",
+            commandSent: false,
+          }),
+          metadata: {
+            errorDetail: expect.stringMatching(/live-test list/),
+          },
+        }),
+      );
+    },
+  );
+
+  it("a listed device with a setpoint command proceeds to the existing path (lock, fresh read, single send, read-back)", async () => {
+    mockReadLiveTest.mockResolvedValue(liveTestList([SMART_DEVICE_ID]));
+    allowTransaction();
+    mockGetDevice
+      .mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS))
+      .mockResolvedValueOnce(
+        freshDevice(FULLY_CAPABLE_TRAITS, { heatCelsius: 20 }),
+      );
+
+    const result = await send({
+      smartDeviceId: SMART_DEVICE_ID,
+      command: { type: "SET_HEAT", heatCelsius: 20 },
+    });
+
+    expect(result).toEqual({ status: "success" });
+    expect(mockReadLiveTest).toHaveBeenCalledTimes(1);
+    expect(mockSetHeatSetpoint).toHaveBeenCalledTimes(1);
+  });
+
+  it("a mode command on an unlisted device gets the setpoint-only refusal (command type is checked first)", async () => {
+    mockReadLiveTest.mockResolvedValue(liveTestList([]));
+
+    const result = await send({
+      smartDeviceId: SMART_DEVICE_ID,
+      command: { type: "SET_MODE", mode: "OFF" },
+    });
+
+    expect(result).toEqual({
+      status: "rejected",
+      reason: expect.stringMatching(/Only setpoint changes are allowed/),
+    });
+    expect(mockReadLiveTest).not.toHaveBeenCalled();
+  });
+
+  it("the switch OFF still wins: a listed device gets the OFF refusal and the list is never read", async () => {
+    mockReadControl.mockResolvedValue({
+      enabled: false,
+      updatedAt: null,
+      updatedByUserId: null,
+    });
+    mockReadLiveTest.mockResolvedValue(liveTestList([SMART_DEVICE_ID]));
+
+    const result = await send({
+      smartDeviceId: SMART_DEVICE_ID,
+      command: { type: "SET_HEAT", heatCelsius: 20 },
+    });
+
+    expect(result).toEqual({
+      status: "rejected",
+      reason: expect.stringContaining("Remote Nest thermostat control is OFF"),
+    });
+    expect(mockReadLiveTest).not.toHaveBeenCalled();
+  });
+
+  it("RBAC runs before the list: a user without thermostats:manage is denied and the list is never read", async () => {
+    vi.mocked(assertPermission).mockRejectedValueOnce(new Error("Forbidden"));
+
+    await expect(
+      send({
+        smartDeviceId: SMART_DEVICE_ID,
+        command: { type: "SET_HEAT", heatCelsius: 20 },
+      }),
+    ).rejects.toThrow("Forbidden");
+    expect(mockReadLiveTest).not.toHaveBeenCalled();
+    expect(NestClient).not.toHaveBeenCalled();
+  });
+});
+
 describe("sendNestThermostatCommand — global kill switch OFF (2026-09-27, Nest Phase 1)", () => {
   const ALL_COMMANDS = [
     { type: "SET_HEAT", heatCelsius: 20 },
@@ -991,6 +1129,9 @@ describe("sendNestThermostatCommand — global kill switch OFF (2026-09-27, Nest
       m.mockReset();
     }
     mockRecordAudit.mockClear();
+    mockReadLiveTest
+      .mockReset()
+      .mockResolvedValue(liveTestList([SMART_DEVICE_ID]));
     mockReadControl.mockReset().mockResolvedValue({
       enabled: false,
       updatedAt: null,
