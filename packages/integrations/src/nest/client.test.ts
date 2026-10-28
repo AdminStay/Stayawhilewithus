@@ -666,6 +666,7 @@ describe("NestClient", () => {
           params: { heatCelsius: 21 },
         }),
       }),
+      { maxRetries: 0 },
     );
   });
 
@@ -684,6 +685,7 @@ describe("NestClient", () => {
           params: { coolCelsius: 24 },
         }),
       }),
+      { maxRetries: 0 },
     );
   });
 
@@ -703,6 +705,7 @@ describe("NestClient", () => {
           params: { heatCelsius: 19, coolCelsius: 25 },
         }),
       }),
+      { maxRetries: 0 },
     );
   });
 
@@ -721,6 +724,7 @@ describe("NestClient", () => {
           params: { mode: "HEATCOOL" },
         }),
       }),
+      { maxRetries: 0 },
     );
   });
 
@@ -739,6 +743,7 @@ describe("NestClient", () => {
           params: { timerMode: "ON", duration: "900s" },
         }),
       }),
+      { maxRetries: 0 },
     );
   });
 
@@ -757,6 +762,7 @@ describe("NestClient", () => {
           params: { timerMode: "ON", duration: "43200s" },
         }),
       }),
+      { maxRetries: 0 },
     );
   });
 
@@ -779,6 +785,26 @@ describe("NestClient", () => {
     );
     expect(device.externalDeviceId).toBe("device-1");
     expect(device.ambientTemperatureCelsius).toBe(22);
+  });
+
+  it("every command is a single attempt ({ maxRetries: 0 }) — a timed-out command is never re-sent", async () => {
+    global.fetch = mockTokenFetch() as unknown as typeof fetch;
+    mockRequest.mockResolvedValue({});
+
+    const client = new NestClient(credentials);
+    await client.setHeatSetpoint("device-1", 21);
+    await client.setCoolSetpoint("device-1", 24);
+    await client.setHeatCoolRange("device-1", 19, 25);
+    await client.setThermostatMode("device-1", "COOL");
+    await client.setFanTimer("device-1", "OFF");
+
+    const commandCalls = mockRequest.mock.calls.filter(([path]) =>
+      String(path).endsWith(":executeCommand"),
+    );
+    expect(commandCalls).toHaveLength(5);
+    for (const call of commandCalls) {
+      expect(call[2]).toEqual({ maxRetries: 0 });
+    }
   });
 
   it("propagates a command failure (e.g. a real provider error) without swallowing it", async () => {

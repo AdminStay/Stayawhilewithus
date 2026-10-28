@@ -2,13 +2,21 @@ import "server-only";
 
 import { assertPermission, type AuthContext } from "@stayw/auth";
 import { prisma, type Prisma } from "@stayw/database";
+import { HttpRequestError } from "@stayw/integrations/core";
 import {
   NestClient,
+  NestOAuthRefreshError,
   computeNestDeviceCapabilities,
   executeNestThermostatCommand,
   validateNestCommand,
+  type NestDevice,
   type NestThermostatCommand,
 } from "@stayw/integrations/nest";
+
+import {
+  checkNestCommandSafety,
+  isNestCommandConfirmed,
+} from "../lib/nest-command-safety";
 
 import { toSmartDeviceMetadata } from "./provider-devices.service";
 import {
@@ -18,15 +26,48 @@ import {
 
 import { recordAudit } from "@/platform/audit/record-audit";
 
+/**
+ * "success" = Nest accepted the command AND a read-back reports the
+ * requested state. "unverified" = the command may have reached Nest (or
+ * Nest accepted it) but the requested state couldn't be confirmed — it may
+ * or may not have changed. "failure" = nothing was applied: either nothing
+ * was sent, or Nest refused the command with a 4xx.
+ */
 export type NestCommandResult =
   | { status: "success" }
   | { status: "rejected"; reason: string }
   | { status: "already_running" }
-  | { status: "failure"; reason: string };
+  | { status: "failure"; reason: string }
+  | { status: "unverified"; reason: string };
 
 export interface SendNestThermostatCommandInput {
   smartDeviceId: string;
   command: NestThermostatCommand;
+}
+
+/** Test seam only (read-back delay). Never set by production callers. */
+export interface NestCommandDeps {
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** Wait before the second read-back when the first doesn't show the change yet. */
+const READ_BACK_DELAY_MS = 3_000;
+
+const UNVERIFIED_NO_ANSWER_REASON =
+  "Nest didn't answer the command, so it may or may not have been applied. Check the thermostat before trying again.";
+const UNVERIFIED_NOT_REPORTED_REASON =
+  "Nest accepted the command, but the thermostat doesn't report the new setting yet. Check the thermostat before trying again.";
+
+/**
+ * Whether a command error means Nest certainly did not apply it: an OAuth
+ * refresh failure (raised before the POST) or a 4xx answer (Nest refused
+ * it). A 5xx, timeout or network error may have reached the thermostat.
+ */
+function isDefinitelyNotApplied(err: unknown): boolean {
+  if (err instanceof NestOAuthRefreshError) return true;
+  return (
+    err instanceof HttpRequestError && err.status >= 400 && err.status < 500
+  );
 }
 
 /**
@@ -101,24 +142,38 @@ function getNestClientFromEnv(): NestClient {
  *      actually validates against. Includes the Eco-mode check for
  *      setpoint commands, numeric-finite guard, and (for SET_RANGE)
  *      Google's own documented "cool must exceed heat" rule.
- *   5. The real command, then a second fresh GET to confirm what Nest
- *      actually reports afterward — SmartDevice.metadata is only ever
- *      updated with that *confirmed* read, never a value this function
- *      guessed the command would produce.
+ *      Then checkNestCommandSafety() on the same fresh read (2026-10-28):
+ *      ONLINE, setpoints inside 60–85 °F, at most 5 °F from the current
+ *      setpoint, not a no-op.
+ *   5. The real command — a single attempt, never retried (NestClient) —
+ *      then a fresh GET (and one more after READ_BACK_DELAY_MS if the
+ *      first doesn't show it yet) that must report the requested state.
+ *      SmartDevice.metadata is only ever updated with that read, never a
+ *      value this function guessed the command would produce.
  *   6. Audit logging (actor/property/device/provider/command/result) on
- *      every outcome from step 2 onward; translated errors only ever
- *      reach the caller, full detail stays server-side in the audit log.
+ *      every outcome from step 2 onward: SUCCEEDED (confirmed), FAILED
+ *      (nothing applied), UNVERIFIED (may or may not have applied),
+ *      REJECTED; translated errors only ever reach the caller, full detail
+ *      stays server-side in the audit log.
  */
 export async function sendNestThermostatCommand(
   actor: AuthContext,
   input: SendNestThermostatCommandInput,
+  deps: NestCommandDeps = {},
 ): Promise<NestCommandResult> {
+  const sleep =
+    deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+
   const smartDevice = await prisma.smartDevice.findUnique({
     where: { id: input.smartDeviceId },
     include: { providerDevice: true, property: true },
   });
 
-  if (!smartDevice || smartDevice.provider !== "NEST") {
+  if (
+    !smartDevice ||
+    smartDevice.provider !== "NEST" ||
+    smartDevice.deviceType !== "THERMOSTAT"
+  ) {
     return { status: "rejected", reason: "Device not found." };
   }
   if (!smartDevice.providerDevice || !smartDevice.providerDevice.enabled) {
@@ -132,6 +187,18 @@ export async function sendNestThermostatCommand(
     return {
       status: "rejected",
       reason: "This device is not mapped to a property.",
+    };
+  }
+  // The mapping must point at exactly this device and property — never
+  // control a thermostat whose mapping and device record disagree.
+  if (
+    smartDevice.providerDevice.propertyId !== smartDevice.propertyId ||
+    smartDevice.providerDevice.externalDeviceId !== smartDevice.externalDeviceId
+  ) {
+    return {
+      status: "rejected",
+      reason:
+        "This device's mapping doesn't match its property. Fix the mapping in Discovered Devices first.",
     };
   }
   if (!smartDevice.property || smartDevice.property.deletedAt) {
@@ -207,6 +274,10 @@ export async function sendNestThermostatCommand(
   const propertyId = smartDevice.propertyId;
   const externalDeviceId = smartDevice.providerDevice.externalDeviceId;
 
+  // Set once the command POST may have reached Nest; from then on an
+  // unexpected error is reported as UNVERIFIED, never "nothing sent".
+  let commandMayHaveBeenSent = false;
+
   try {
     const client = getNestClientFromEnv();
 
@@ -219,8 +290,13 @@ export async function sendNestThermostatCommand(
 
     const freshCapabilities = computeNestDeviceCapabilities(fresh.rawTraits);
     const validation = validateNestCommand(input.command, freshCapabilities);
-    if (!validation.allowed) {
-      const reason = validation.reason ?? "Not supported.";
+    const safety = validation.allowed
+      ? checkNestCommandSafety(input.command, fresh)
+      : ({
+          allowed: false,
+          reason: validation.reason ?? "Not supported.",
+        } as const);
+    if (!safety.allowed) {
       await recordAuditSafely({
         actor,
         smartDeviceId: smartDevice.id,
@@ -228,41 +304,108 @@ export async function sendNestThermostatCommand(
         command: input.command,
         previousMetadata,
         result: "REJECTED",
-        errorDetail: reason,
+        outcome: { commandSent: false },
+        errorDetail: safety.reason,
       });
-      return { status: "rejected", reason };
+      return { status: "rejected", reason: safety.reason };
     }
 
-    await executeNestThermostatCommand(client, externalDeviceId, input.command);
+    commandMayHaveBeenSent = true;
+    try {
+      await executeNestThermostatCommand(
+        client,
+        externalDeviceId,
+        input.command,
+      );
+    } catch (err) {
+      const errorDetail = err instanceof Error ? err.message : String(err);
+      if (isDefinitelyNotApplied(err)) {
+        await recordAuditSafely({
+          actor,
+          smartDeviceId: smartDevice.id,
+          propertyId,
+          command: input.command,
+          previousMetadata,
+          result: "FAILED",
+          outcome: { commandSent: true, providerAccepted: false },
+          errorDetail,
+        });
+        return { status: "failure", reason: translateNestCommandError(err) };
+      }
+      await recordAuditSafely({
+        actor,
+        smartDeviceId: smartDevice.id,
+        propertyId,
+        command: input.command,
+        previousMetadata,
+        result: "UNVERIFIED",
+        outcome: { commandSent: true, providerAccepted: null },
+        errorDetail,
+      });
+      return { status: "unverified", reason: UNVERIFIED_NO_ANSWER_REASON };
+    }
 
-    // Confirmation — read what Nest actually reports now, never assume
-    // the command produced exactly the requested value. This read just
-    // happened, so — unlike setProviderDeviceEnabled()'s reuse of an old
-    // discovery snapshot — stamping "now" here is honest, not fabricated.
-    const confirmed = await client.getDevice(externalDeviceId);
-    const confirmedMetadata = toSmartDeviceMetadata(confirmed, new Date());
+    // Read back what Nest reports now — never assume the command produced
+    // exactly the requested value. Nest may take a moment to reflect it,
+    // so a read that doesn't show it yet gets exactly one more try.
+    let readBack: NestDevice | null = null;
+    let readBackError: string | undefined;
+    try {
+      readBack = await client.getDevice(externalDeviceId);
+      if (!isNestCommandConfirmed(input.command, readBack)) {
+        await sleep(READ_BACK_DELAY_MS);
+        readBack = await client.getDevice(externalDeviceId);
+      }
+    } catch (err) {
+      readBackError = err instanceof Error ? err.message : String(err);
+    }
 
-    await prisma.smartDevice.update({
-      where: { id: smartDevice.id },
-      data: { metadata: confirmedMetadata as Prisma.InputJsonValue },
-    });
-    await prisma.providerDevice.update({
-      where: { smartDeviceId: smartDevice.id },
-      data: { rawMetadata: confirmed as unknown as Prisma.InputJsonValue },
-    });
+    let confirmedMetadata: Record<string, unknown> | undefined;
+    if (readBack) {
+      // This read just happened, so — unlike setProviderDeviceEnabled()'s
+      // reuse of an old discovery snapshot — stamping "now" is honest.
+      confirmedMetadata = toSmartDeviceMetadata(readBack, new Date());
+      await prisma.smartDevice.update({
+        where: { id: smartDevice.id },
+        data: { metadata: confirmedMetadata as Prisma.InputJsonValue },
+      });
+      await prisma.providerDevice.update({
+        where: { smartDeviceId: smartDevice.id },
+        data: { rawMetadata: readBack as unknown as Prisma.InputJsonValue },
+      });
+    }
 
+    const verified =
+      readBack !== null && isNestCommandConfirmed(input.command, readBack);
     await recordAuditSafely({
       actor,
       smartDeviceId: smartDevice.id,
       propertyId,
       command: input.command,
       previousMetadata,
-      result: "SUCCEEDED",
+      result: verified ? "SUCCEEDED" : "UNVERIFIED",
+      outcome: { commandSent: true, providerAccepted: true, verified },
       confirmedMetadata,
+      errorDetail: readBackError,
     });
-
-    return { status: "success" };
+    return verified
+      ? { status: "success" }
+      : { status: "unverified", reason: UNVERIFIED_NOT_REPORTED_REASON };
   } catch (err) {
+    const errorDetail = err instanceof Error ? err.message : String(err);
+    if (commandMayHaveBeenSent) {
+      await recordAuditSafely({
+        actor,
+        smartDeviceId: smartDevice.id,
+        propertyId,
+        command: input.command,
+        previousMetadata,
+        result: "UNVERIFIED",
+        outcome: { commandSent: true, providerAccepted: null },
+        errorDetail,
+      }).catch(() => {});
+      return { status: "unverified", reason: UNVERIFIED_NO_ANSWER_REASON };
+    }
     const safeMessage = translateNestCommandError(err);
     await recordAuditSafely({
       actor,
@@ -271,7 +414,8 @@ export async function sendNestThermostatCommand(
       command: input.command,
       previousMetadata,
       result: "FAILED",
-      errorDetail: err instanceof Error ? err.message : String(err),
+      outcome: { commandSent: false },
+      errorDetail,
     });
     return { status: "failure", reason: safeMessage };
   } finally {
@@ -295,7 +439,9 @@ export async function sendNestThermostatCommand(
  * the requested temperature/mode is ever stored, never a PIN or secret
  * (this file doesn't handle those) — recordAudit() itself never receives
  * OAuth tokens/secrets, since none of this file ever holds one
- * (NestClient keeps its access token private, per client.ts).
+ * (NestClient keeps its access token private, per client.ts). `outcome`
+ * (2026-10-28) says whether the command was sent, whether Nest accepted
+ * it, and whether the read-back confirmed it.
  */
 async function recordAuditSafely(args: {
   actor: AuthContext;
@@ -303,7 +449,12 @@ async function recordAuditSafely(args: {
   propertyId: string;
   command: NestThermostatCommand;
   previousMetadata: Prisma.JsonValue;
-  result: "SUCCEEDED" | "FAILED" | "REJECTED";
+  result: "SUCCEEDED" | "FAILED" | "REJECTED" | "UNVERIFIED";
+  outcome?: {
+    commandSent: boolean;
+    providerAccepted?: boolean | null;
+    verified?: boolean;
+  };
   confirmedMetadata?: Record<string, unknown>;
   errorDetail?: string;
 }): Promise<void> {
@@ -321,6 +472,7 @@ async function recordAuditSafely(args: {
     afterState: {
       command: args.command,
       result: args.result,
+      ...args.outcome,
       ...(args.confirmedMetadata && {
         confirmedMetadata: args.confirmedMetadata,
       }),

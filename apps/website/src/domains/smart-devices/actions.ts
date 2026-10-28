@@ -250,7 +250,10 @@ export async function setNestHeatSetpointAction(
       heatCelsius: fahrenheitToCelsius(input.heatFahrenheit),
     },
   });
-  if (result.status === "success") revalidatePath(THERMOSTATS_PAGE_PATH);
+  // An unverified result may still have stored a fresh read-back.
+  if (result.status === "success" || result.status === "unverified") {
+    revalidatePath(THERMOSTATS_PAGE_PATH);
+  }
   return result;
 }
 
@@ -270,7 +273,10 @@ export async function setNestCoolSetpointAction(
       coolCelsius: fahrenheitToCelsius(input.coolFahrenheit),
     },
   });
-  if (result.status === "success") revalidatePath(THERMOSTATS_PAGE_PATH);
+  // An unverified result may still have stored a fresh read-back.
+  if (result.status === "success" || result.status === "unverified") {
+    revalidatePath(THERMOSTATS_PAGE_PATH);
+  }
   return result;
 }
 
@@ -292,7 +298,10 @@ export async function setNestHeatCoolRangeAction(
       coolCelsius: fahrenheitToCelsius(input.coolFahrenheit),
     },
   });
-  if (result.status === "success") revalidatePath(THERMOSTATS_PAGE_PATH);
+  // An unverified result may still have stored a fresh read-back.
+  if (result.status === "success" || result.status === "unverified") {
+    revalidatePath(THERMOSTATS_PAGE_PATH);
+  }
   return result;
 }
 
@@ -309,7 +318,10 @@ export async function setNestModeAction(
     smartDeviceId: input.smartDeviceId,
     command: { type: "SET_MODE", mode: input.mode },
   });
-  if (result.status === "success") revalidatePath(THERMOSTATS_PAGE_PATH);
+  // An unverified result may still have stored a fresh read-back.
+  if (result.status === "success" || result.status === "unverified") {
+    revalidatePath(THERMOSTATS_PAGE_PATH);
+  }
   return result;
 }
 
@@ -334,7 +346,10 @@ export async function setNestFanAction(
       }),
     },
   });
-  if (result.status === "success") revalidatePath(THERMOSTATS_PAGE_PATH);
+  // An unverified result may still have stored a fresh read-back.
+  if (result.status === "success" || result.status === "unverified") {
+    revalidatePath(THERMOSTATS_PAGE_PATH);
+  }
   return result;
 }
 
