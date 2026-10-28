@@ -26,6 +26,7 @@ import {
   setNestFanSchema,
   setNestHeatCoolRangeSchema,
   setNestHeatSetpointSchema,
+  setNestLiveTestDeviceSchema,
   setNestModeSchema,
   setThermostatControlEnabledSchema,
 } from "./schemas/nest-commands.schema";
@@ -86,7 +87,9 @@ import {
 } from "./services/provider-devices.service";
 import { retireSmartDevice } from "./services/smart-devices.service";
 import {
+  setNestLiveTestDevice,
   setThermostatControlEnabled,
+  type SetNestLiveTestDeviceResult,
   type SetThermostatControlResult,
 } from "./services/thermostat-control-settings.service";
 import {
@@ -443,6 +446,24 @@ export async function setThermostatControlEnabledAction(
     enabled: formData.get("enabled"),
   });
   const result = await setThermostatControlEnabled(actor, enabled);
+  revalidatePath(THERMOSTATS_PAGE_PATH);
+  return result;
+}
+
+export type SetNestLiveTestDeviceActionState =
+  { status: "idle" } | SetNestLiveTestDeviceResult;
+
+/** Admin add/remove of one thermostat on the Nest live-test list (2026-10-28). RBAC (global thermostats:manage), eligibility, row lock and the audit entry live in setNestLiveTestDevice(). */
+export async function setNestLiveTestDeviceAction(
+  _prevState: SetNestLiveTestDeviceActionState,
+  formData: FormData,
+): Promise<SetNestLiveTestDeviceActionState> {
+  const actor = await getCurrentUser();
+  const { smartDeviceId, onList } = setNestLiveTestDeviceSchema.parse({
+    smartDeviceId: formData.get("smartDeviceId"),
+    onList: formData.get("onList"),
+  });
+  const result = await setNestLiveTestDevice(actor, smartDeviceId, onList);
   revalidatePath(THERMOSTATS_PAGE_PATH);
   return result;
 }

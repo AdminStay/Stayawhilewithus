@@ -64,3 +64,9 @@ export type SetNestFanInput = z.infer<typeof setNestFanSchema>;
 export const setThermostatControlEnabledSchema = z.object({
   enabled: z.enum(["true", "false"]).transform((v) => v === "true"),
 });
+
+/** Admin add/remove of one thermostat on the Nest live-test list (2026-10-28). */
+export const setNestLiveTestDeviceSchema = z.object({
+  smartDeviceId: z.string().uuid(),
+  onList: z.enum(["true", "false"]).transform((v) => v === "true"),
+});

@@ -5,6 +5,7 @@ import {
   refreshThermostatsAction,
   setCieloControlEnabledAction,
   setCieloSetpointAction,
+  setNestLiveTestDeviceAction,
   setThermostatControlEnabledAction,
 } from "@/domains/smart-devices/actions";
 import { CieloControlKillSwitch } from "@/domains/smart-devices/components/CieloControlKillSwitch";
@@ -23,7 +24,10 @@ import {
   isThermostatVisible,
   listSmartDevices,
 } from "@/domains/smart-devices/services/smart-devices.service";
-import { getThermostatControlSetting } from "@/domains/smart-devices/services/thermostat-control-settings.service";
+import {
+  getNestLiveTestList,
+  getThermostatControlSetting,
+} from "@/domains/smart-devices/services/thermostat-control-settings.service";
 import { getNestRefreshHealthRecord } from "@/domains/smart-devices/services/thermostat-refresh.service";
 import { getCurrentUser } from "@/platform/auth/get-current-user";
 
@@ -88,6 +92,9 @@ export default async function ThermostatsPage() {
     .filter((t) => isCieloDeviceOnControlAllowlist(t))
     .map((t) => t.id);
   const hasCieloThermostats = thermostats.some((t) => t.provider === "CIELO");
+  // Nest live test (2026-10-28): only listed thermostats show controls; the
+  // command service re-checks the list, setpoint-only and everything else.
+  const nestLiveTest = await getNestLiveTestList(actor);
 
   const staleReadingIds = thermostats
     .filter((t) => isThermostatReadingStale(getTelemetryUpdatedAt(t), now))
@@ -136,6 +143,9 @@ export default async function ThermostatsPage() {
         cieloControlEnabled={cieloControl.enabled}
         cieloControllableIds={cieloControllableIds}
         cieloSetpointAction={setCieloSetpointAction}
+        nestLiveTestIds={nestLiveTest.smartDeviceIds}
+        canManageNestLiveTest={canToggleThermostatControl}
+        nestLiveTestAction={setNestLiveTestDeviceAction}
       />
     </div>
   );

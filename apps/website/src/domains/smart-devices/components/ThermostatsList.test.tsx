@@ -7,7 +7,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // tests) — this component imports server actions that would otherwise pull
 // in server-only-guarded services.
 vi.mock("./NestThermostatControls", () => ({
-  NestThermostatControls: () => <div>REAL CONTROLS</div>,
+  NestThermostatControls: (p: { setpointOnly?: boolean }) => (
+    <div data-setpoint-only={String(p.setpointOnly)}>REAL CONTROLS</div>
+  ),
+}));
+vi.mock("./NestLiveTestToggle", () => ({
+  NestLiveTestToggle: (p: { smartDeviceId: string; onList: boolean }) => (
+    <div>
+      LIVE TEST TOGGLE {p.smartDeviceId} {p.onList ? "on" : "off"}
+    </div>
+  ),
 }));
 vi.mock("./CieloSetpointControl", () => ({
   CieloSetpointControl: (p: {
@@ -21,6 +30,7 @@ vi.mock("./CieloSetpointControl", () => ({
 }));
 
 import { formatTimestamp } from "../lib/format-timestamp";
+
 import { ThermostatsList } from "./ThermostatsList";
 
 afterEach(cleanup);
@@ -169,6 +179,7 @@ describe("ThermostatsList", () => {
         ]}
         canManageByPropertyId={{ "prop-can-manage": true }}
         controlEnabled
+        nestLiveTestIds={["a", "b"]}
       />,
     );
 
@@ -192,6 +203,7 @@ describe("ThermostatsList", () => {
         ]}
         canManageByPropertyId={{ "prop-can-manage": true }}
         controlEnabled
+        nestLiveTestIds={["a", "b"]}
       />,
     );
 
@@ -235,6 +247,7 @@ describe("ThermostatsList", () => {
         ]}
         canManageByPropertyId={{ "prop-can-manage": true }}
         controlEnabled
+        nestLiveTestIds={["a", "b"]}
       />,
     );
 
@@ -496,5 +509,132 @@ describe("ThermostatsList — Cielo setpoint cell (2026-09-30)", () => {
     );
     expect(screen.queryByText(/CIELO SETPOINT/)).toBeNull();
     expect(screen.queryByText("REAL CONTROLS")).toBeNull();
+  });
+
+  describe("Nest live-test list (2026-10-28)", () => {
+    const nest = (id: string, name: string) =>
+      makeThermostat({
+        id,
+        name,
+        propertyId: "prop-can-manage",
+        providerDevice: { enabled: true, rawMetadata: { rawTraits: {} } },
+      });
+
+    it("with the switch ON, only listed thermostats get Controls; others say why", () => {
+      render(
+        <ThermostatsList
+          thermostats={[nest("a", "Living Room"), nest("b", "Kitchen")]}
+          canManageByPropertyId={{ "prop-can-manage": true }}
+          controlEnabled
+          nestLiveTestIds={["a"]}
+        />,
+      );
+
+      expect(
+        screen.getByRole("button", { name: "Show controls for Living Room" }),
+      ).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: "Show controls for Kitchen" }),
+      ).toBeNull();
+      expect(screen.getByText("Not on the Nest live-test list")).toBeTruthy();
+    });
+
+    it("an empty list (the default) shows no Controls anywhere, even with the switch ON", () => {
+      render(
+        <ThermostatsList
+          thermostats={[nest("a", "Living Room")]}
+          canManageByPropertyId={{ "prop-can-manage": true }}
+          controlEnabled
+        />,
+      );
+
+      expect(
+        screen.queryByRole("button", { name: /Show controls/ }),
+      ).toBeNull();
+      expect(screen.getByText("Not on the Nest live-test list")).toBeTruthy();
+    });
+
+    it("the switch OFF still says OFF for a listed thermostat", () => {
+      render(
+        <ThermostatsList
+          thermostats={[nest("a", "Living Room")]}
+          canManageByPropertyId={{ "prop-can-manage": true }}
+          nestLiveTestIds={["a"]}
+        />,
+      );
+
+      expect(screen.getByText("Remote control is OFF")).toBeTruthy();
+      expect(
+        screen.queryByRole("button", { name: /Show controls/ }),
+      ).toBeNull();
+    });
+
+    it("the expanded controls are rendered setpoint-only", () => {
+      render(
+        <ThermostatsList
+          thermostats={[nest("a", "Living Room")]}
+          canManageByPropertyId={{ "prop-can-manage": true }}
+          controlEnabled
+          nestLiveTestIds={["a"]}
+        />,
+      );
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Show controls for Living Room" }),
+      );
+      expect(
+        screen.getByText("REAL CONTROLS").getAttribute("data-setpoint-only"),
+      ).toBe("true");
+    });
+
+    it("an admin sees the add/remove toggle on each mapped Nest row, reflecting list membership", () => {
+      render(
+        <ThermostatsList
+          thermostats={[nest("a", "Living Room"), nest("b", "Kitchen")]}
+          canManageByPropertyId={{ "prop-can-manage": true }}
+          nestLiveTestIds={["a"]}
+          canManageNestLiveTest
+          nestLiveTestAction={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByText("LIVE TEST TOGGLE a on")).toBeTruthy();
+      expect(screen.getByText("LIVE TEST TOGGLE b off")).toBeTruthy();
+    });
+
+    it("no toggle without the global admin grant, without an action, or on a row with no mapped Nest data", () => {
+      const { unmount } = render(
+        <ThermostatsList
+          thermostats={[nest("a", "Living Room")]}
+          canManageByPropertyId={{ "prop-can-manage": true }}
+          nestLiveTestAction={vi.fn()}
+        />,
+      );
+      expect(screen.queryByText(/LIVE TEST TOGGLE/)).toBeNull();
+      unmount();
+
+      const second = render(
+        <ThermostatsList
+          thermostats={[nest("a", "Living Room")]}
+          canManageByPropertyId={{ "prop-can-manage": true }}
+          canManageNestLiveTest
+        />,
+      );
+      expect(screen.queryByText(/LIVE TEST TOGGLE/)).toBeNull();
+      second.unmount();
+
+      render(
+        <ThermostatsList
+          thermostats={[
+            makeThermostat({ id: "c", provider: "CIELO", name: "Cielo Unit" }),
+            makeThermostat({ id: "d", name: "Unmapped Nest" }),
+          ]}
+          canManageByPropertyId={{ "prop-1": true }}
+          canManageNestLiveTest
+          nestLiveTestAction={vi.fn()}
+        />,
+      );
+      expect(screen.queryByText(/LIVE TEST TOGGLE/)).toBeNull();
+    });
   });
 });

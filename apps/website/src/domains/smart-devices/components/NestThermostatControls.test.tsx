@@ -202,6 +202,41 @@ describe("NestThermostatControls", () => {
     expect(screen.getAllByRole("button", { name: "Apply" })).toHaveLength(1);
   });
 
+  it("setpointOnly (2026-10-28 live test): hides the Mode and Fan forms but keeps the setpoint form", () => {
+    mockActionStates();
+    const { container } = render(
+      <NestThermostatControls
+        smartDeviceId="d1"
+        rawTraits={WITH_FAN_TRAITS}
+        setpointOnly
+      />,
+    );
+
+    expect(
+      container.querySelector('input[name="heatFahrenheit"]'),
+    ).toBeTruthy();
+    expect(container.querySelector('select[name="mode"]')).toBeNull();
+    expect(container.querySelector('select[name="timerMode"]')).toBeNull();
+    expect(screen.queryByText("Fan")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Apply" })).toHaveLength(1);
+  });
+
+  it("setpointOnly with the thermostat OFF shows no control at all — never a way to turn it back on", () => {
+    mockActionStates();
+    render(
+      <NestThermostatControls
+        smartDeviceId="d1"
+        rawTraits={OFF_MODE_TRAITS}
+        setpointOnly
+      />,
+    );
+
+    expect(
+      screen.getByText("No verified controls available for this device yet."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Apply" })).toBeNull();
+  });
+
   it("renders the Fan control only when the device reports a Fan trait", () => {
     mockActionStates();
     const { unmount } = render(

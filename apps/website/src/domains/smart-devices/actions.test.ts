@@ -22,6 +22,7 @@ const {
   mockRetireSmartDevice,
   mockSetLockControlEnabled,
   mockSetThermostatControlEnabled,
+  mockSetNestLiveTestDevice,
   mockResetAugustLock,
   mockSetHold,
   mockClearHold,
@@ -36,6 +37,7 @@ const {
   mockClearHold: vi.fn(),
   mockSetLockControlEnabled: vi.fn(),
   mockSetThermostatControlEnabled: vi.fn(),
+  mockSetNestLiveTestDevice: vi.fn(),
   mockResetAugustLock: vi.fn(),
   mockRevalidatePath: vi.fn(),
   mockDiscoverNestDevices: vi.fn(),
@@ -81,6 +83,7 @@ vi.mock("./services/august-commands.service", () => ({
 
 vi.mock("./services/thermostat-control-settings.service", () => ({
   setThermostatControlEnabled: mockSetThermostatControlEnabled,
+  setNestLiveTestDevice: mockSetNestLiveTestDevice,
 }));
 
 vi.mock("./services/cielo-commands.service", () => ({
@@ -139,6 +142,7 @@ import {
   recordLockVerificationEvidenceAction,
   setLockOperationalHoldAction,
   setThermostatControlEnabledAction,
+  setNestLiveTestDeviceAction,
   setCieloControlEnabledAction,
   setCieloSetpointAction,
 } from "./actions";
@@ -1246,6 +1250,71 @@ describe("setThermostatControlEnabledAction (2026-09-27, Nest Phase 1)", () => {
     formData.set("enabled", "false");
     await setThermostatControlEnabledAction({ status: "idle" }, formData);
     expect(mockSetLockControlEnabled).not.toHaveBeenCalled();
+  });
+});
+
+describe("setNestLiveTestDeviceAction (2026-10-28)", () => {
+  const DEVICE_ID = "11111111-1111-4111-8111-111111111111";
+  beforeEach(() => {
+    mockSetNestLiveTestDevice.mockReset();
+    mockSetThermostatControlEnabled.mockReset();
+    mockSetCieloControlEnabled.mockReset();
+    mockRevalidatePath.mockClear();
+  });
+
+  it.each([
+    ["true", true],
+    ["false", false],
+  ])(
+    "passes onList=%s through as a boolean and revalidates /thermostats",
+    async (raw, expected) => {
+      mockSetNestLiveTestDevice.mockResolvedValueOnce({
+        status: "success",
+        onList: expected,
+        smartDeviceIds: expected ? [DEVICE_ID] : [],
+      });
+      const fd = new FormData();
+      fd.set("smartDeviceId", DEVICE_ID);
+      fd.set("onList", raw);
+
+      const result = await setNestLiveTestDeviceAction({ status: "idle" }, fd);
+
+      expect(mockSetNestLiveTestDevice).toHaveBeenCalledWith(
+        { userId: "user-1" },
+        DEVICE_ID,
+        expected,
+      );
+      expect(result).toMatchObject({ status: "success", onList: expected });
+      expect(mockRevalidatePath).toHaveBeenCalledWith("/thermostats");
+    },
+  );
+
+  it.each([
+    ["a malformed device id", "not-a-uuid", "true"],
+    ["a malformed flag", DEVICE_ID, "yes"],
+  ])("rejects %s without calling the service", async (_l, id, flag) => {
+    const fd = new FormData();
+    fd.set("smartDeviceId", id);
+    fd.set("onList", flag);
+    await expect(
+      setNestLiveTestDeviceAction({ status: "idle" }, fd),
+    ).rejects.toThrow();
+    expect(mockSetNestLiveTestDevice).not.toHaveBeenCalled();
+  });
+
+  it("never touches the Nest switch or anything Cielo", async () => {
+    mockSetNestLiveTestDevice.mockResolvedValueOnce({
+      status: "success",
+      onList: true,
+      smartDeviceIds: [DEVICE_ID],
+    });
+    const fd = new FormData();
+    fd.set("smartDeviceId", DEVICE_ID);
+    fd.set("onList", "true");
+    await setNestLiveTestDeviceAction({ status: "idle" }, fd);
+    expect(mockSetThermostatControlEnabled).not.toHaveBeenCalled();
+    expect(mockSetCieloControlEnabled).not.toHaveBeenCalled();
+    expect(mockSendCieloSetpoint).not.toHaveBeenCalled();
   });
 });
 

@@ -52,7 +52,7 @@ export function ThermostatControlKillSwitch({
           className={enabled ? "font-semibold text-warning-700" : "text-ink"}
         >
           {enabled
-            ? "Remote Nest thermostat control is ON. Admins can send setpoint, mode and fan commands."
+            ? "Remote Nest thermostat control is ON — live test only: admins can change setpoints on thermostats on the live-test list. Mode and fan are disabled."
             : "Remote Nest thermostat control is OFF. No command can be sent to any Nest thermostat (view only)."}
         </span>
       </div>
@@ -71,7 +71,7 @@ export function ThermostatControlKillSwitch({
             confirmMessage={
               enabled
                 ? "Turn OFF remote thermostat control? No Nest command can be sent until it is turned back on."
-                : "Turn ON remote thermostat control? Admins will be able to send real setpoint, mode and fan commands to mapped Nest thermostats."
+                : "Turn ON remote thermostat control? Admins will be able to send real setpoint changes to the Nest thermostats on the live-test list (mode and fan stay disabled)."
             }
           >
             {isPending

@@ -17,9 +17,15 @@ import {
   checkNestCommandSafety,
   isNestCommandConfirmed,
 } from "../lib/nest-command-safety";
+import {
+  isNestLiveTestCommand,
+  NEST_NOT_ON_LIVE_TEST_LIST_REASON,
+  NEST_SETPOINT_ONLY_REASON,
+} from "../lib/nest-live-test";
 
 import { toSmartDeviceMetadata } from "./provider-devices.service";
 import {
+  readNestLiveTestList,
   readThermostatControlSetting,
   THERMOSTAT_CONTROL_OFF_REASON,
 } from "./thermostat-control-settings.service";
@@ -131,7 +137,9 @@ function getNestClientFromEnv(): NestClient {
  *      from `smart_devices:update` (sync/mapping, comparatively harmless)
  *      so granting mapping access never implicitly grants device control.
  *      Only `admin` has it today (via the `*` wildcard); no other role
- *      was extended it.
+ *      was extended it. Then the kill switch, then (2026-10-28, limited
+ *      live test) setpoint-only and the per-device live-test list — see
+ *      lib/nest-live-test.ts.
  *   3. Duplicate-command prevention: advisory-lock-guarded, and the
  *      in-progress marker is read AND written inside the same locked
  *      transaction (never the pre-fetched outer `smartDevice`) — see the
@@ -227,6 +235,28 @@ export async function sendNestThermostatCommand(
       errorDetail: "Blocked: remote thermostat control is OFF (kill switch).",
     });
     return { status: "rejected", reason: THERMOSTAT_CONTROL_OFF_REASON };
+  }
+
+  // Limited live test (2026-10-28): setpoint commands only, and only for a
+  // thermostat on the live-test list — both refused here, still before the
+  // lock, the Nest client and any Google request.
+  const liveTestRefusal = !isNestLiveTestCommand(input.command)
+    ? NEST_SETPOINT_ONLY_REASON
+    : !(await readNestLiveTestList()).smartDeviceIds.includes(smartDevice.id)
+      ? NEST_NOT_ON_LIVE_TEST_LIST_REASON
+      : null;
+  if (liveTestRefusal) {
+    await recordAuditSafely({
+      actor,
+      smartDeviceId: smartDevice.id,
+      propertyId: smartDevice.propertyId,
+      command: input.command,
+      previousMetadata: smartDevice.metadata,
+      result: "REJECTED",
+      outcome: { commandSent: false },
+      errorDetail: liveTestRefusal,
+    });
+    return { status: "rejected", reason: liveTestRefusal };
   }
 
   // Atomic duplicate-command guard: acquire the advisory lock, THEN read

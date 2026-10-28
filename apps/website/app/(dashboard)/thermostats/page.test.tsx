@@ -12,12 +12,14 @@ const {
   mockGetControl,
   mockGetNestHealth,
   mockGetCieloControl,
+  mockGetLiveTest,
   listProps,
   switchProps,
   bannerProps,
   cieloSwitchProps,
 } = vi.hoisted(() => ({
   mockGetCieloControl: vi.fn(),
+  mockGetLiveTest: vi.fn(),
   cieloSwitchProps: [] as Record<string, unknown>[],
   mockHasPermission: vi.fn(),
   mockListSmartDevices: vi.fn(),
@@ -50,6 +52,7 @@ vi.mock("@/domains/smart-devices/actions", () => ({
   setThermostatControlEnabledAction: vi.fn(),
   setCieloControlEnabledAction: vi.fn(),
   setCieloSetpointAction: vi.fn(),
+  setNestLiveTestDeviceAction: vi.fn(),
 }));
 
 vi.mock(
@@ -96,7 +99,10 @@ vi.mock("@/domains/smart-devices/components/NestHealthBanner", () => ({
 }));
 vi.mock(
   "@/domains/smart-devices/services/thermostat-control-settings.service",
-  () => ({ getThermostatControlSetting: mockGetControl }),
+  () => ({
+    getThermostatControlSetting: mockGetControl,
+    getNestLiveTestList: mockGetLiveTest,
+  }),
 );
 vi.mock("@/domains/smart-devices/services/thermostat-refresh.service", () => ({
   getNestRefreshHealthRecord: mockGetNestHealth,
@@ -117,6 +123,11 @@ beforeEach(() => {
   mockGetNestHealth
     .mockReset()
     .mockResolvedValue({ lastAttempt: null, lastSucceededAt: null });
+  mockGetLiveTest.mockReset().mockResolvedValue({
+    smartDeviceIds: [],
+    updatedAt: null,
+    updatedByUserId: null,
+  });
   mockGetCieloControl.mockReset().mockResolvedValue({
     enabled: false,
     updatedAt: null,
@@ -351,5 +362,34 @@ describe("ThermostatsPage — Cielo setpoint control wiring (2026-09-30)", () =>
     expect(listProps.at(-1)!.cieloControlEnabled).toBe(false);
     expect(listProps.at(-1)!.cieloControllableIds).toEqual([]);
     expect(cieloSwitchProps).toHaveLength(0);
+  });
+});
+
+describe("ThermostatsPage — Nest live-test list wiring (2026-10-28)", () => {
+  it("passes the stored list, the admin flag and the toggle action to the list", async () => {
+    mockHasPermission.mockResolvedValue(true);
+    mockGetLiveTest.mockResolvedValue({
+      smartDeviceIds: ["11111111-1111-4111-8111-111111111111"],
+      updatedAt: null,
+      updatedByUserId: null,
+    });
+
+    render(await ThermostatsPage());
+
+    expect(mockGetLiveTest).toHaveBeenCalledWith({ userId: "user-1" });
+    expect(listProps[0]).toMatchObject({
+      nestLiveTestIds: ["11111111-1111-4111-8111-111111111111"],
+      canManageNestLiveTest: true,
+      nestLiveTestAction: expect.any(Function),
+    });
+  });
+
+  it("a non-admin gets no list-management control", async () => {
+    mockHasPermission.mockResolvedValue(false);
+    render(await ThermostatsPage());
+    expect(listProps[0]).toMatchObject({
+      nestLiveTestIds: [],
+      canManageNestLiveTest: false,
+    });
   });
 });
