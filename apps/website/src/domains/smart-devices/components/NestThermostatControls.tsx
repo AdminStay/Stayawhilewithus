@@ -16,6 +16,7 @@ import {
   setNestModeAction,
   type NestCommandActionState,
 } from "../actions";
+import { NEST_SETPOINT_SAFETY } from "../lib/nest-command-safety";
 
 const INITIAL_STATE: NestCommandActionState = { status: "idle" };
 
@@ -26,7 +27,12 @@ function resultLine(
     case "idle":
       return null;
     case "success":
-      return { text: "Command sent.", className: "text-success-600" };
+      return {
+        text: "Confirmed: the thermostat reports the new setting.",
+        className: "text-success-600",
+      };
+    case "unverified":
+      return { text: state.reason, className: "text-warning-600" };
     case "rejected":
       return { text: state.reason, className: "text-warning-600" };
     case "already_running":
@@ -277,8 +283,9 @@ export function NestThermostatControls({
                 <Input
                   type="number"
                   name="heatFahrenheit"
-                  min={40}
-                  max={90}
+                  min={NEST_SETPOINT_SAFETY.minF}
+                  max={NEST_SETPOINT_SAFETY.maxF}
+                  step={1}
                   placeholder="°F"
                   required
                   disabled={heatPending}
@@ -311,8 +318,9 @@ export function NestThermostatControls({
                 <Input
                   type="number"
                   name="coolFahrenheit"
-                  min={40}
-                  max={90}
+                  min={NEST_SETPOINT_SAFETY.minF}
+                  max={NEST_SETPOINT_SAFETY.maxF}
+                  step={1}
                   placeholder="°F"
                   required
                   disabled={coolPending}
@@ -345,8 +353,9 @@ export function NestThermostatControls({
                 <Input
                   type="number"
                   name="heatFahrenheit"
-                  min={40}
-                  max={90}
+                  min={NEST_SETPOINT_SAFETY.minF}
+                  max={NEST_SETPOINT_SAFETY.maxF}
+                  step={1}
                   placeholder="Heat"
                   required
                   disabled={rangePending}
@@ -356,8 +365,9 @@ export function NestThermostatControls({
                 <Input
                   type="number"
                   name="coolFahrenheit"
-                  min={40}
-                  max={90}
+                  min={NEST_SETPOINT_SAFETY.minF}
+                  max={NEST_SETPOINT_SAFETY.maxF}
+                  step={1}
                   placeholder="Cool"
                   required
                   disabled={rangePending}

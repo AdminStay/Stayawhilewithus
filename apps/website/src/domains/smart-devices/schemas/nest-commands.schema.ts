@@ -1,12 +1,20 @@
 import { z } from "zod";
 
-// Sane bounds on a thermostat setpoint request — not an SDM limit (Google's
-// SDM docs don't document a min/max Celsius bound, confirmed 2026-08-21),
-// just StayWhile's own guard against an obviously-wrong input reaching the
-// provider at all. .finite() is explicit here even though min/max already
-// exclude +/-Infinity, per the standing rule that server-side validation
-// must never assume a value is well-formed just because it's numeric.
-const FAHRENHEIT_SETPOINT = z.number().finite().min(40).max(90);
+import { NEST_SETPOINT_SAFETY } from "../lib/nest-command-safety";
+
+// StayWhile's own setpoint bounds — not an SDM limit (Google's SDM docs
+// don't document a min/max Celsius bound, confirmed 2026-08-21). Whole °F
+// inside 60–85 °F (2026-10-28, the same band as Cielo); the 5 °F step and
+// the live-state rules are re-checked server-side against a fresh Nest read
+// (checkNestCommandSafety) before anything is sent. .finite() is explicit
+// even though min/max already exclude +/-Infinity, per the standing rule
+// that server-side validation must never assume a value is well-formed.
+const FAHRENHEIT_SETPOINT = z
+  .number()
+  .finite()
+  .int()
+  .min(NEST_SETPOINT_SAFETY.minF)
+  .max(NEST_SETPOINT_SAFETY.maxF);
 
 export const setNestHeatSetpointSchema = z.object({
   smartDeviceId: z.string().uuid(),

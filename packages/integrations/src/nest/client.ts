@@ -382,6 +382,11 @@ export class NestClient
         headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify({ command, params }),
       },
+      // Single attempt (2026-10-28) — the same rule as August's operate():
+      // a timed-out or 5xx command may already have reached the
+      // thermostat, so it is never silently re-sent. The caller reports
+      // that case as unverified instead.
+      { maxRetries: 0 },
     );
   }
 

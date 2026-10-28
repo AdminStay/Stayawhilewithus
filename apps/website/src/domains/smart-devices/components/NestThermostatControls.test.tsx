@@ -47,7 +47,8 @@ type ActionState =
   | { status: "success" }
   | { status: "rejected"; reason: string }
   | { status: "already_running" }
-  | { status: "failure"; reason: string };
+  | { status: "failure"; reason: string }
+  | { status: "unverified"; reason: string };
 
 function mockActionStates(
   overrides: Partial<{
@@ -256,8 +257,51 @@ describe("NestThermostatControls", () => {
       />,
     );
 
-    expect(screen.getByText("Command sent.")).toBeTruthy();
+    expect(
+      screen.getByText("Confirmed: the thermostat reports the new setting."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Command sent.")).toBeNull();
     expect(screen.getByText("Not supported.")).toBeTruthy();
+  });
+
+  it("shows an unverified outcome as a warning with its reason, never as success", () => {
+    mockActionStates({
+      heat: [
+        {
+          status: "unverified",
+          reason:
+            "Nest accepted the command, but the thermostat doesn't report the new setting yet. Check the thermostat before trying again.",
+        },
+        false,
+      ],
+    });
+    render(
+      <NestThermostatControls
+        smartDeviceId="d1"
+        rawTraits={HEAT_MODE_TRAITS}
+      />,
+    );
+
+    const line = screen.getByText(/doesn't report the new setting yet/);
+    expect(line.className).toContain("text-warning-600");
+    expect(screen.queryByText(/^Confirmed/)).toBeNull();
+  });
+
+  it("limits the °F inputs to whole degrees between 60 and 85", () => {
+    mockActionStates();
+    render(
+      <NestThermostatControls
+        smartDeviceId="d1"
+        rawTraits={HEAT_MODE_TRAITS}
+      />,
+    );
+
+    const input = document.querySelector(
+      'input[name="heatFahrenheit"]',
+    ) as HTMLInputElement;
+    expect(input.min).toBe("60");
+    expect(input.max).toBe("85");
+    expect(input.step).toBe("1");
   });
 
   it("shows the pre-formatted current/target/mode/humidity summary line when provided, and omits it when not", () => {

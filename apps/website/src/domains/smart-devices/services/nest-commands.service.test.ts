@@ -70,11 +70,18 @@ vi.mock("@/platform/audit/record-audit", () => ({
 
 import { assertPermission } from "@stayw/auth";
 import { prisma } from "@stayw/database";
+import { HttpRequestError } from "@stayw/integrations/core";
 import { NestClient } from "@stayw/integrations/nest";
 
 import { sendNestThermostatCommand } from "./nest-commands.service";
 
 const actor = { userId: "user-1" };
+const mockSleep = vi.fn().mockResolvedValue(undefined);
+
+/** Every call skips the real read-back delay. */
+function send(input: Parameters<typeof sendNestThermostatCommand>[1]) {
+  return sendNestThermostatCommand(actor, input, { sleep: mockSleep });
+}
 const SMART_DEVICE_ID = "11111111-1111-1111-1111-111111111111";
 const PROPERTY_ID = "22222222-2222-2222-2222-222222222222";
 const EXTERNAL_ID = "nest-device-1";
@@ -103,12 +110,24 @@ const ECO_ACTIVE_TRAITS = {
   "sdm.devices.traits.ThermostatEco": { mode: "MANUAL_ECO" },
 };
 
-function freshDevice(rawTraits: Record<string, unknown>) {
+/**
+ * A fresh Nest read: ONLINE, heat 19 °C (~66 °F), cool 23 °C (~73 °F) —
+ * inside the safety limits for the commands below. `overrides` models the
+ * state a later read-back reports.
+ */
+function freshDevice(
+  rawTraits: Record<string, unknown>,
+  overrides: Record<string, unknown> = {},
+) {
   return {
     externalDeviceId: EXTERNAL_ID,
     resourceName: `enterprises/proj/devices/${EXTERNAL_ID}`,
     deviceType: "sdm.devices.types.THERMOSTAT",
+    connectivity: "ONLINE",
+    heatCelsius: 19,
+    coolCelsius: 23,
     rawTraits,
+    ...overrides,
   };
 }
 
@@ -119,6 +138,8 @@ function mappedEnabledDevice(
   return {
     id: SMART_DEVICE_ID,
     provider: "NEST",
+    deviceType: "THERMOSTAT",
+    externalDeviceId: EXTERNAL_ID,
     propertyId: PROPERTY_ID,
     metadata: { targetTemperature: 68 },
     commandInProgressAt: null,
@@ -163,6 +184,7 @@ describe("sendNestThermostatCommand", () => {
     mockSetThermostatMode.mockReset().mockResolvedValue(undefined);
     mockSetFanTimer.mockReset().mockResolvedValue(undefined);
     mockRecordAudit.mockClear();
+    mockSleep.mockClear();
     mockReadControl.mockReset().mockResolvedValue({
       enabled: true,
       updatedAt: null,
@@ -186,7 +208,7 @@ describe("sendNestThermostatCommand", () => {
       }) as never,
     );
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_MODE", mode: "OFF" },
     });
@@ -209,7 +231,7 @@ describe("sendNestThermostatCommand", () => {
       }) as never,
     );
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_MODE", mode: "OFF" },
     });
@@ -225,7 +247,7 @@ describe("sendNestThermostatCommand", () => {
       }) as never,
     );
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_MODE", mode: "OFF" },
     });
@@ -246,7 +268,7 @@ describe("sendNestThermostatCommand", () => {
     );
 
     await expect(
-      sendNestThermostatCommand(actor, {
+      send({
         smartDeviceId: SMART_DEVICE_ID,
         command: { type: "SET_MODE", mode: "OFF" },
       }),
@@ -264,10 +286,15 @@ describe("sendNestThermostatCommand", () => {
       // getDevice() read below is what should actually govern the result.
       mappedEnabledDevice(FULLY_CAPABLE_TRAITS) as never,
     );
-    mockGetDevice.mockResolvedValue(freshDevice(COOL_FAN_ONLY_TRAITS));
+    mockGetDevice
+      .mockResolvedValueOnce(freshDevice(COOL_FAN_ONLY_TRAITS)) // heat attempt
+      .mockResolvedValueOnce(freshDevice(COOL_FAN_ONLY_TRAITS)) // cool attempt
+      .mockResolvedValueOnce(
+        freshDevice(COOL_FAN_ONLY_TRAITS, { coolCelsius: 24 }),
+      ); // cool read-back
 
     allowTransaction();
-    const heatResult = await sendNestThermostatCommand(actor, {
+    const heatResult = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_HEAT", heatCelsius: 20 },
     });
@@ -275,7 +302,7 @@ describe("sendNestThermostatCommand", () => {
     expect(mockSetHeatSetpoint).not.toHaveBeenCalled();
 
     allowTransaction();
-    const coolResult = await sendNestThermostatCommand(actor, {
+    const coolResult = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_COOL", coolCelsius: 24 },
     });
@@ -290,7 +317,7 @@ describe("sendNestThermostatCommand", () => {
     mockGetDevice.mockResolvedValueOnce(freshDevice(COOL_FAN_ONLY_TRAITS)); // fresh: no HEAT
     allowTransaction();
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_HEAT", heatCelsius: 20 },
     });
@@ -313,7 +340,7 @@ describe("sendNestThermostatCommand", () => {
     mockGetDevice.mockResolvedValueOnce(freshDevice(ECO_ACTIVE_TRAITS)); // fresh: Eco active
     allowTransaction();
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_HEAT", heatCelsius: 20 },
     });
@@ -338,7 +365,7 @@ describe("sendNestThermostatCommand", () => {
     mockGetDevice.mockResolvedValueOnce(freshDevice(rangeCapable));
     allowTransaction();
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_RANGE", heatCelsius: 24, coolCelsius: 20 },
     });
@@ -354,7 +381,7 @@ describe("sendNestThermostatCommand", () => {
     mockGetDevice.mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS));
     allowTransaction();
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_HEAT", heatCelsius: Number.NaN },
     });
@@ -370,7 +397,7 @@ describe("sendNestThermostatCommand", () => {
     mockGetDevice.mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS));
     allowTransaction();
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_COOL", coolCelsius: Number.POSITIVE_INFINITY },
     });
@@ -392,7 +419,7 @@ describe("sendNestThermostatCommand", () => {
     mockGetDevice.mockResolvedValueOnce(freshDevice(heatCoolAndCoolOnly));
     allowTransaction();
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_MODE", mode: "HEATCOOL" },
     });
@@ -414,7 +441,7 @@ describe("sendNestThermostatCommand", () => {
     mockGetDevice.mockResolvedValueOnce(freshDevice(noFanTraits));
     allowTransaction();
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_FAN", timerMode: "ON" },
     });
@@ -434,7 +461,7 @@ describe("sendNestThermostatCommand", () => {
       }),
     );
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_MODE", mode: "OFF" },
     });
@@ -453,7 +480,7 @@ describe("sendNestThermostatCommand", () => {
     // with a fresh read rather than trusting the pre-fetched smartDevice.
     allowTransaction(new Date());
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_MODE", mode: "OFF" },
     });
@@ -468,9 +495,13 @@ describe("sendNestThermostatCommand", () => {
     );
     const staleMarker = new Date(Date.now() - 10 * 60 * 1000); // 10 min old
     allowTransaction(staleMarker);
-    mockGetDevice.mockResolvedValue(freshDevice(FULLY_CAPABLE_TRAITS));
+    mockGetDevice
+      .mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS))
+      .mockResolvedValueOnce(
+        freshDevice(FULLY_CAPABLE_TRAITS, { thermostatMode: "OFF" }),
+      );
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_MODE", mode: "OFF" },
     });
@@ -487,7 +518,7 @@ describe("sendNestThermostatCommand", () => {
     mockGetDevice.mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS));
     mockSetThermostatMode.mockRejectedValueOnce(new Error("network error"));
 
-    await sendNestThermostatCommand(actor, {
+    await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_MODE", mode: "OFF" },
     });
@@ -505,7 +536,7 @@ describe("sendNestThermostatCommand", () => {
     allowTransaction();
     mockGetDevice.mockResolvedValue(freshDevice(FULLY_CAPABLE_TRAITS));
 
-    await sendNestThermostatCommand(actor, {
+    await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_MODE", mode: "OFF" },
     });
@@ -523,12 +554,10 @@ describe("sendNestThermostatCommand", () => {
     allowTransaction();
     mockGetDevice.mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS));
     mockSetThermostatMode.mockRejectedValueOnce(
-      new Error(
-        "Request to /enterprises/x/devices/y:executeCommand failed with 403",
-      ),
+      new HttpRequestError("/enterprises/x/devices/y:executeCommand", 403),
     );
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_MODE", mode: "OFF" },
     });
@@ -549,44 +578,100 @@ describe("sendNestThermostatCommand", () => {
     );
   });
 
-  it("successful command reads confirmed state from Nest AFTER sending, and stores that — never a guessed value", async () => {
+  it("read-back that doesn't show the requested value (even after one delayed retry) is UNVERIFIED — and the read value, not a guess, is stored", async () => {
     vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
       mappedEnabledDevice(FULLY_CAPABLE_TRAITS) as never,
     );
     allowTransaction();
     mockGetDevice
-      .mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS)) // pre-command capability refresh
-      .mockResolvedValueOnce({
-        // post-command confirmation — deliberately a DIFFERENT value than
-        // what was requested, to prove this (not a guess) is what's stored
-        ...freshDevice(FULLY_CAPABLE_TRAITS),
-        heatCelsius: 19.4, // Nest's own rounding/actual applied value
-      });
+      .mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS)) // pre-command check
+      // both read-backs report a DIFFERENT value than requested (20 C ~68 F)
+      .mockResolvedValue(
+        freshDevice(FULLY_CAPABLE_TRAITS, { heatCelsius: 19.4 }),
+      );
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_HEAT", heatCelsius: 20 },
     });
 
-    expect(result).toEqual({ status: "success" });
-    expect(mockGetDevice).toHaveBeenCalledTimes(2);
-    expect(mockSetHeatSetpoint).toHaveBeenCalledWith(EXTERNAL_ID, 20);
+    expect(result).toEqual({
+      status: "unverified",
+      reason: expect.stringMatching(/doesn't report the new setting/),
+    });
+    expect(mockSetHeatSetpoint).toHaveBeenCalledTimes(1);
+    expect(mockGetDevice).toHaveBeenCalledTimes(3);
+    expect(mockSleep).toHaveBeenCalledTimes(1);
+    expect(mockSleep).toHaveBeenCalledWith(3_000);
 
     const metadataUpdateCall = vi
       .mocked(prisma.smartDevice.update)
       .mock.calls.find((call) => "metadata" in (call[0]?.data ?? {}));
     const updatedMetadata = metadataUpdateCall?.[0].data.metadata as
       { targetTemperature?: number; telemetryUpdatedAt?: string } | undefined;
-    expect(updatedMetadata?.targetTemperature).toBeCloseTo(67, 0); // 19.4C confirmed, not the requested 20C (~68F)
-
-    // Unlike setProviderDeviceEnabled() copying an old discovery snapshot,
-    // this metadata comes from a client.getDevice() call that just
-    // happened — a genuinely fresh timestamp here is honest, not
-    // fabricated. See toSmartDeviceMetadata()'s doc comment.
-    expect(updatedMetadata?.telemetryUpdatedAt).toBeDefined();
+    expect(updatedMetadata?.targetTemperature).toBeCloseTo(67, 0); // 19.4C read back, not the requested 20C (~68F)
     expect(
       Date.now() - new Date(updatedMetadata!.telemetryUpdatedAt!).getTime(),
     ).toBeLessThan(5_000);
+
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterState: expect.objectContaining({
+          result: "UNVERIFIED",
+          commandSent: true,
+          providerAccepted: true,
+          verified: false,
+        }),
+      }),
+    );
+  });
+
+  it("a read-back that only shows the change after the delayed retry is SUCCEEDED", async () => {
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      mappedEnabledDevice(FULLY_CAPABLE_TRAITS) as never,
+    );
+    allowTransaction();
+    mockGetDevice
+      .mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS)) // pre-command
+      .mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS)) // not yet
+      .mockResolvedValueOnce(
+        freshDevice(FULLY_CAPABLE_TRAITS, { heatCelsius: 20 }),
+      );
+
+    const result = await send({
+      smartDeviceId: SMART_DEVICE_ID,
+      command: { type: "SET_HEAT", heatCelsius: 20 },
+    });
+
+    expect(result).toEqual({ status: "success" });
+    expect(mockSleep).toHaveBeenCalledTimes(1);
+  });
+
+  it("a read-back that fails after Nest accepted the command is UNVERIFIED, never success or failure", async () => {
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      mappedEnabledDevice(FULLY_CAPABLE_TRAITS) as never,
+    );
+    allowTransaction();
+    mockGetDevice
+      .mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS))
+      .mockRejectedValueOnce(new Error("socket hang up"));
+
+    const result = await send({
+      smartDeviceId: SMART_DEVICE_ID,
+      command: { type: "SET_HEAT", heatCelsius: 20 },
+    });
+
+    expect(result.status).toBe("unverified");
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterState: expect.objectContaining({
+          result: "UNVERIFIED",
+          providerAccepted: true,
+          verified: false,
+        }),
+        metadata: { errorDetail: "socket hang up" },
+      }),
+    );
   });
 
   it("successful command audit entry: records actor/property/device/provider/command/result, and the confirmed (not guessed) resulting state", async () => {
@@ -594,9 +679,13 @@ describe("sendNestThermostatCommand", () => {
       mappedEnabledDevice(FULLY_CAPABLE_TRAITS) as never,
     );
     allowTransaction();
-    mockGetDevice.mockResolvedValue(freshDevice(FULLY_CAPABLE_TRAITS));
+    mockGetDevice
+      .mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS))
+      .mockResolvedValueOnce(
+        freshDevice(FULLY_CAPABLE_TRAITS, { heatCelsius: 21 }),
+      );
 
-    const result = await sendNestThermostatCommand(actor, {
+    const result = await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_HEAT", heatCelsius: 21 },
     });
@@ -616,6 +705,9 @@ describe("sendNestThermostatCommand", () => {
         afterState: expect.objectContaining({
           command: { type: "SET_HEAT", heatCelsius: 21 },
           result: "SUCCEEDED",
+          commandSent: true,
+          providerAccepted: true,
+          verified: true,
         }),
       }),
     );
@@ -628,7 +720,7 @@ describe("sendNestThermostatCommand", () => {
     allowTransaction();
     mockGetDevice.mockResolvedValue(freshDevice(FULLY_CAPABLE_TRAITS));
 
-    await sendNestThermostatCommand(actor, {
+    await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_MODE", mode: "OFF" },
     });
@@ -636,6 +728,235 @@ describe("sendNestThermostatCommand", () => {
     const auditCall = mockRecordAudit.mock.calls[0]![0];
     const serialized = JSON.stringify(auditCall);
     expect(serialized).not.toMatch(/access_token|refresh_token|client_secret/i);
+  });
+});
+
+describe("sendNestThermostatCommand — command safety (2026-10-28)", () => {
+  beforeEach(() => {
+    process.env.NEST_CLIENT_ID = "test-client-id";
+    process.env.NEST_CLIENT_SECRET = "test-client-secret";
+    process.env.NEST_PROJECT_ID = "test-project-id";
+    process.env.NEST_REFRESH_TOKEN = "test-refresh-token";
+    vi.mocked(assertPermission).mockReset().mockResolvedValue(undefined);
+    vi.mocked(prisma.smartDevice.findUnique)
+      .mockReset()
+      .mockResolvedValue(mappedEnabledDevice(FULLY_CAPABLE_TRAITS) as never);
+    mockTransaction.mockReset();
+    mockGetDevice.mockReset();
+    mockSetHeatSetpoint.mockReset().mockResolvedValue(undefined);
+    mockSetCoolSetpoint.mockReset().mockResolvedValue(undefined);
+    mockRecordAudit.mockClear();
+    mockSleep.mockClear();
+    mockReadControl.mockReset().mockResolvedValue({
+      enabled: true,
+      updatedAt: null,
+      updatedByUserId: null,
+    });
+  });
+
+  it.each([
+    [
+      "the mapping points at another property",
+      { propertyId: "33333333-3333-3333-3333-333333333333" },
+    ],
+    [
+      "the mapping points at another Nest device",
+      { externalDeviceId: "other" },
+    ],
+  ])(
+    "rejects when %s — before RBAC, the lock or any Nest call",
+    async (_label, mismatch) => {
+      vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+        mappedEnabledDevice(FULLY_CAPABLE_TRAITS, {
+          providerDevice: {
+            enabled: true,
+            propertyId: PROPERTY_ID,
+            externalDeviceId: EXTERNAL_ID,
+            rawMetadata: { rawTraits: FULLY_CAPABLE_TRAITS },
+            ...mismatch,
+          },
+        }) as never,
+      );
+
+      const result = await send({
+        smartDeviceId: SMART_DEVICE_ID,
+        command: { type: "SET_HEAT", heatCelsius: 20 },
+      });
+
+      expect(result).toEqual({
+        status: "rejected",
+        reason: expect.stringMatching(/mapping doesn't match/),
+      });
+      expect(assertPermission).not.toHaveBeenCalled();
+      expect(mockTransaction).not.toHaveBeenCalled();
+      expect(mockGetDevice).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a non-thermostat Nest device", async () => {
+    vi.mocked(prisma.smartDevice.findUnique).mockResolvedValueOnce(
+      mappedEnabledDevice(FULLY_CAPABLE_TRAITS, {
+        deviceType: "CAMERA",
+      }) as never,
+    );
+
+    const result = await send({
+      smartDeviceId: SMART_DEVICE_ID,
+      command: { type: "SET_HEAT", heatCelsius: 20 },
+    });
+
+    expect(result).toEqual({ status: "rejected", reason: "Device not found." });
+    expect(mockGetDevice).not.toHaveBeenCalled();
+  });
+
+  it("refuses a thermostat the fresh read reports OFFLINE — nothing sent, audited REJECTED", async () => {
+    allowTransaction();
+    mockGetDevice.mockResolvedValueOnce(
+      freshDevice(FULLY_CAPABLE_TRAITS, { connectivity: "OFFLINE" }),
+    );
+
+    const result = await send({
+      smartDeviceId: SMART_DEVICE_ID,
+      command: { type: "SET_HEAT", heatCelsius: 20 },
+    });
+
+    expect(result).toEqual({
+      status: "rejected",
+      reason: expect.stringMatching(/offline/),
+    });
+    expect(mockSetHeatSetpoint).not.toHaveBeenCalled();
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterState: expect.objectContaining({
+          result: "REJECTED",
+          commandSent: false,
+        }),
+      }),
+    );
+  });
+
+  it("refuses a setpoint more than 5 °F from the current one, from the fresh read", async () => {
+    allowTransaction();
+    // current heat 19 C (~66 F); 23 C is ~73 F
+    mockGetDevice.mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS));
+
+    const result = await send({
+      smartDeviceId: SMART_DEVICE_ID,
+      command: { type: "SET_HEAT", heatCelsius: 23 },
+    });
+
+    expect(result).toEqual({
+      status: "rejected",
+      reason: expect.stringMatching(/at most 5°F/),
+    });
+    expect(mockSetHeatSetpoint).not.toHaveBeenCalled();
+  });
+
+  it("refuses a setpoint outside 60–85 °F even when the step is small", async () => {
+    allowTransaction();
+    mockGetDevice.mockResolvedValueOnce(
+      freshDevice(FULLY_CAPABLE_TRAITS, { heatCelsius: 16 }), // ~61 F
+    );
+
+    const result = await send({
+      smartDeviceId: SMART_DEVICE_ID,
+      command: { type: "SET_HEAT", heatCelsius: 15 }, // 59 F
+    });
+
+    expect(result).toEqual({
+      status: "rejected",
+      reason: "Choose a temperature between 60°F and 85°F.",
+    });
+    expect(mockSetHeatSetpoint).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a timeout", Object.assign(new Error("aborted"), { name: "AbortError" })],
+    ["a network error", new TypeError("fetch failed")],
+    [
+      "a 503 answer",
+      new HttpRequestError("/enterprises/x/devices/y:executeCommand", 503),
+    ],
+  ])(
+    "%s on the command is UNVERIFIED — sent once, never retried, never reported as nothing sent",
+    async (_label, error) => {
+      allowTransaction();
+      mockGetDevice.mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS));
+      mockSetHeatSetpoint.mockRejectedValueOnce(error);
+
+      const result = await send({
+        smartDeviceId: SMART_DEVICE_ID,
+        command: { type: "SET_HEAT", heatCelsius: 20 },
+      });
+
+      expect(result).toEqual({
+        status: "unverified",
+        reason: expect.stringMatching(/may or may not have been applied/),
+      });
+      expect(mockSetHeatSetpoint).toHaveBeenCalledTimes(1);
+      expect(mockGetDevice).toHaveBeenCalledTimes(1); // no read-back after an unanswered command
+      expect(mockRecordAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          afterState: expect.objectContaining({
+            result: "UNVERIFIED",
+            commandSent: true,
+            providerAccepted: null,
+          }),
+        }),
+      );
+      expect(prisma.smartDevice.update).toHaveBeenCalledWith({
+        where: { id: SMART_DEVICE_ID },
+        data: { commandInProgressAt: null },
+      });
+    },
+  );
+
+  it("a 400 answer means Nest refused the command — FAILED, with a safe message", async () => {
+    allowTransaction();
+    mockGetDevice.mockResolvedValueOnce(freshDevice(FULLY_CAPABLE_TRAITS));
+    mockSetHeatSetpoint.mockRejectedValueOnce(
+      new HttpRequestError("/enterprises/x/devices/y:executeCommand", 400),
+    );
+
+    const result = await send({
+      smartDeviceId: SMART_DEVICE_ID,
+      command: { type: "SET_HEAT", heatCelsius: 20 },
+    });
+
+    expect(result.status).toBe("failure");
+    if (result.status === "failure") expect(result.reason).not.toMatch(/400/);
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterState: expect.objectContaining({
+          result: "FAILED",
+          commandSent: true,
+          providerAccepted: false,
+        }),
+      }),
+    );
+  });
+
+  it("an error before anything is sent (the pre-command read) is FAILED with commandSent: false", async () => {
+    allowTransaction();
+    mockGetDevice.mockRejectedValueOnce(
+      new HttpRequestError("/enterprises/x/devices/y", 503),
+    );
+
+    const result = await send({
+      smartDeviceId: SMART_DEVICE_ID,
+      command: { type: "SET_HEAT", heatCelsius: 20 },
+    });
+
+    expect(result.status).toBe("failure");
+    expect(mockSetHeatSetpoint).not.toHaveBeenCalled();
+    expect(mockRecordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        afterState: expect.objectContaining({
+          result: "FAILED",
+          commandSent: false,
+        }),
+      }),
+    );
   });
 });
 
@@ -680,7 +1001,7 @@ describe("sendNestThermostatCommand — global kill switch OFF (2026-09-27, Nest
   it.each(ALL_COMMANDS)(
     "refuses $type before the duplicate-command lock, before the Nest client exists and before any Google call",
     async (command) => {
-      const result = await sendNestThermostatCommand(actor, {
+      const result = await send({
         smartDeviceId: SMART_DEVICE_ID,
         command: command as never,
       });
@@ -710,7 +1031,7 @@ describe("sendNestThermostatCommand — global kill switch OFF (2026-09-27, Nest
   );
 
   it("audits the refusal as REJECTED (kill switch), with no secret in the entry", async () => {
-    await sendNestThermostatCommand(actor, {
+    await send({
       smartDeviceId: SMART_DEVICE_ID,
       command: { type: "SET_MODE", mode: "OFF" },
     });
@@ -726,7 +1047,7 @@ describe("sendNestThermostatCommand — global kill switch OFF (2026-09-27, Nest
     vi.mocked(assertPermission).mockRejectedValueOnce(new Error("Forbidden"));
 
     await expect(
-      sendNestThermostatCommand(actor, {
+      send({
         smartDeviceId: SMART_DEVICE_ID,
         command: { type: "SET_MODE", mode: "OFF" },
       }),
